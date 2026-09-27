@@ -75,7 +75,10 @@ fragment {
   }
 
   void Surface(inout MaterialInputs material) {
-    vec3 n = GetWorldNormal();
+    // The office lives under a scale(1, 1, -1) root (flutter_scene is left-handed, the office's
+    // coordinates are three.js's right-handed ones), so bring the normal and position back into
+    // office space, where the sun, the lamps and the building's bounds are given.
+    vec3 n = GetWorldNormal() * vec3(1.0, 1.0, -1.0);
     if (!gl_FrontFacing) n = -n;
     vec3 l = normalize(material_params.sun_direction);
     float ndl = dot(n, l);
@@ -90,7 +93,7 @@ fragment {
     vec3 albedo = material_params.base_color.rgb * vc.rgb * tex.rgb;
 
     // Wet ground is darker; snow covers what faces up. Only outdoors.
-    vec3 p = GetWorldPosition();
+    vec3 p = GetWorldPosition() * vec3(1.0, 1.0, -1.0);
     float on = material_params.sky_on;
     float indoor = on * InOffice(p);
     float garage = on * InGarage(p);
