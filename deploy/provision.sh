@@ -2,6 +2,8 @@
 # Runs ON the EC2 instance (piped over ssh by deploy/aws.sh). Idempotent: safe to re-run.
 # Expects these to be exported by the caller: APP_REPO APP_REF PROJECT_REPO PROJECT_NAME
 # CLAIM_TOKEN PUBLIC_HOST GH_TOKEN CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY GIT_NAME GIT_EMAIL
+# INSTALL_SH_B64 (install.sh, base64: it installs the office's release, no Node.js needed).
+# APP_REF is a release tag (v0.1.68), or main for the newest release.
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 APT=(sudo -E apt-get -y -q -o DPkg::Lock::Timeout=600)
@@ -22,15 +24,9 @@ quiet() {
 step "Waiting for the instance to finish booting"
 sudo cloud-init status --wait >/dev/null 2>&1 || true
 
-if ! command -v node >/dev/null 2>&1 || [[ "$(node -v)" != v22* ]]; then
-  step "Installing Node.js 22"
-  quiet bash -c 'curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -'
-  quiet "${APT[@]}" install nodejs
-fi
-
 step "Installing git, GitHub CLI and build tools"
 quiet "${APT[@]}" update
-quiet "${APT[@]}" install git gh curl ca-certificates build-essential python3
+quiet "${APT[@]}" install git gh curl ca-certificates jq build-essential python3
 
 if [[ ! -x "$HOME/.local/bin/claude" ]]; then
   step "Installing Claude Code"
@@ -65,17 +61,18 @@ fi
 [[ -n "${GIT_EMAIL:-}" ]] && git config --global user.email "$GIT_EMAIL"
 git config --global init.defaultBranch main
 
-step "Installing agent-office ($APP_REF) from $APP_REPO"
-sudo install -d -o "$USER" -g "$USER" /opt/agent-office
-if [[ -d /opt/agent-office/.git ]]; then
-  quiet git -C /opt/agent-office fetch --depth 1 origin "$APP_REF"
-  quiet git -C /opt/agent-office reset --hard FETCH_HEAD
-else
-  quiet git clone --depth 1 --branch "$APP_REF" "$APP_REPO" /opt/agent-office
-fi
-echo "    at $(git -C /opt/agent-office log -1 --format='%h %s')"
-step "npm install (builds the office)"
-(cd /opt/agent-office && quiet npm install --no-audit --no-fund)
+# The release goes in ~/.local/share/agent-office/versions/<tag>; `current` links to the one in use.
+OFFICE_BIN="$HOME/.local/share/agent-office/current/agent-office"
+app_repo="${APP_REPO#https://github.com/}"
+app_repo="${app_repo%.git}"
+app_version=""
+[[ "$APP_REF" == main || "$APP_REF" == latest || -z "$APP_REF" ]] || app_version="$APP_REF"
+step "Installing agent-office ${app_version:-(newest release)} from $app_repo"
+install_sh=$(mktemp)
+printf '%s' "$INSTALL_SH_B64" | base64 -d >"$install_sh"
+AGENT_OFFICE_REPO="$app_repo" AGENT_OFFICE_VERSION="$app_version" AGENT_OFFICE_INSTALL_ONLY=1 quiet bash "$install_sh"
+rm -f "$install_sh"
+echo "    $(sed -n 's/^ *"tag": *"\([^"]*\)".*/\1/p' "$HOME/.local/share/agent-office/current/install.json")"
 
 WORKDIR="$HOME/workspace/$PROJECT_NAME"
 mkdir -p "$HOME/workspace"
@@ -92,22 +89,23 @@ fi
 echo "$WORKDIR" | sudo tee /etc/agent-office/dir >/dev/null
 
 step "Pre-accepting Claude Code onboarding and folder trust"
-node - "$WORKDIR" <<'NODE'
-const fs = require('fs');
-const file = `${process.env.HOME}/.claude.json`;
-let c = {};
-try { c = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
-c.hasCompletedOnboarding = true;
-c.projects = c.projects || {};
-const dir = process.argv[2];
-c.projects[dir] = { ...(c.projects[dir] || {}), hasTrustDialogAccepted: true };
-const key = process.env.ANTHROPIC_API_KEY;
-if (key) {
-  c.customApiKeyResponses = c.customApiKeyResponses || { approved: [], rejected: [] };
-  if (!c.customApiKeyResponses.approved.includes(key.slice(-20))) c.customApiKeyResponses.approved.push(key.slice(-20));
-}
-fs.writeFileSync(file, JSON.stringify(c, null, 2), { mode: 0o600 });
-NODE
+# Claude Code remembers an approved API key by its last 20 characters.
+api_key="${ANTHROPIC_API_KEY:-}"
+(( ${#api_key} > 20 )) && api_key="${api_key: -20}"
+claude_json="$HOME/.claude.json"
+claude_tmp=$(mktemp)
+# An unreadable or broken file starts over from {}, as Claude Code itself would.
+{ jq -e 'type == "object"' "$claude_json" >/dev/null 2>&1 && cat "$claude_json" || echo '{}'; } |
+  jq --arg dir "$WORKDIR" --arg key "$api_key" '
+    .hasCompletedOnboarding = true
+    | .projects[$dir] = ((.projects[$dir] // {}) + {hasTrustDialogAccepted: true})
+    | if $key == "" then .
+      else .customApiKeyResponses //= {approved: [], rejected: []}
+        | if (.customApiKeyResponses.approved // [] | index($key)) then .
+          else .customApiKeyResponses.approved += [$key] end
+      end' >"$claude_tmp"
+install -m 600 "$claude_tmp" "$claude_json"
+rm -f "$claude_tmp"
 
 step "Creating the office user (teammates' SSH keys can only open the tunnel)"
 if ! id office >/dev/null 2>&1; then
@@ -208,11 +206,11 @@ EnvironmentFile=/etc/agent-office/env
 Environment=HOME=$HOME
 Environment=SHELL=/bin/bash
 Environment=PATH=$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-# Lets the office upgrade itself from its UI: it builds the new version, then exits, and
-# Restart=always brings it back up on that version.
+# Lets the office upgrade itself from its UI: it downloads the newest release next to this one,
+# points current at it, then exits, and Restart=always brings it back up on that version.
 Environment=AGENT_OFFICE_SELF_UPDATE=1
 # Loopback only: the office is reached through an SSH tunnel, never from the internet.
-ExecStart=/usr/bin/node /opt/agent-office/bin/agent-office.js $WORKDIR --host 127.0.0.1 --port 4600
+ExecStart=$OFFICE_BIN $WORKDIR --host 127.0.0.1 --port 4600
 Restart=always
 RestartSec=3
 LimitNOFILE=65536
@@ -225,5 +223,11 @@ rm -f "$unit"
 sudo systemctl daemon-reload
 sudo systemctl enable agent-office >/dev/null 2>&1
 sudo systemctl restart agent-office
+
+# What an office from before the releases ran: a git checkout built with npm. Nothing runs it now.
+if [[ -d /opt/agent-office/.git ]]; then
+  step "Removing the old Node.js install in /opt/agent-office"
+  sudo rm -rf /opt/agent-office
+fi
 
 step "Done"

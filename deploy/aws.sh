@@ -65,7 +65,7 @@ Commands
   logs               Follow the office's logs
   resize <type>      Change the machine size, e.g. t3.2xlarge (stops it for ~1-2 minutes;
                      the address stays the same). `up --instance-type <type>` does this too.
-  update             Install the latest agent-office on the machine and restart it
+  update             Install the latest agent-office release on the machine and restart it
   reset-password     Forget the password and show a new one once in your browser
 
 Options
@@ -79,8 +79,9 @@ Options
   --port <n>                Local port for the tunnel (default: 4600, or the next free one)
   --project <owner/repo>    GitHub repo the office works on (default: this directory's GitHub
                             origin; otherwise an empty project)
-  --app-repo <url>          agent-office repo to install (default: this checkout's GitHub origin)
-  --app-ref <ref>           Branch or tag to install (default: main)
+  --app-repo <url>          agent-office repo whose releases to install (default: this checkout's
+                            GitHub origin)
+  --app-ref <ref>           Release to install, a tag like v0.1.68 (default: main, the newest)
   --github-token <token>    GitHub token for private repos + the issue/PR boards
                             (default: your local `gh auth token`)
   --no-github-token         Don't put any GitHub token on the machine
@@ -411,6 +412,8 @@ cmd_up() {
   if [[ -z "$APP_REPO" ]]; then
     APP_REPO=$(github_https "$(git -C "$SCRIPT_DIR/.." remote get-url origin 2>/dev/null || true)" || echo "https://github.com/AgentSystemLabs/agent-office")
   fi
+  [[ "$APP_REF" == main || "$APP_REF" == latest || "$APP_REF" =~ ^v[0-9][0-9A-Za-z._+-]*$ ]] ||
+    die "--app-ref must be a release tag like v0.1.68, or main for the newest release"
   local project_repo="" project_name="office"
   if [[ -z "$PROJECT" ]]; then
     PROJECT=$(git remote get-url origin 2>/dev/null || true)
@@ -522,7 +525,7 @@ cmd_up() {
 
   [[ -f "$CLAIM_FILE" ]] || (umask 077 && random_token >"$CLAIM_FILE")
 
-  say "Provisioning (Node, git, gh, Claude Code, agent-office) — a few minutes on first run"
+  say "Provisioning (git, gh, Claude Code, agent-office) — a few minutes on first run"
   local git_name git_email
   git_name=$(git config user.name 2>/dev/null || true)
   git_email=$(git config user.email 2>/dev/null || true)
@@ -530,6 +533,8 @@ cmd_up() {
     printf 'export APP_REPO=%q APP_REF=%q PROJECT_REPO=%q PROJECT_NAME=%q\n' "$APP_REPO" "$APP_REF" "$project_repo" "$project_name"
     printf 'export CLAIM_TOKEN=%q PUBLIC_HOST=%q GH_TOKEN=%q CLAUDE_CODE_OAUTH_TOKEN=%q ANTHROPIC_API_KEY=%q\n' "$(cat "$CLAIM_FILE")" "$IP" "$gh_token" "$CLAUDE_TOKEN" "$ANTHROPIC_KEY"
     printf 'export GIT_NAME=%q GIT_EMAIL=%q\n' "$git_name" "$git_email"
+    # This checkout's install.sh, which installs the release on the machine.
+    printf 'export INSTALL_SH_B64=%q\n' "$(base64 <"$SCRIPT_DIR/../install.sh" | tr -d '\n')"
     cat "$SCRIPT_DIR/provision.sh"
   } | remote 'bash -s' || die "provisioning failed (re-run \"deploy/aws.sh up\" to retry; it picks up where it left off)"
 
@@ -753,12 +758,14 @@ cmd_update() {
   preflight
   require_instance
   say "Updating agent-office on $IP"
-  remote "set -e
-    ref=\$(git -C /opt/agent-office rev-parse --abbrev-ref HEAD)
-    git -C /opt/agent-office fetch --depth 1 origin \"\$ref\" -q
-    git -C /opt/agent-office reset --hard FETCH_HEAD -q
-    echo \"   at \$(git -C /opt/agent-office log -1 --format='%h %s')\"
-    cd /opt/agent-office && npm install --no-audit --no-fund --loglevel=error >/dev/null
+  remote "test -f ~/.local/share/agent-office/current/install.json" 2>/dev/null ||
+    die "this office was installed from git, before releases — run: deploy/aws.sh up$NAME_FLAG"
+  # This checkout's install.sh gets the newest release of the repo the machine installed from.
+  remote "cat > /tmp/agent-office-install.sh" <"$SCRIPT_DIR/../install.sh" || die "update failed"
+  remote "set -eo pipefail
+    repo=\$(sed -n 's/^ *\"repo\": *\"\\([^\"]*\\)\".*/\\1/p' ~/.local/share/agent-office/current/install.json)
+    AGENT_OFFICE_REPO=\"\$repo\" AGENT_OFFICE_INSTALL_ONLY=1 bash /tmp/agent-office-install.sh 2>&1 | sed 's/^/   /'
+    rm -f /tmp/agent-office-install.sh
     sudo systemctl restart agent-office" || die "update failed"
   wait_healthy || die "the office didn't come back — check: deploy/aws.sh logs"
   ok "Updated and restarted (workers wake up asleep; press R at a desk to resume them)"
@@ -773,7 +780,7 @@ cmd_reset_password() {
     dir=\$(cat /etc/agent-office/dir)
     sudo sed -i 's/^AGENT_OFFICE_CLAIM_TOKEN=.*/AGENT_OFFICE_CLAIM_TOKEN=\"$(cat "$CLAIM_FILE")\"/' /etc/agent-office/env
     sudo systemctl stop agent-office
-    node /opt/agent-office/bin/agent-office.js \"\$dir\" --reset-password >/dev/null
+    ~/.local/share/agent-office/current/agent-office \"\$dir\" --reset-password >/dev/null
     sudo systemctl start agent-office" || die "reset failed"
   wait_healthy || die "the office didn't come back — check: deploy/aws.sh logs"
   ok "Everyone has been signed out"

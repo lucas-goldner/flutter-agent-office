@@ -54,10 +54,10 @@ agent-office
 
 On the machine that runs the office (your laptop or a VPS):
 
-- **Node.js 20+**. Prebuilt PTY binaries ship for Linux and macOS, x64 and arm64, so no compiler is needed.
+- **macOS or Linux**, on x64 or arm64. A release is a single executable, so there's no Node.js or other runtime to install.
 - **Claude Code** (`claude`), **OpenCode** (`opencode`) and/or **Codex CLI** (`codex`), installed and configured as the user that runs the office. Install each provider you want to use. Codex requires native command-hook support (tested with CLI 0.154.0).
 - **git**, plus the **GitHub CLI** (`gh`) logged in (`gh auth login`) if you want the issue and PR boards.
-- `curl` is optional. The status hooks use it when it's there and fall back to Node when it isn't.
+- `curl`, which the status hooks use (the install script needs it too).
 
 ## Install & run
 
@@ -73,15 +73,17 @@ Anything after `bash -s --` goes to the office, such as a project directory or a
 curl -fsSL https://raw.githubusercontent.com/AgentSystemLabs/agent-office/main/install.sh | bash -s -- ~/code/my-project --port 4700
 ```
 
-The script checks for Node.js 20+ and npm, downloads the newest [release](https://github.com/AgentSystemLabs/agent-office/releases) into `~/.local/share/agent-office` and installs its dependencies there. It also puts an `agent-office` command in `~/.local/bin`, so after the first run `agent-office` on its own starts the office. Run the curl line again to update. Set `AGENT_OFFICE_VERSION=v0.1.68` to install a particular release, or `AGENT_OFFICE_INSTALL_ONLY=1` to install without starting. The other settings are listed at the top of [`install.sh`](install.sh). It runs on macOS and Linux. On Windows, run it inside WSL.
+The script downloads the newest [release](https://github.com/AgentSystemLabs/agent-office/releases) for your machine (macOS or Linux, x64 or arm64), checks it against the release's `SHA256SUMS` and unpacks it into `~/.local/share/agent-office`. A release is one `agent-office` executable with the web client next to it, so there's nothing else to install. It also links `~/.local/bin/agent-office` to it, so after the first run `agent-office` on its own starts the office. Run the curl line again to update. Set `AGENT_OFFICE_VERSION=v0.1.68` to install a particular release, or `AGENT_OFFICE_INSTALL_ONLY=1` to install without starting. The other settings are listed at the top of [`install.sh`](install.sh). It runs on macOS and Linux. On Windows, run it inside WSL.
 
 Or install from a clone, to work on the office itself. Building the browser client needs the [Flutter SDK](https://docs.flutter.dev/get-started/install) (3.47 stable) on your PATH; releases ship it built, so the one-line install above doesn't:
 
 ```bash
 git clone https://github.com/AgentSystemLabs/agent-office && cd agent-office
-npm install          # also builds the client (Flutter) and the server
-npm install -g .     # puts `agent-office` on your PATH
+dart run tool/build.dart     # builds the client (Flutter web) and the server into dist/agent-office/
+ln -s "$PWD/dist/agent-office/agent-office" ~/.local/bin/agent-office   # puts `agent-office` on your PATH
 ```
+
+`dart` comes with the Flutter SDK. The build is `dist/agent-office/`: the `agent-office` executable, with the client in `web/` next to it.
 
 Then run it, from anywhere:
 
@@ -212,7 +214,7 @@ What `up` does, in about 2 minutes:
 1. Creates an SSH key pair (kept in `~/.config/agent-office/aws/<name>/`).
 2. Creates a security group that opens **only SSH (port 22), and only to your current IP**. The office itself is never on the internet.
 3. Gives the machine a fixed Elastic IP and launches a **t3.xlarge** (4 vCPU, 16 GiB) Ubuntu 24.04 instance with a 50 GiB disk.
-4. Installs Node 22, git, the GitHub CLI and **Claude Code**. It clones the latest agent-office from GitHub, runs `npm i`, and clones your project.
+4. Installs git, the GitHub CLI and **Claude Code**. It installs the latest agent-office release with `install.sh` (`--app-ref v0.1.68` picks a particular one), and clones your project.
 5. Runs the office under systemd with `Restart=always`, so it comes back after a crash or a reboot. It listens on `127.0.0.1:4600` on the machine, so the only way in is an SSH tunnel.
 6. Opens an SSH tunnel and your browser at `http://localhost:4600`. **The first page shows the office password once. Write it down.** The server then keeps only a hash, so nobody can display the password again.
 
@@ -338,8 +340,8 @@ If you don't have a domain, `--self-signed` serves HTTPS directly. Browsers will
 The browser client is a Flutter web app (`app/`); the 3D office is drawn with [flutter_scene](https://pub.dev/packages/flutter_scene) on WebGL2, and the office serves the whole app itself, fonts included, so it works on networks that can't reach a CDN.
 
 ```
-browser (Flutter web) ──HTTPS/WSS──▶ agent-office (Node)
-                         ├─ node-pty ─▶ claude / opencode (one PTY per worker, cwd = project dir)
+browser (Flutter web) ──HTTPS/WSS──▶ agent-office (Dart)
+                         ├─ PTYs ─────▶ claude / opencode (one PTY per worker, cwd = project dir)
                          │    └─ headless xterm mirror ─▶ laptop screen frames + late-join snapshots
                          ├─ loopback-only hook server ◀── curl from Claude Code hooks (per-worker token)
                          ├─ gh issue/pr list (cached, refreshed every 90s)
@@ -382,20 +384,20 @@ Anyone who can sign in can drive Claude Code, OpenCode or Codex in that director
 
 ## Development
 
-You need Node.js 20+ and the Flutter SDK (3.47 stable) on your PATH.
+You need the [Flutter SDK](https://docs.flutter.dev/get-started/install) (3.47 stable) on your PATH, which brings `dart`. Nothing else: no Node.js or npm.
 
 ```bash
-npm install
-npm run build        # the client (Flutter web, plus the Excalidraw bundle) + tsc (server)
-npm run typecheck
-npm test             # provider, event bridge, queue and PTY integration tests
+dart run tool/build.dart     # the whiteboard bundle, the client (Flutter web) and the server binary, into dist/agent-office/
+(cd server && dart analyze && dart test)                # the server's tests
 (cd app && flutter analyze lib test && flutter test)   # the client's own tests
-node bin/agent-office.js /path/to/project --password dev
+dart run server/bin/agent_office.dart /path/to/project --password dev
 ```
 
-`npm run dev` runs the server on :4600 with `tsx watch` (password `dev`), serving the client from `app/build/web`, so run `npm run build:client` once first; it builds the Excalidraw whiteboard bundle and then the Flutter app. After changing Dart code, `cd app && flutter build web --no-web-resources-cdn --no-wasm-dry-run` is enough, then reload the page (the whiteboard bundle only needs rebuilding, with `npm run build:whiteboard`, when you change it). `app/lib` is laid out like the old client: `shared/` is the Dart port of `src/shared`, `world/` the 3D office, `ui/` the windows and the HUD, `office/controller.dart` the frame loop and the office's actions, and `net/` + `state/` the socket and the store. Server edits restart the server, not the workers. The PTY host keeps running its old code, though: after changing `ptyhost.ts`, bump `PTY_PROTOCOL` in `ptys.ts` and the next server replaces the host (its workers resume their sessions).
+`dart run server/bin/agent_office.dart` takes the same flags as `agent-office` and serves the client from `app/build/web`. `dart run tool/build.dart --pack` also packs the release tarball for your platform, `dist/agent-office-<os>-<arch>.tar.gz`, with its line of `dist/SHA256SUMS`.
 
-**Releases.** Every change to the app that lands on `main` is published as a GitHub release by [`.github/workflows/release.yml`](.github/workflows/release.yml), and `install.sh` installs the newest one. The workflow builds and typechecks the office, runs the tests, packs the release with an `npm-shrinkwrap.json` so every install gets the tested dependency versions, then installs the pack through `install.sh` and starts it before publishing. Pull requests run the same steps but publish nothing. A release is named after `package.json`'s major.minor and the number of commits on `main` (`v0.1.68`), so bump `package.json` to start a new minor version.
+The dev server serves the client from `app/build/web`, so build it once first (`dart run tool/build.dart` does, or `dart run tool/build_whiteboard.dart` and then `cd app && flutter build web --no-web-resources-cdn --no-wasm-dry-run`). After changing Dart code in `app/`, that `flutter build web` is enough, then reload the page (the whiteboard bundle only needs rebuilding when you change it). `app/lib` is laid out like the old client: `shared/` is the Dart port of `src/shared`, `world/` the 3D office, `ui/` the windows and the HUD, `office/controller.dart` the frame loop and the office's actions, and `net/` + `state/` the socket and the store. The server is `server/` (`server/bin/agent_office.dart` is the one executable; its modules are in `server/lib/src`), and the wire types it shares with the client are in `packages/office_shared`. Restarting the server doesn't restart the workers. The PTY host keeps running its old code, though: after changing `ptyhost.dart`, bump `ptyProtocol` in `ptys.dart` and the next server replaces the host (its workers resume their sessions).
+
+**Releases.** Every change to the app that lands on `main` is published as a GitHub release by [`.github/workflows/release.yml`](.github/workflows/release.yml), and `install.sh` installs the newest one. The workflow builds the office on Linux and macOS, x64 and arm64, runs the analyzers and the tests, packs each build with `tool/build.dart --pack`, then installs each pack through `install.sh` and starts it before publishing the four tarballs and a `SHA256SUMS` listing them. Pull requests run the same steps but publish nothing. A release is named after `server/pubspec.yaml`'s major.minor and the number of commits on `main` (`v0.1.68`), so bump the pubspec's version to start a new minor version. An office deployed with `deploy/aws.sh` checks for a newer release every 15 minutes; **⬆️ Upgrade** downloads it next to the running one, checks it against `SHA256SUMS`, switches over and restarts.
 
 ## License
 

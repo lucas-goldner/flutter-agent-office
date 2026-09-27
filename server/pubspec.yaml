@@ -1,6 +1,9 @@
 name: agent_office_server
 description: The agent office server. It runs the workers' terminals, keeps the office's state and serves the Flutter web client.
 publish_to: none
+# The office's version. Releases are named after its major.minor plus the number of commits on main
+# (v0.1.68, see tool/build.dart and .github/workflows/release.yml): bump it to start a new minor.
+version: 0.1.0
 
 environment:
   sdk: ^3.11.0
