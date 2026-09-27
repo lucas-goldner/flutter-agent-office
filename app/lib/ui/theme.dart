@@ -22,11 +22,11 @@ const kFont = 'Nunito';
 
 /// Glyphs Nunito doesn't have: emoji (Twemoji) and symbols like → ✓ ⌨ (DejaVu). Both are bundled,
 /// so the page never reaches for Flutter's font CDN (offices run on private networks too).
-const kFallback = ['Twemoji', 'DejaVuSans'];
+const kFallback = ['Twemoji', 'DejaVuSans', 'NotoSansSymbols2Term', 'NotoSansSymbolsTerm'];
 
 /// Code, diffs, commands and passwords.
 const kMono = 'DejaVuSansMono';
-const kMonoFallback = ['Twemoji', 'DejaVuSans'];
+const kMonoFallback = ['NotoSansSymbols2Term', 'NotoSansSymbolsTerm', 'Twemoji', 'DejaVuSans'];
 const kBorder = 3.0;
 
 ThemeData officeTheme() {
