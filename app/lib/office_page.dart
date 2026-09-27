@@ -8,6 +8,7 @@ import 'package:flutter_scene/scene.dart' hide Material;
 import 'interop/pointer_lock.dart';
 import 'office/controller.dart';
 import 'office_scope.dart';
+import 'ui/arcade.dart';
 import 'ui/hud.dart';
 import 'ui/modal.dart';
 import 'world/hands.dart';
@@ -91,6 +92,7 @@ class _OfficePageState extends State<OfficePage> {
   }
 
   void _move(PointerMoveEvent e) {
+    c.hanger.mouse = e.localPosition;
     final d = _drag;
     if (d == null || _lock.locked) return;
     final delta = e.localPosition - d;
@@ -113,7 +115,9 @@ class _OfficePageState extends State<OfficePage> {
   }
 
   void _wheel(PointerSignalEvent e) {
-    if (e is PointerScrollEvent) c.player.zoom(e.scrollDelta.dy);
+    if (e is! PointerScrollEvent) return;
+    // Hanging a picture, the wheel sizes it instead of zooming the camera.
+    c.hanger.active ? c.hanger.resize(e.scrollDelta.dy < 0 ? 1 : -1) : c.player.zoom(e.scrollDelta.dy);
   }
 
   @override
@@ -149,12 +153,16 @@ class _OfficePageState extends State<OfficePage> {
                         onPointerMove: _move,
                         onPointerUp: _up,
                         onPointerSignal: _wheel,
-                        child: SceneView(
+                        onPointerHover: (e) => c.hanger.mouse = e.localPosition,
+                        // Playing DEADFALL, the office around the monitor is drawn every third frame.
+                        child: FrameSkipSceneView(
                           c.scene,
+                          every: () => c.arcade.settled ? 3 : 1,
                           onTick: (elapsed, dt) => c.tick(dt, _view),
                           viewsBuilder: (_) => [
                             RenderView(camera: c.camera, layerMask: kRenderLayerAll & ~Hands.layer),
-                            if (c.player.view == ViewMode.first && c.devHands) c.hands.overlayView(),
+                            if (c.player.view == ViewMode.first && c.devHands && !c.arcade.zoomed)
+                              c.hands.overlayView(),
                           ],
                         ),
                       );
