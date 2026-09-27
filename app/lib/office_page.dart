@@ -28,7 +28,11 @@ class _OfficePageState extends State<OfficePage> {
     onMove: (dx, dy) {
       if (c.player.enabled) c.player.look(dx * kLookSpeed, dy * kLookSpeed);
     },
-    onChange: (locked) => c.pointerLocked = locked,
+    onChange: (locked) {
+      c.pointerLocked = locked;
+      // A lock that lands after a window opened (the whiteboard's Excalidraw needs the real mouse) lets go.
+      if (locked && ModalStack.instance.open) _lock.unlock();
+    },
   );
 
   /// Whether the mouse was captured when the windows opened, so closing them gives it back.

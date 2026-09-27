@@ -79,6 +79,13 @@ meshes in code.
    get the one-year `immutable` cache header that Vite's hashed `/assets/*` has now.
 5. Dev: `npm run dev:flutter` runs the server, which serves the Flutter build (`flutter build web` in watch mode,
    or `flutter run -d web-server` behind the server's proxy), so `/ws` and `/api` stay same-origin for the cookie.
+6. The whiteboard's Excalidraw bundle: `npm run build:whiteboard` (scripts/build-whiteboard.mjs, esbuild from
+   the repo's node_modules) bundles React 18, Excalidraw 0.18 and the bridge (`app/excalidraw/bridge.js`) into
+   `app/web/excalidraw/`: `whiteboard.js` (an ES module, ~0.7 MB, plus ~3 MB of chunks it imports), `whiteboard.css`
+   and Excalidraw's fonts (no Xiaolai, no other languages), so they're served by the office, never a CDN.
+   `flutter build web` copies it into `build/web/excalidraw/`, and the app imports it only when the whiteboard is
+   first needed. `npm run build:flutter` runs it first. It's ~7 MB in ~180 files, so it's gitignored: after a
+   bare `flutter build web` without it, the whiteboard window says it couldn't load and the board stays blank.
 
 ## App layout (`app/lib`)
 

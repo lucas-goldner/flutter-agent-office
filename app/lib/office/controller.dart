@@ -3,7 +3,7 @@
 // frame loop (you, the camera, everyone else, the sky, sounds), and does what the keys and the
 // windows ask (hire, prompt, send home, sit, coffee, the gong…).
 //
-// Not here yet (see FLUTTER_WEB_PLAN.md): voice and screen sharing, the whiteboard, hanging
+// Not here yet (see FLUTTER_WEB_PLAN.md): voice and screen sharing, hanging
 // pictures, and DEADFALL. Their buttons say so.
 
 import 'dart:async';
@@ -51,6 +51,8 @@ import '../ui/team.dart';
 import '../ui/accounts.dart';
 import '../ui/terminal.dart';
 import '../ui/upgrade.dart';
+import '../ui/whiteboard.dart';
+import '../ui/whiteboard_logic.dart' show othersDrawing, whiteboardHint;
 import '../ui/usage.dart' show hiringPaused, usageLabel, usageTitle;
 import '../ui/worker_text.dart' show statusLabel;
 import '../world/board_faces.dart';
@@ -179,7 +181,7 @@ class OfficeController implements OfficeActions {
       onAccounts: () => openAccounts(scope),
       onUpgrade: () => openUpgrade(scope),
       onSearch: showSearch,
-      onWhiteboard: _notYet,
+      onWhiteboard: () => whiteboard.open(),
       onDecor: _notYet,
       onSettings: showSettings,
       onHelp: openHelp,
@@ -189,6 +191,9 @@ class OfficeController implements OfficeActions {
   );
 
   late final Office office;
+
+  /// The 📝 whiteboard: its window, and the drawing on the board in the office.
+  late final WhiteboardHub whiteboard;
   late final PlayerController player;
   late final Person me;
   late final Hands hands;
@@ -250,6 +255,7 @@ class OfficeController implements OfficeActions {
 
     office = buildOffice(labels: labels);
     root.add(office.group);
+    whiteboard = WhiteboardHub(scope, office.whiteboard);
     if (q['boards'] != '0') _mountBoards();
     confetti = Confetti((x, z, y) => groundAt(office.colliders, x, z, y));
     smoke = Smoke();
@@ -340,6 +346,7 @@ class OfficeController implements OfficeActions {
       f();
     }
     _messages?.cancel();
+    whiteboard.dispose();
     net.close();
   }
 
@@ -382,6 +389,7 @@ class OfficeController implements OfficeActions {
       debugPrint('store.apply(${msg.runtimeType}) failed: $e\n$st');
     }
     _sentHome.clear();
+    whiteboard.route(msg);
     switch (msg) {
       case WelcomeMsg m:
         // A few pings, to line this page's clock up with the office's for the jukebox.
@@ -1008,7 +1016,9 @@ class OfficeController implements OfficeActions {
         }
       case InteractKind.gong:
         _hitGong();
-      case InteractKind.tv || InteractKind.whiteboard || InteractKind.decor:
+      case InteractKind.whiteboard:
+        whiteboard.open();
+      case InteractKind.tv || InteractKind.decor:
         _notYet();
       default:
         break;
@@ -1269,10 +1279,7 @@ class OfficeController implements OfficeActions {
           ],
         );
       case InteractKind.whiteboard:
-        return (
-          '',
-          [const HintTitle('📝 Whiteboard'), const HintAside('drawing together is coming to the new client')],
-        );
+        return whiteboardHint(othersDrawing(store.drawing, store.you, store.peers));
       case InteractKind.elevator:
         final f = store.currentFloor();
         final n = store.floors.length;
