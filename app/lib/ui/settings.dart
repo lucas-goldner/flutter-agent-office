@@ -5,8 +5,8 @@ import 'package:flutter/material.dart';
 
 import '../notify.dart';
 import '../office_scope.dart';
-import '../shared/dog.dart';
-import '../shared/protocol.dart';
+import 'package:office_shared/dog.dart';
+import 'package:office_shared/protocol.dart';
 import '../state/store.dart';
 import '../world/player.dart' show ViewMode;
 import 'modal.dart';

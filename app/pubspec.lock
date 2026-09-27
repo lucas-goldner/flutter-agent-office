@@ -285,6 +285,13 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.18.3"
+  office_shared:
+    dependency: "direct main"
+    description:
+      path: "../packages/office_shared"
+      relative: true
+    source: path
+    version: "0.0.0"
   path:
     dependency: transitive
     description:

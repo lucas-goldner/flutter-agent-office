@@ -1,6 +1,6 @@
 // The words of the send-home dialog (see prompt.dart), apart so they are tested on the VM.
 
-import '../shared/protocol.dart';
+import 'package:office_shared/protocol.dart';
 
 String plural(int count, String noun) => '$count $noun${count == 1 ? '' : 's'}';
 

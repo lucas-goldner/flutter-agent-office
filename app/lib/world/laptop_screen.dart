@@ -7,7 +7,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/widgets.dart';
 
-import '../shared/protocol.dart';
+import 'package:office_shared/protocol.dart';
 import '../state/screen_state.dart';
 
 /// The terminals' colours: the terminal window's xterm theme and the laptop screens both use it.

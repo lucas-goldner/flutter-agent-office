@@ -8,7 +8,7 @@ import 'package:flutter/painting.dart';
 import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
-import '../../shared/layout.dart' as lay;
+import 'package:office_shared/layout.dart' as lay;
 import '../../ui/theme.dart' show kFallback, kFont;
 import '../collider.dart';
 import '../text.dart';

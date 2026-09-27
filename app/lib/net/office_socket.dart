@@ -8,8 +8,8 @@ import 'package:web/web.dart' as web;
 
 import '../interop/browser.dart';
 import '../net/api.dart';
-import '../shared/avatar.dart';
-import '../shared/protocol.dart';
+import 'package:office_shared/avatar.dart';
+import 'package:office_shared/protocol.dart';
 
 typedef Profile = ({String name, String color, Look look});
 

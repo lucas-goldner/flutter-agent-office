@@ -1,7 +1,7 @@
 // A worker's terminal as the laptops show it. Kept apart from the store (no browser imports), so the
 // laptop painter and its tests can use it on the Dart VM.
 
-import '../shared/protocol.dart';
+import 'package:office_shared/protocol.dart';
 
 /// A worker's terminal as the laptop on its desk shows it: rows of styled runs (see `screen`).
 class ScreenState {

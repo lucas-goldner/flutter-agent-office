@@ -7,10 +7,10 @@ import 'dart:math' as math;
 import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
-import '../../shared/decor.dart' show WallId, WallRect, wallFacing;
-import '../../shared/floors.dart';
-import '../../shared/layout.dart' as lay;
-import '../../shared/layout.dart' hide Elevator, Gong, Jukebox, Whiteboard;
+import 'package:office_shared/decor.dart' show WallId, WallRect, wallFacing;
+import 'package:office_shared/floors.dart';
+import 'package:office_shared/layout.dart' as lay;
+import 'package:office_shared/layout.dart' hide Elevator, Gong, Jukebox, Whiteboard;
 import '../collider.dart';
 import '../labels.dart';
 import '../text.dart';

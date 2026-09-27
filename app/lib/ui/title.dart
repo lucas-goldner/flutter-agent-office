@@ -2,7 +2,7 @@
 // waiting on you when you can't see them (another tab, another floor).
 
 import '../notify.dart';
-import '../shared/protocol.dart';
+import 'package:office_shared/protocol.dart';
 
 /// Workers waiting on someone on the floors you're not on.
 int waitingElsewhere(List<FloorInfo> floors, String? floor) =>

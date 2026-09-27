@@ -1,6 +1,6 @@
 import 'package:agent_office/interop/notify.dart';
 import 'package:agent_office/notify.dart';
-import 'package:agent_office/shared/protocol.dart';
+import 'package:office_shared/protocol.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class FakeShown implements ShownNotification {

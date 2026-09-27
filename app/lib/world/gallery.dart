@@ -11,7 +11,7 @@ import 'package:flutter/painting.dart' hide Decoration;
 import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
-import '../shared/decor.dart';
+import 'package:office_shared/decor.dart';
 import '../ui/decor.dart' show loadPicture, Picture;
 import '../ui/theme.dart' show kFallback, kFont;
 import 'collider.dart';

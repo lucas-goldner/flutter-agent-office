@@ -12,9 +12,9 @@ import 'package:flutter/widgets.dart' show Alignment;
 import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
-import '../shared/avatar.dart';
-import '../shared/protocol.dart';
-import '../shared/status.dart';
+import 'package:office_shared/avatar.dart';
+import 'package:office_shared/protocol.dart';
+import 'package:office_shared/status.dart';
 import 'geo.dart';
 import 'label_widgets.dart';
 import 'labels.dart';

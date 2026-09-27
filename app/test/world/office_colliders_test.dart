@@ -2,7 +2,7 @@
 // and nav depend on.
 import 'dart:math' as math;
 
-import 'package:agent_office/shared/layout.dart' hide Elevator, Gong, Jukebox, Whiteboard;
+import 'package:office_shared/layout.dart' hide Elevator, Gong, Jukebox, Whiteboard;
 import 'package:agent_office/world/collider.dart';
 import 'package:agent_office/world/office/geo.dart' show triangulate;
 import 'package:agent_office/world/office/office_colliders.dart';

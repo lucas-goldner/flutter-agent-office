@@ -4,7 +4,7 @@
 
 import 'dart:ui' show Color;
 
-import '../shared/protocol.dart';
+import 'package:office_shared/protocol.dart';
 import 'markdown.dart' show repoUrlOf;
 
 // ---- Boards ---------------------------------------------------------------------------------------

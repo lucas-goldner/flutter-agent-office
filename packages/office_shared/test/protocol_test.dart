@@ -1,7 +1,7 @@
 import 'dart:convert';
 
-import 'package:agent_office/shared/shared.dart';
-import 'package:flutter_test/flutter_test.dart';
+import 'package:office_shared/shared.dart';
+import 'package:test/test.dart';
 
 /// Parses a frame the way it comes off the socket, and checks it writes back out the same.
 ServerMsg roundTrip(Map<String, dynamic> frame) {

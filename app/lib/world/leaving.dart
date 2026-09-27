@@ -14,8 +14,8 @@ import 'dart:math' as math;
 import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
-import '../shared/layout.dart' show DeskDef;
-import '../shared/nav.dart';
+import 'package:office_shared/layout.dart' show DeskDef;
+import 'package:office_shared/nav.dart';
 import 'character.dart';
 import 'geo.dart';
 

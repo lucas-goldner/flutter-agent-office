@@ -5,7 +5,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-import '../shared/avatar.dart';
+import 'package:office_shared/avatar.dart';
 import 'hud_parts.dart' show cssColor;
 import 'theme.dart';
 

@@ -4,8 +4,8 @@
 import 'package:flutter/material.dart';
 
 import '../office_scope.dart';
-import '../shared/jukebox.dart';
-import '../shared/protocol.dart';
+import 'package:office_shared/jukebox.dart';
+import 'package:office_shared/protocol.dart';
 import '../state/store.dart';
 import 'modal.dart';
 import 'theme.dart';

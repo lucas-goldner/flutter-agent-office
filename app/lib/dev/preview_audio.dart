@@ -13,8 +13,8 @@ import 'package:flutter/scheduler.dart';
 
 import '../audio/audio_check.dart';
 import '../audio/sound.dart';
-import '../shared/layout.dart';
-import '../shared/protocol.dart' show GongWhy;
+import 'package:office_shared/layout.dart';
+import 'package:office_shared/protocol.dart' show GongWhy;
 import '../state/store.dart' show nowMs;
 import '../ui/theme.dart';
 

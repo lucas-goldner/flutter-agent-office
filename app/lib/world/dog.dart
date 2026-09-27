@@ -9,7 +9,7 @@ import 'package:flutter/widgets.dart' show Alignment;
 import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
-import '../shared/dog.dart';
+import 'package:office_shared/dog.dart';
 import 'collider.dart';
 import 'geo.dart';
 import 'label_widgets.dart';

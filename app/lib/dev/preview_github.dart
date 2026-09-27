@@ -11,8 +11,8 @@ import 'package:flutter/material.dart';
 import '../interop/browser.dart';
 import '../net/office_socket.dart';
 import '../office_scope.dart';
-import '../shared/avatar.dart';
-import '../shared/protocol.dart';
+import 'package:office_shared/avatar.dart';
+import 'package:office_shared/protocol.dart';
 import '../state/store.dart';
 import '../ui/boards.dart';
 import '../ui/markdown.dart';
@@ -281,7 +281,7 @@ index 4444444..0000000
 +++ /dev/null
 @@ -1,4 +0,0 @@
 -import * as THREE from 'three';
--import { DESK_BY_ID } from '../../shared/layout';
+-import { DESK_BY_ID } from 'package:office_shared/layout';
 -
 -const NOTE_COLORS = ['#fff7b0', '#ffd6e0'];
 diff --git a/docs/boards.md b/docs/wall-boards.md

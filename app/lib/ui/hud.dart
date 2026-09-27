@@ -13,7 +13,7 @@ import 'package:flutter/services.dart';
 import '../caffeine.dart';
 import '../interop/browser.dart';
 import '../office_scope.dart';
-import '../shared/protocol.dart';
+import 'package:office_shared/protocol.dart';
 import '../state/store.dart';
 import 'hud_parts.dart';
 import 'limits.dart';

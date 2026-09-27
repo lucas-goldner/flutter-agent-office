@@ -1,6 +1,6 @@
 // Realistic fake office data for the worker windows preview.
 
-import '../shared/protocol.dart';
+import 'package:office_shared/protocol.dart';
 import '../state/store.dart';
 
 int _ago(int minutes) => DateTime.now().millisecondsSinceEpoch - minutes * 60000;

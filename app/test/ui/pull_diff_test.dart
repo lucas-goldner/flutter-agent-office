@@ -1,4 +1,4 @@
-import 'package:agent_office/shared/protocol.dart';
+import 'package:office_shared/protocol.dart';
 import 'package:agent_office/ui/pull_diff.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';

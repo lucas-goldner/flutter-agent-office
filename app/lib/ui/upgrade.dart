@@ -7,8 +7,8 @@ import 'package:flutter/material.dart';
 
 import '../interop/browser.dart';
 import '../office_scope.dart';
-import '../shared/protocol.dart';
-import '../shared/status.dart';
+import 'package:office_shared/protocol.dart';
+import 'package:office_shared/status.dart';
 import '../state/store.dart';
 import 'modal.dart';
 import 'theme.dart';

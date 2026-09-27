@@ -9,7 +9,7 @@ import 'dart:typed_data';
 import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
-import '../shared/layout.dart';
+import 'package:office_shared/layout.dart';
 import 'office/outside.dart' show NightParts;
 import 'sky_model.dart';
 import 'text.dart' show verticalPlane;

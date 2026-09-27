@@ -4,7 +4,7 @@
 import 'package:flutter/material.dart';
 
 import '../office_scope.dart';
-import '../shared/protocol.dart';
+import 'package:office_shared/protocol.dart';
 import '../world/laptop_screen.dart' show kTermFont, kTermFontFallback;
 import 'child_button.dart';
 import 'modal.dart';

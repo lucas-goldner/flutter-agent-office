@@ -6,7 +6,7 @@ import 'dart:math' as math;
 
 import 'package:vector_math/vector_math.dart' as vm;
 
-import '../shared/layout.dart';
+import 'package:office_shared/layout.dart';
 import 'collider.dart';
 
 const double kRadius = 0.32;

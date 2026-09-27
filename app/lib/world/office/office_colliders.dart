@@ -4,8 +4,8 @@
 
 import 'dart:math' as math;
 
-import '../../shared/layout.dart' as lay;
-import '../../shared/layout.dart' hide Elevator, Gong, Jukebox, Whiteboard;
+import 'package:office_shared/layout.dart' as lay;
+import 'package:office_shared/layout.dart' hide Elevator, Gong, Jukebox, Whiteboard;
 import '../collider.dart';
 
 // ---------------------------------------------------------------------------------------------

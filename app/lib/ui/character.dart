@@ -9,7 +9,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../office_scope.dart';
-import '../shared/avatar.dart';
+import 'package:office_shared/avatar.dart';
 import '../state/store.dart';
 import 'hud_parts.dart' show cssColor;
 import 'chibi.dart';

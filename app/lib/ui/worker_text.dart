@@ -3,7 +3,7 @@
 
 import 'package:flutter/material.dart';
 
-import '../shared/protocol.dart';
+import 'package:office_shared/protocol.dart';
 import 'provider.dart';
 import 'theme.dart';
 

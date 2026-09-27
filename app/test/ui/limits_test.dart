@@ -1,4 +1,4 @@
-import 'package:agent_office/shared/protocol.dart';
+import 'package:office_shared/protocol.dart';
 import 'package:agent_office/ui/limits.dart';
 import 'package:agent_office/ui/usage.dart' show MeterLevel;
 import 'package:flutter/material.dart';

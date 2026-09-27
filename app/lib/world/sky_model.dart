@@ -8,8 +8,8 @@ import 'dart:ui' show Color;
 
 import 'package:vector_math/vector_math.dart' as vm;
 
-import '../shared/protocol.dart';
-import '../shared/sun.dart';
+import 'package:office_shared/protocol.dart';
+import 'package:office_shared/sun.dart';
 
 const double _deg = math.pi / 180;
 

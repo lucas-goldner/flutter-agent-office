@@ -3,7 +3,7 @@
 
 import 'dart:math' as math;
 
-import '../shared/layout.dart';
+import 'package:office_shared/layout.dart';
 
 class Pos {
   const Pos(this.x, this.y, this.z);

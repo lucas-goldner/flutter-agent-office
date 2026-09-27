@@ -1,6 +1,6 @@
 // The 🔎 window's marks and words (see search.dart), apart so they are tested on the VM.
 
-import '../shared/protocol.dart';
+import 'package:office_shared/protocol.dart';
 
 /// `text` with its whitespace collapsed, cut into pieces; the ones that match `needle` (a
 /// searchKey) are marked.

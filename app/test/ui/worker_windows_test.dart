@@ -1,7 +1,7 @@
 // The words and rules of the worker windows: labels, provider rules, the changes diff reader, the
 // send-home report, the queue's lines and the search marks.
 
-import 'package:agent_office/shared/protocol.dart';
+import 'package:office_shared/protocol.dart';
 import 'package:agent_office/ui/changes_logic.dart';
 import 'package:agent_office/ui/child_button.dart';
 import 'package:agent_office/ui/prompt_logic.dart';

@@ -7,7 +7,7 @@ import 'dart:ui' show Color, Offset, Path, Rect;
 import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
-import '../../shared/layout.dart' hide Elevator, Gong, Jukebox, Whiteboard;
+import 'package:office_shared/layout.dart' hide Elevator, Gong, Jukebox, Whiteboard;
 import '../text.dart';
 import '../toon.dart';
 import 'cars.dart';

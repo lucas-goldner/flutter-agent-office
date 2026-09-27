@@ -9,8 +9,8 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
-import '../shared/layout.dart' show deskById;
-import '../shared/protocol.dart';
+import 'package:office_shared/layout.dart' show deskById;
+import 'package:office_shared/protocol.dart';
 import '../state/store.dart';
 import '../ui/gh_logic.dart' show kNoteColors, kPins, parseHex;
 import '../ui/theme.dart' show kFallback, kMonoFallback;

@@ -18,9 +18,9 @@ import 'dart:typed_data';
 
 import 'package:web/web.dart' as web;
 
-import '../shared/jukebox.dart' show jukeboxStream;
-import '../shared/layout.dart' show desks;
-import '../shared/protocol.dart' show GongWhy;
+import 'package:office_shared/jukebox.dart' show jukeboxStream;
+import 'package:office_shared/layout.dart' show desks;
+import 'package:office_shared/protocol.dart' show GongWhy;
 import '../state/store.dart' show nowMs;
 import 'music.dart';
 import 'samples.dart';

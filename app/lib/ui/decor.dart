@@ -12,7 +12,7 @@ import 'package:http/http.dart' as http;
 import '../interop/browser.dart';
 import '../interop/open_link.dart';
 import '../office_scope.dart';
-import '../shared/decor.dart';
+import 'package:office_shared/decor.dart';
 import '../state/store.dart';
 import 'confirm.dart';
 import 'hud_parts.dart' show cssColor;

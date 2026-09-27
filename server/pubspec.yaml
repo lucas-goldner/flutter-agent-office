@@ -1,0 +1,22 @@
+name: agent_office_server
+description: The agent office server. It runs the workers' terminals, keeps the office's state and serves the Flutter web client.
+publish_to: none
+
+environment:
+  sdk: ^3.11.0
+
+dependencies:
+  args: ^2.6.0
+  crypto: ^3.0.6
+  office_shared:
+    path: ../packages/office_shared
+  path: ^1.9.0
+  pointycastle: ^4.0.0
+  pty2: ^0.5.4
+  relic: ^1.2.0
+  xterm_core:
+    path: ../packages/xterm_core
+
+dev_dependencies:
+  lints: ^6.0.0
+  test: ^1.25.0

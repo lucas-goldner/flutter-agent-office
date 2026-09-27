@@ -4,8 +4,8 @@ import 'dart:math' as math;
 
 import 'package:vector_math/vector_math.dart' as vm;
 
-import '../shared/decor.dart';
-import '../shared/layout.dart' show Floor, Loft, Side;
+import 'package:office_shared/decor.dart';
+import 'package:office_shared/layout.dart' show Floor, Loft, Side;
 
 /// Where a ray from inside the room (office space; [dir] normalized) first meets a wall, within
 /// [maxDist] meters (the whole room by default).

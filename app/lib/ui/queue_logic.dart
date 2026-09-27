@@ -1,6 +1,6 @@
 // The queue window's words (see queue.dart), apart so they are tested on the VM.
 
-import '../shared/protocol.dart';
+import 'package:office_shared/protocol.dart';
 import 'modal.dart' show timeAgo;
 import 'provider.dart';
 import 'worker_text.dart';

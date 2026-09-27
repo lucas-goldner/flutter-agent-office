@@ -6,7 +6,7 @@ import 'dart:math' as math;
 
 import 'package:web/web.dart' as web;
 
-import '../shared/protocol.dart' show GongWhy;
+import 'package:office_shared/protocol.dart' show GongWhy;
 import 'music.dart';
 import 'score.dart';
 import 'sound.dart';

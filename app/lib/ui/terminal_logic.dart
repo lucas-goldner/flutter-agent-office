@@ -4,8 +4,8 @@
 
 import 'package:xterm/xterm.dart' as x;
 
-import '../shared/protocol.dart';
-import '../shared/search.dart';
+import 'package:office_shared/protocol.dart';
+import 'package:office_shared/search.dart';
 import 'provider.dart';
 
 /// A search hit to scroll to once the terminal has loaded (see search.dart): `needle` is what was

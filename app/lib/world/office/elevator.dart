@@ -6,8 +6,8 @@ import 'dart:math' as math;
 import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
-import '../../shared/layout.dart' as lay;
-import '../../shared/layout.dart' show ElevatorCar, Floor, elevatorFront, wallHeight;
+import 'package:office_shared/layout.dart' as lay;
+import 'package:office_shared/layout.dart' show ElevatorCar, Floor, elevatorFront, wallHeight;
 import '../collider.dart';
 import '../text.dart';
 import '../toon.dart';

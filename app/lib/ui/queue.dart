@@ -7,7 +7,7 @@ import 'package:flutter/material.dart';
 
 import '../interop/portable.dart';
 import '../office_scope.dart';
-import '../shared/protocol.dart';
+import 'package:office_shared/protocol.dart';
 import '../state/store.dart';
 import 'child_button.dart';
 import 'modal.dart';

@@ -6,12 +6,12 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 
 import '../interop/browser.dart';
-import '../shared/avatar.dart';
-import '../shared/decor.dart';
-import '../shared/dog.dart';
-import '../shared/jukebox.dart';
-import '../shared/protocol.dart';
-import '../shared/whiteboard.dart';
+import 'package:office_shared/avatar.dart';
+import 'package:office_shared/decor.dart';
+import 'package:office_shared/dog.dart';
+import 'package:office_shared/jukebox.dart';
+import 'package:office_shared/protocol.dart';
+import 'package:office_shared/whiteboard.dart';
 import '../world/player.dart' show ViewMode;
 import 'screen_state.dart';
 

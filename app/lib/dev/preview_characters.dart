@@ -10,9 +10,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
-import '../shared/avatar.dart';
-import '../shared/dog.dart';
-import '../shared/protocol.dart';
+import 'package:office_shared/avatar.dart';
+import 'package:office_shared/dog.dart';
+import 'package:office_shared/protocol.dart';
 import '../ui/theme.dart';
 import '../world/character.dart';
 import '../audio/sound_model.dart' show DogSounds;

@@ -7,3 +7,7 @@ pw.txt
 
 # The whiteboard's Excalidraw bundle (scripts/build-whiteboard.mjs): several MB, built by npm run build:client.
 /app/web/excalidraw/
+
+# Dart tooling
+.dart_tool/
+/packages/*/pubspec.lock

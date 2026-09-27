@@ -10,9 +10,9 @@ import 'package:flutter/material.dart';
 
 import '../net/office_socket.dart';
 import '../office_scope.dart';
-import '../shared/avatar.dart';
-import '../shared/layout.dart' as layout;
-import '../shared/protocol.dart';
+import 'package:office_shared/avatar.dart';
+import 'package:office_shared/layout.dart' as layout;
+import 'package:office_shared/protocol.dart';
 import '../state/store.dart';
 import '../ui/ask.dart';
 import '../ui/changes.dart';

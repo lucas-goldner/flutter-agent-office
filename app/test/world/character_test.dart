@@ -1,7 +1,7 @@
 import 'dart:math' as math;
 
-import 'package:agent_office/shared/dog.dart';
-import 'package:agent_office/shared/protocol.dart';
+import 'package:office_shared/dog.dart';
+import 'package:office_shared/protocol.dart';
 import 'package:agent_office/world/character.dart';
 import 'package:agent_office/world/dog.dart';
 import 'package:agent_office/world/geo.dart';

@@ -11,8 +11,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
-import '../shared/floors.dart';
-import '../shared/layout.dart' as lay;
+import 'package:office_shared/floors.dart';
+import 'package:office_shared/layout.dart' as lay;
 import '../ui/theme.dart';
 import '../world/labels.dart';
 import '../world/office/office.dart';

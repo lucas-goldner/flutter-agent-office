@@ -1,0 +1,6 @@
+name: xterm_core
+description: The terminal emulator core of xterm.dart 4.0.0 (MIT, TerminalStudio), without its Flutter view, so the office server can keep each worker's screen without a UI.
+publish_to: none
+
+environment:
+  sdk: ^3.11.0

@@ -1,7 +1,7 @@
 import 'dart:math' as math;
 
-import 'package:agent_office/shared/shared.dart';
-import 'package:flutter_test/flutter_test.dart';
+import 'package:office_shared/shared.dart';
+import 'package:test/test.dart';
 
 void main() {
   group('avatar', () {

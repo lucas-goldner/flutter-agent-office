@@ -6,7 +6,7 @@ import 'package:flutter/material.dart';
 import '../interop/browser.dart';
 import '../interop/open_link.dart';
 import '../office_scope.dart';
-import '../shared/protocol.dart';
+import 'package:office_shared/protocol.dart';
 import '../state/store.dart';
 import 'commands.dart';
 import 'hud_parts.dart' show cssColor;

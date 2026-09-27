@@ -14,7 +14,7 @@ import 'package:http/http.dart' as http;
 import '../interop/browser.dart';
 import '../interop/open_url.dart';
 import '../office_scope.dart';
-import '../shared/protocol.dart';
+import 'package:office_shared/protocol.dart';
 import '../state/store.dart';
 import 'gh_logic.dart';
 import 'markdown.dart';

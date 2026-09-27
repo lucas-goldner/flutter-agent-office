@@ -3,7 +3,7 @@
 
 import 'package:flutter/foundation.dart';
 
-import '../shared/protocol.dart';
+import 'package:office_shared/protocol.dart';
 
 /// The host OS, for which command opens a URL: on the web Flutter reads it off the browser.
 enum Os { mac, linux, windows }

@@ -2,8 +2,8 @@
 // for workers that need input or finish (the tab title counts them too, see ui/tab_title.dart).
 
 import 'interop/notify.dart';
-import 'shared/protocol.dart';
-import 'shared/status.dart';
+import 'package:office_shared/protocol.dart';
+import 'package:office_shared/status.dart';
 
 export 'interop/notify.dart' show NotifyApi, NotifyPermission;
 

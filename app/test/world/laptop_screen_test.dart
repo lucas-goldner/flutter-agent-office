@@ -3,7 +3,7 @@
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
-import 'package:agent_office/shared/protocol.dart';
+import 'package:office_shared/protocol.dart';
 import 'package:agent_office/state/screen_state.dart';
 import 'package:agent_office/world/laptop_screen.dart';
 import 'package:flutter/painting.dart';

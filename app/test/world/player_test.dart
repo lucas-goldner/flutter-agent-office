@@ -2,7 +2,7 @@
 
 import 'dart:math' as math;
 
-import 'package:agent_office/shared/layout.dart';
+import 'package:office_shared/layout.dart';
 import 'package:agent_office/world/collider.dart';
 import 'package:agent_office/world/player.dart';
 import 'package:flutter_test/flutter_test.dart';

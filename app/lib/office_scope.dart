@@ -5,7 +5,7 @@
 import 'package:flutter/widgets.dart';
 
 import 'net/office_socket.dart';
-import 'shared/protocol.dart';
+import 'package:office_shared/protocol.dart';
 import 'state/store.dart';
 
 /// Office-level actions that windows call back into. Implemented by the office controller; each

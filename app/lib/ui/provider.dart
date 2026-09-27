@@ -7,7 +7,7 @@ import 'package:flutter/material.dart';
 
 import '../interop/portable.dart';
 import '../net/api.dart';
-import '../shared/protocol.dart';
+import 'package:office_shared/protocol.dart';
 import 'theme.dart';
 
 const _providerKey = 'agent-office.provider';

@@ -1,6 +1,6 @@
 // The Changes window's words and its diff reader (see changes.dart), apart so they are tested on the VM.
 
-import '../shared/protocol.dart';
+import 'package:office_shared/protocol.dart';
 
 const Map<ChangeStatus, String> kStatusWord = {
   ChangeStatus.modified: 'modified',

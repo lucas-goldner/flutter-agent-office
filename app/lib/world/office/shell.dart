@@ -8,8 +8,8 @@ import 'dart:ui' show Rect;
 import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
-import '../../shared/floors.dart';
-import '../../shared/layout.dart' hide Elevator, Gong, Jukebox, Whiteboard;
+import 'package:office_shared/floors.dart';
+import 'package:office_shared/layout.dart' hide Elevator, Gong, Jukebox, Whiteboard;
 import '../collider.dart';
 import '../text.dart';
 import '../toon.dart';

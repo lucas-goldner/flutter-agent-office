@@ -1,6 +1,6 @@
 import 'package:agent_office/caffeine.dart';
-import 'package:agent_office/shared/protocol.dart';
-import 'package:agent_office/shared/avatar.dart';
+import 'package:office_shared/protocol.dart';
+import 'package:office_shared/avatar.dart';
 import 'package:agent_office/ui/chibi.dart';
 import 'package:agent_office/ui/help.dart';
 import 'package:agent_office/ui/hud_parts.dart';

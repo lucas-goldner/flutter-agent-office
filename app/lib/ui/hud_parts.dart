@@ -7,7 +7,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../caffeine.dart';
-import '../shared/protocol.dart';
+import 'package:office_shared/protocol.dart';
 import 'theme.dart';
 
 /// Parses '#rrggbb' (or '#rgb'); grey for anything else.

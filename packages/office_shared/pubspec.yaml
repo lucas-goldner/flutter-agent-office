@@ -1,0 +1,9 @@
+name: office_shared
+description: The office's wire protocol and the layout, navigation and state rules the server and the browser client share.
+publish_to: none
+
+environment:
+  sdk: ^3.11.0
+
+dev_dependencies:
+  test: ^1.25.0

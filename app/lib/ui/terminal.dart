@@ -14,9 +14,9 @@ import 'package:xterm/xterm.dart' as x;
 
 import '../interop/portable.dart';
 import '../office_scope.dart';
-import '../shared/protocol.dart';
-import '../shared/search.dart';
-import '../shared/status.dart';
+import 'package:office_shared/protocol.dart';
+import 'package:office_shared/search.dart';
+import 'package:office_shared/status.dart';
 import '../state/store.dart';
 import '../world/laptop_screen.dart';
 import 'modal.dart';

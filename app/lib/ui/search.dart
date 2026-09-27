@@ -9,8 +9,8 @@ import 'package:flutter/services.dart';
 
 import '../net/api.dart';
 import '../office_scope.dart';
-import '../shared/protocol.dart';
-import '../shared/search.dart';
+import 'package:office_shared/protocol.dart';
+import 'package:office_shared/search.dart';
 import '../world/laptop_screen.dart' show kTermFont, kTermFontFallback, TermTheme;
 import 'modal.dart';
 import 'search_logic.dart';

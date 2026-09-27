@@ -1,7 +1,7 @@
 import 'dart:convert';
 
-import 'package:agent_office/shared/protocol.dart';
-import 'package:agent_office/shared/whiteboard.dart';
+import 'package:office_shared/protocol.dart';
+import 'package:office_shared/whiteboard.dart';
 import 'package:agent_office/ui/hud_parts.dart';
 import 'package:agent_office/ui/whiteboard_logic.dart';
 import 'package:flutter_test/flutter_test.dart';

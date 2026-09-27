@@ -3,8 +3,8 @@
 
 import 'dart:convert';
 
-import '../shared/protocol.dart';
-import '../shared/whiteboard.dart';
+import 'package:office_shared/protocol.dart';
+import 'package:office_shared/whiteboard.dart';
 import 'hud_parts.dart';
 import 'modal.dart' show clip;
 

@@ -8,7 +8,7 @@ import 'package:flutter/painting.dart';
 import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
-import '../../shared/floors.dart';
+import 'package:office_shared/floors.dart';
 import '../text.dart';
 import '../toon.dart';
 import 'geo.dart';

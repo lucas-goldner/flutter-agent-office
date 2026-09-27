@@ -8,8 +8,8 @@ import 'dart:ui' show PointMode;
 import 'package:flutter/material.dart';
 
 import '../office_scope.dart';
-import '../shared/layout.dart' show deskById;
-import '../shared/protocol.dart';
+import 'package:office_shared/layout.dart' show deskById;
+import 'package:office_shared/protocol.dart';
 import '../state/store.dart';
 import 'gh_logic.dart';
 import 'modal.dart';

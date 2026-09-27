@@ -9,7 +9,7 @@ import 'package:flutter/material.dart' show Icon, Icons, Opacity;
 import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
-import '../../shared/layout.dart' as lay;
+import 'package:office_shared/layout.dart' as lay;
 import '../../ui/theme.dart' show kFont;
 import '../collider.dart';
 import '../labels.dart';

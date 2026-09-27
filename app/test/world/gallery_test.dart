@@ -1,4 +1,4 @@
-import 'package:agent_office/shared/layout.dart';
+import 'package:office_shared/layout.dart';
 import 'package:agent_office/world/wall_aim.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vector_math/vector_math.dart' as vm;
