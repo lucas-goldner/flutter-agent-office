@@ -368,7 +368,10 @@ class PtyHost {
       }
       if (found == null) {
         await _startHost();
-        final deadline = DateTime.now().add(const Duration(seconds: 10));
+        // A compiled office's host is up at once; under `dart run` / `dart test` the VM compiles it
+        // first, which on a busy machine (several hosts starting together) takes a good while.
+        final wait = hostCommand().length > 1 ? const Duration(seconds: 60) : const Duration(seconds: 10);
+        final deadline = DateTime.now().add(wait);
         while (found == null && DateTime.now().isBefore(deadline)) {
           await Future<void>.delayed(const Duration(milliseconds: 100));
           found = await _hello();
@@ -457,6 +460,10 @@ class PtyHost {
     try {
       await conn.sock.flush().timeout(const Duration(seconds: 2));
       await conn.sock.close().timeout(const Duration(seconds: 2));
+      // close() can complete before the last bytes are out, and destroying the socket then drops
+      // them (a stop the host never hears leaves it running). The host hangs up once it has read
+      // everything, so wait for that.
+      await conn.closed.future.timeout(const Duration(seconds: 2));
     } catch (_) {
       // gone already
     }
