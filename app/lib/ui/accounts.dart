@@ -3,6 +3,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../interop/browser.dart';
 import '../office_scope.dart';
 import 'package:office_shared/protocol.dart';
 import '../state/store.dart';
@@ -12,7 +13,7 @@ import 'modal.dart';
 import 'theme.dart';
 import 'window_parts.dart';
 
-String get _origin => Uri.base.origin;
+String get _origin => serverOrigin;
 
 ModalHandle openAccounts(OfficeScope scope) {
   final handle = ModalStack.instance.show((modal) => _AccountsWindow(scope: scope, modal: modal));

@@ -11,6 +11,7 @@ import 'package:http/http.dart' as http;
 
 import '../interop/browser.dart';
 import '../interop/open_link.dart';
+import '../net/server.dart';
 import '../office_scope.dart';
 import 'package:office_shared/decor.dart';
 import '../state/store.dart';
@@ -45,7 +46,7 @@ final Map<String, Future<Picture>> _pictures = {};
 Future<Picture> _fetchPicture(String url) async {
   http.Response res;
   try {
-    res = await http.get(Uri.parse(imageUrl(url)));
+    res = await http.get(serverUri(imageUrl(url)), headers: serverHeaders());
   } catch (_) {
     throw PictureError("Couldn't reach the office to load that image");
   }

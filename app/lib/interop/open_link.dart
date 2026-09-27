@@ -1,5 +1,4 @@
-// Opening a link in a new tab (an <a target=_blank rel=noopener>).
+// Opening a link in a new tab (an <a target=_blank rel=noopener>), or in the system's browser from
+// the desktop app.
 
-import 'package:web/web.dart' as web;
-
-void openInNewTab(String url) => web.window.open(url, '_blank', 'noopener');
+export 'portable.dart' show openInNewTab;

@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:markdown/markdown.dart' as md;
 
 import '../interop/open_url.dart';
+import '../net/server.dart';
 import 'theme.dart';
 
 
@@ -619,7 +620,8 @@ class _Renderer {
     final width = double.tryParse(e.attributes['width'] ?? '');
     if (src.isEmpty) return Text(alt, style: base.copyWith(color: Swatch.muted));
     Widget img = Image.network(
-      imageSrc(src, itemUrl),
+      serverUrl(imageSrc(src, itemUrl)),
+      headers: imageHeaders(),
       width: width,
       fit: BoxFit.contain,
       errorBuilder: (_, _, _) => Text(alt.isEmpty ? '🖼️' : '🖼️ $alt', style: base.copyWith(color: Swatch.muted)),

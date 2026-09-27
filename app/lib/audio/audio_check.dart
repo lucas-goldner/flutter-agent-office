@@ -9,7 +9,7 @@ import 'package:web/web.dart' as web;
 import 'package:office_shared/protocol.dart' show GongWhy;
 import 'music.dart';
 import 'score.dart';
-import 'sound.dart';
+import 'sound_web.dart';
 import 'web_audio.dart';
 
 const int _sampleRate = 48000;

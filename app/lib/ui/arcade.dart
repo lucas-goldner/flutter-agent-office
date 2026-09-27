@@ -12,6 +12,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter_scene/scene.dart' hide Material;
 import 'package:vector_math/vector_math.dart' as vm;
 
+import '../interop/browser.dart' show desktopApp, notInDesktopApp;
 import '../interop/game_frame.dart';
 import '../world/office/office.dart' show Face;
 import '../world/text.dart' show pictureTexture;
@@ -55,6 +56,8 @@ class Arcade {
 
   void play() {
     if (_modal != null) return;
+    // The game is a web page, and the desktop app has no web view yet.
+    if (desktopApp) return toast(notInDesktopApp('DEADFALL'));
     _modal = ModalStack.instance.show(
       (modal) => _ArcadeBox(modal: modal, rect: rect),
       backdropCloses: false,

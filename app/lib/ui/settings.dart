@@ -3,6 +3,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../interop/browser.dart' show desktopApp, notInDesktopApp;
 import '../notify.dart';
 import '../office_scope.dart';
 import 'package:office_shared/dog.dart';
@@ -159,6 +160,7 @@ class _SettingsWindowState extends State<_SettingsWindow> with ListenTo {
           ),
           Note(_views.firstWhere((v) => v.$1 == _s.view).$3),
           const FieldLabel('Office sounds', top: 18),
+          if (desktopApp) Note(notInDesktopApp('Sound')),
           _VolumeRow(
             label: 'Office sounds volume',
             level: _s.volume,
@@ -264,6 +266,7 @@ class _SettingsWindowState extends State<_SettingsWindow> with ListenTo {
     return [
       if (buttons.isNotEmpty) Wrap(spacing: 8, runSpacing: 8, children: buttons),
       Note(switch (perm) {
+        NotifyPermission.unsupported when desktopApp => notInDesktopApp('Desktop notifications'),
         NotifyPermission.unsupported => 'This browser can’t show notifications from the office here. They need https or localhost (an SSH tunnel counts).',
         NotifyPermission.denied => 'Your browser blocks notifications from the office. Allow them in the site settings (the icon left of the address), then open this again.',
         _ => 'When a worker needs input or finishes while you’re in another tab or app, you get a notification. Click it to jump to that worker’s terminal. The tab title counts the workers waiting on someone either way.',

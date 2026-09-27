@@ -1,9 +1,11 @@
-// Sign in: the office password, or your own account once people have them (login.ts).
+// Sign in: the office password, or your own account once people have them (login.ts). The desktop
+// app asks which office too (its Server field), and takes an invite link pasted there.
 
 import 'package:flutter/material.dart';
 
 import '../interop/browser.dart';
 import '../net/api.dart';
+import '../net/server.dart';
 import '../ui/theme.dart';
 import 'auth_card.dart';
 
@@ -21,6 +23,9 @@ class _LoginPageState extends State<LoginPage> {
   final _password = TextEditingController();
   final _passwordFocus = FocusNode();
   final _nameFocus = FocusNode();
+
+  /// The desktop app's office, e.g. http://localhost:4600.
+  final _server = TextEditingController(text: desktopApp ? serverOrigin : '');
 
   /// Whether to ask for a name: once there are accounts. Optional while the shared password works.
   bool _askName = false;
@@ -51,12 +56,46 @@ class _LoginPageState extends State<LoginPage> {
       });
       _focusLater(_name.text.isEmpty ? _nameFocus : _passwordFocus);
     } catch (_) {
+      if (desktopApp && mounted) setState(() => _error = "Can't reach an office at $serverOrigin");
       _focusLater(_passwordFocus);
     }
   }
 
+  /// Takes the Server field (the desktop app): points the app at that office, or follows an invite
+  /// (/join#…) or claim (/claim?t=…) link pasted there. False when there's nothing to sign in to here.
+  bool _takeServer() {
+    if (!desktopApp) return true;
+    final text = _server.text.trim();
+    final origin = normalizeServer(text);
+    if (origin == null) {
+      setState(() => _error = "That doesn't look like an office's address (like http://localhost:4600)");
+      return false;
+    }
+    final changed = origin != serverOrigin;
+    if (changed) setServerOrigin(origin);
+    final link = Uri.tryParse(text.contains('://') ? text : 'http://$text');
+    if (link != null &&
+        ((link.path == '/join' && link.fragment.isNotEmpty) ||
+            (link.path == '/claim' && (link.queryParameters['t'] ?? '').isNotEmpty))) {
+      goTo('${link.path}${link.hasQuery ? '?${link.query}' : ''}${link.hasFragment ? '#${link.fragment}' : ''}');
+      return false;
+    }
+    _server.text = origin;
+    if (changed) {
+      // Another office: ask it afresh whether it wants names.
+      setState(() {
+        _error = '';
+        _askName = false;
+        _shared = true;
+      });
+      _load();
+    }
+    return true;
+  }
+
   Future<void> _submit() async {
     if (_busy) return;
+    if (!_takeServer()) return;
     final name = _askName ? _name.text.trim() : '';
     if (_askName && !_shared && name.isEmpty) {
       setState(() => _error = 'Your name, please');
@@ -78,7 +117,7 @@ class _LoginPageState extends State<LoginPage> {
       _password.selection = TextSelection(baseOffset: 0, extentOffset: _password.text.length);
       _passwordFocus.requestFocus();
     } catch (_) {
-      setState(() => _error = 'Server unreachable');
+      setState(() => _error = desktopApp ? "Can't reach an office at $serverOrigin" : 'Server unreachable');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -95,6 +134,23 @@ class _LoginPageState extends State<LoginPage> {
           : 'Knock knock. Who is it? Sign in with your own account.',
     ),
     children: [
+      if (desktopApp) ...[
+        LabeledField(
+          label: 'Server',
+          controller: _server,
+          autofillHints: const [AutofillHints.url],
+          onSubmitted: (_) {
+            if (_takeServer()) _focusLater(_askName && _name.text.isEmpty ? _nameFocus : _passwordFocus);
+          },
+        ),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Text(
+            'The office to walk into. Got an invite link? Paste it here and press Enter.',
+            style: heavy(12, color: Swatch.muted, weight: FontWeight.w700),
+          ),
+        ),
+      ],
       if (_askName)
         LabeledField(
           label: 'Your name',

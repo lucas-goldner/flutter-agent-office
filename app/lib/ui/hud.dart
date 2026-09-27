@@ -397,8 +397,9 @@ class _Controls extends StatelessWidget {
         ]),
         builder: (context, _) {
           final v = voice.value;
-          const noVoice =
-              'Voice and screen sharing need HTTPS or localhost — use a TLS proxy, --self-signed, or an SSH tunnel';
+          final noVoice = desktopApp
+              ? notInDesktopApp('Voice chat and screen sharing')
+              : 'Voice and screen sharing need HTTPS or localhost — use a TLS proxy, --self-signed, or an SSH tunnel';
           final u = store.upgrade;
           final services = store.services.items.length;
           final queued = store.queue.tasks.where((t) => t.status != TaskStatus.done).length;

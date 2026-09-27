@@ -7,6 +7,7 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/gestures.dart' show kPrimaryButton;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -301,8 +302,18 @@ class _TerminalWindowState extends State<_TerminalWindow> {
       _onData('\x1b');
       return KeyEventResult.handled;
     }
-    // Leave Ctrl+V / Cmd+V to the browser, whose paste event interceptPaste turns into a (bracketed) paste.
-    if ((ctrl || meta) && e.logicalKey == LogicalKeyboardKey.keyV) return KeyEventResult.skipRemainingHandlers;
+    if ((ctrl || meta) && e.logicalKey == LogicalKeyboardKey.keyV) {
+      // Leave Ctrl+V / Cmd+V to the browser, whose paste event interceptPaste turns into a (bracketed) paste.
+      if (kIsWeb) return KeyEventResult.skipRemainingHandlers;
+      // The desktop app has no paste event: read the clipboard ourselves.
+      Clipboard.getData(Clipboard.kTextPlain).then((d) {
+        final text = d?.text ?? '';
+        if (text.isEmpty || !mounted) return;
+        _sendSize(typing: true);
+        _term.paste(text);
+      });
+      return KeyEventResult.handled;
+    }
     return KeyEventResult.ignored;
   }
 

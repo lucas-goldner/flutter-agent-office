@@ -1,8 +1,11 @@
-// The office's HTTP API. Same-origin, so the browser sends the session cookie by itself.
+// The office's HTTP API. Same-origin on the web, so the browser sends the session cookie by itself;
+// the desktop app sends it (and the office's address) through net/server.dart.
 
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
+
+import 'server.dart';
 
 class ApiResult {
   ApiResult(this.status, this.body);
@@ -20,21 +23,23 @@ class Api {
   static final http.Client _client = http.Client();
 
   static Future<ApiResult> getJson(String path) async {
-    final res = await _client.get(Uri.parse(path), headers: {'cache-control': 'no-store'});
+    final res = await _client.get(serverUri(path), headers: {'cache-control': 'no-store', ...serverHeaders()});
+    takeSessionCookie(res.headers);
     return ApiResult(res.statusCode, _decode(res.body));
   }
 
   static Future<ApiResult> postJson(String path, Map<String, dynamic> body) async {
     final res = await _client.post(
-      Uri.parse(path),
-      headers: {'content-type': 'application/json'},
+      serverUri(path),
+      headers: {'content-type': 'application/json', ...serverHeaders()},
       body: jsonEncode(body),
     );
+    takeSessionCookie(res.headers);
     return ApiResult(res.statusCode, _decode(res.body));
   }
 
   static Future<String?> getText(String path) async {
-    final res = await _client.get(Uri.parse(path));
+    final res = await _client.get(serverUri(path), headers: serverHeaders());
     return res.statusCode == 200 ? res.body : null;
   }
 

@@ -13,6 +13,7 @@ import 'package:http/http.dart' as http;
 
 import '../interop/browser.dart';
 import '../interop/open_url.dart';
+import '../net/server.dart';
 import '../office_scope.dart';
 import 'package:office_shared/protocol.dart';
 import '../state/store.dart';
@@ -37,7 +38,7 @@ abstract final class GhApi {
   static Future<String> Function(String url) getText = _getText;
 
   static Future<http.Response> _get(String url) async {
-    final r = await http.get(Uri.parse(url), headers: {'cache-control': 'no-store'});
+    final r = await http.get(serverUri(url), headers: {'cache-control': 'no-store', ...serverHeaders()});
     if (r.statusCode < 200 || r.statusCode >= 300) {
       String? error;
       try {
