@@ -1,31 +1,66 @@
+// Agent Office in the browser. The office server serves this one app at /, /login, /join and
+// /claim; the path picks the page.
+
 import 'package:flutter/material.dart';
-import 'package:flutter_scene/scene.dart';
-import 'package:vector_math/vector_math.dart' as vm;
+import 'package:flutter_web_plugins/url_strategy.dart';
 
-void main() => runApp(const MaterialApp(home: Spike()));
+import 'interop/browser.dart';
+import 'net/api.dart';
+import 'office_page.dart';
+import 'pages/claim_page.dart';
+import 'pages/join_page.dart';
+import 'pages/login_page.dart';
+import 'ui/theme.dart';
 
-class Spike extends StatefulWidget {
-  const Spike({super.key});
-  @override
-  State<Spike> createState() => _SpikeState();
+void main() {
+  usePathUrlStrategy();
+  runApp(const AgentOfficeApp());
 }
 
-class _SpikeState extends State<Spike> {
-  final scene = Scene();
-  bool ready = false;
+class AgentOfficeApp extends StatelessWidget {
+  const AgentOfficeApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final path = locationPath.replaceAll(RegExp(r'\.html$'), '');
+    final Widget home = switch (path) {
+      '/login' => const LoginPage(),
+      '/join' => const JoinPage(),
+      '/claim' => const ClaimPage(),
+      _ => const _SignedIn(child: OfficePage()),
+    };
+    return MaterialApp(
+      title: 'Agent Office',
+      debugShowCheckedModeBanner: false,
+      theme: officeTheme(),
+      home: home,
+    );
+  }
+}
+
+/// Checks the session before the office loads: signed out goes to /login, as the old main.ts did.
+class _SignedIn extends StatefulWidget {
+  const _SignedIn({required this.child});
+  final Widget child;
+
+  @override
+  State<_SignedIn> createState() => _SignedInState();
+}
+
+class _SignedInState extends State<_SignedIn> {
+  bool _ok = false;
 
   @override
   void initState() {
     super.initState();
-    Scene.initializeStaticResources().then((_) {
-      final m = PhysicallyBasedMaterial()..baseColorFactor = vm.Vector4(1, 0.5, 0.3, 1);
-      scene.add(Node(mesh: Mesh(CuboidGeometry(vm.Vector3(1, 1, 1)), m)));
-      if (mounted) setState(() => ready = true);
+    Api.whoami().then((me) {
+      if (me == null) return goReplace('/login');
+      if (mounted) setState(() => _ok = true);
+    }).catchError((_) {
+      if (mounted) setState(() => _ok = true);
     });
   }
 
   @override
-  Widget build(BuildContext context) => ready
-      ? SceneView(scene, camera: PerspectiveCamera(position: vm.Vector3(2, 2, -4)))
-      : const SizedBox.expand();
+  Widget build(BuildContext context) => _ok ? widget.child : const ColoredBox(color: Swatch.sky);
 }

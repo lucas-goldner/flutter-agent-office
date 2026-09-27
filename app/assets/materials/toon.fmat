@@ -1,0 +1,56 @@
+// The office's cartoon look: a port of three.js MeshToonMaterial with the old client's 3-step
+// ramp (90/185/255, nearest), lit by a hemisphere sky/ground fill, an ambient floor and the sun.
+// Unlit so the banding happens here rather than in the engine's PBR loop; per-vertex colours
+// times base_color, so whole rooms of static furniture batch into one mesh with one material.
+
+material {
+  name: "OfficeToon",
+  shading_model: unlit,
+  blending: opaque,
+  culling: back,
+
+  parameters: [
+    { type: vec4, name: base_color, hint: source_color, default: [1, 1, 1, 1] },
+    { type: vec3, name: sun_direction, default: [0.45, 0.8, 0.35] },
+    { type: vec4, name: sun_color, hint: source_color, default: [1, 0.96, 0.9, 1] },
+    { type: float, name: sun_intensity, default: 0.7 },
+    { type: vec4, name: sky_color, hint: source_color, default: [1, 0.96, 0.9, 1] },
+    { type: vec4, name: ground_color, hint: source_color, default: [0.79, 0.64, 0.48, 1] },
+    { type: float, name: hemi_intensity, default: 0.48 },
+    { type: float, name: ambient, default: 0.16 },
+    { type: vec4, name: emissive, hint: source_color, default: [0, 0, 0, 1] },
+    { type: sampler2d, name: base_color_texture, hint: default_white },
+  ],
+}
+
+fragment {
+  // MeshToonMaterial's 3-texel gradient map (90, 185, 255), sampled nearest at N.L * 0.5 + 0.5.
+  float Ramp(float ndl) {
+    float x = ndl * 0.5 + 0.5;
+    if (x < 1.0 / 3.0) return 90.0 / 255.0;
+    if (x < 2.0 / 3.0) return 185.0 / 255.0;
+    return 1.0;
+  }
+
+  void Surface(inout MaterialInputs material) {
+    vec3 n = GetWorldNormal();
+    if (!gl_FrontFacing) n = -n;
+    vec3 l = normalize(material_params.sun_direction);
+    float ndl = dot(n, l);
+    float sun = Ramp(ndl) * material_params.sun_intensity;
+
+    float up = n.y * 0.5 + 0.5;
+    vec3 hemi = mix(material_params.ground_color.rgb, material_params.sky_color.rgb, up) *
+        material_params.hemi_intensity;
+
+    vec4 tex = texture(base_color_texture, GetUV0());
+    vec4 vc = GetVertexColor();
+    vec3 albedo = material_params.base_color.rgb * vc.rgb * tex.rgb;
+    // Intensities are the old client's (hemi 1.5, ambient 0.5, sun 2.2) over pi, as three.js's
+    // Lambert BRDF divides them.
+    vec3 light = material_params.sun_color.rgb * sun + hemi + vec3(material_params.ambient);
+    vec3 color = albedo * light + material_params.emissive.rgb;
+    material.base_color = vec4(color, material_params.base_color.a * vc.a * tex.a);
+    PrepareMaterial(material);
+  }
+}
