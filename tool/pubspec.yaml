@@ -1,0 +1,8 @@
+name: agent_office_tool
+description: Build tooling for the Flutter client (no Node.js needed).
+publish_to: none
+environment:
+  sdk: ^3.5.0
+dependencies:
+  archive: ^4.0.0
+  crypto: ^3.0.0
