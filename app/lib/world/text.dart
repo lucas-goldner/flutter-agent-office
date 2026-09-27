@@ -10,7 +10,7 @@ import 'package:flutter/painting.dart';
 import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
-import '../ui/theme.dart' show kFont;
+import '../ui/theme.dart' show kFallback, kFont;
 import 'toon.dart' show hex;
 
 /// World units per canvas pixel, as the old client's TEXT_SCALE.
@@ -33,7 +33,7 @@ class TextOpts {
   final tp = TextPainter(
     text: TextSpan(
       text: text,
-      style: TextStyle(fontFamily: kFont, fontSize: o.size, fontWeight: FontWeight.w800, color: hex(o.color)),
+      style: TextStyle(fontFamily: kFont, fontFamilyFallback: kFallback, fontSize: o.size, fontWeight: FontWeight.w800, color: hex(o.color)),
     ),
     textDirection: TextDirection.ltr,
   )..layout();

@@ -14,8 +14,6 @@ import 'package:markdown/markdown.dart' as md;
 import '../interop/open_url.dart';
 import 'theme.dart';
 
-const kMono = 'monospace';
-const kMonoFallback = ['ui-monospace', 'SF Mono', 'Menlo', 'Consolas', 'monospace'];
 
 /// Monospaced text (code, paths, diffs).
 TextStyle mono(double size, {Color color = Swatch.ink, FontWeight weight = FontWeight.w400, double? height}) =>
@@ -210,7 +208,7 @@ class _MarkdownViewState extends State<MarkdownView> {
   @override
   Widget build(BuildContext context) {
     _dropTaps();
-    final base = TextStyle(fontFamily: kFont, fontSize: widget.fontSize, height: 1.6, fontWeight: FontWeight.w500, color: Swatch.ink);
+    final base = TextStyle(fontFamily: kFont, fontFamilyFallback: kFallback, fontSize: widget.fontSize, height: 1.6, fontWeight: FontWeight.w500, color: Swatch.ink);
     Widget body;
     if (_nodes.isEmpty) {
       body = Text('No description provided.', style: base.copyWith(color: Swatch.muted, fontStyle: FontStyle.italic));

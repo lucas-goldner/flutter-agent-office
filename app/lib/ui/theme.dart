@@ -19,6 +19,14 @@ abstract final class Swatch {
 }
 
 const kFont = 'Nunito';
+
+/// Glyphs Nunito doesn't have: emoji (Twemoji) and symbols like → ✓ ⌨ (DejaVu). Both are bundled,
+/// so the page never reaches for Flutter's font CDN (offices run on private networks too).
+const kFallback = ['Twemoji', 'DejaVuSans'];
+
+/// Code, diffs, commands and passwords.
+const kMono = 'DejaVuSansMono';
+const kMonoFallback = ['Twemoji', 'DejaVuSans'];
 const kBorder = 3.0;
 
 ThemeData officeTheme() {
@@ -39,7 +47,7 @@ ThemeData officeTheme() {
     borderSide: BorderSide(color: c, width: kBorder),
   );
   return base.copyWith(
-    textTheme: base.textTheme.apply(bodyColor: Swatch.ink, displayColor: Swatch.ink, fontFamily: kFont),
+    textTheme: base.textTheme.apply(bodyColor: Swatch.ink, displayColor: Swatch.ink, fontFamily: kFont, fontFamilyFallback: kFallback),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
       fillColor: Colors.white,
@@ -51,7 +59,7 @@ ThemeData officeTheme() {
       labelStyle: const TextStyle(fontWeight: FontWeight.w800, color: Swatch.ink),
     ),
     tooltipTheme: const TooltipThemeData(
-      textStyle: TextStyle(fontFamily: kFont, fontWeight: FontWeight.w700, color: Colors.white, fontSize: 12),
+      textStyle: TextStyle(fontFamily: kFont, fontFamilyFallback: kFallback, fontWeight: FontWeight.w700, color: Colors.white, fontSize: 12),
       decoration: BoxDecoration(color: Swatch.ink, borderRadius: BorderRadius.all(Radius.circular(8))),
     ),
   );
@@ -59,7 +67,7 @@ ThemeData officeTheme() {
 
 /// Heavy text in the office's type.
 TextStyle heavy(double size, {Color color = Swatch.ink, FontWeight weight = FontWeight.w800}) =>
-    TextStyle(fontFamily: kFont, fontSize: size, fontWeight: weight, color: color, height: 1.25);
+    TextStyle(fontFamily: kFont, fontFamilyFallback: kFallback, fontSize: size, fontWeight: weight, color: color, height: 1.25);
 
 /// A paper panel: 3px ink border, rounded, with a hard shadow straight down (no blur).
 class Panel extends StatelessWidget {

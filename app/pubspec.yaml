@@ -37,4 +37,15 @@ flutter:
     - family: Nunito
       fonts:
         - asset: assets/fonts/Nunito.ttf
+    - family: Twemoji
+      fonts:
+        - asset: assets/fonts/Twemoji.ttf
+    - family: DejaVuSans
+      fonts:
+        - asset: assets/fonts/DejaVuSans.ttf
+    - family: DejaVuSansMono
+      fonts:
+        - asset: assets/fonts/DejaVuSansMono.ttf
+        - asset: assets/fonts/DejaVuSansMono-Bold.ttf
+          weight: 700
 

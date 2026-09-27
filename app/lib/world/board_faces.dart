@@ -13,14 +13,15 @@ import '../shared/layout.dart' show deskById;
 import '../shared/protocol.dart';
 import '../state/store.dart';
 import '../ui/gh_logic.dart' show kNoteColors, kPins, parseHex;
+import '../ui/theme.dart' show kFallback, kMonoFallback;
 
 const kFaceSize = Size(1200, 600);
 const _font = 'Nunito';
-const _fallback = ['ui-rounded', 'system-ui', 'sans-serif'];
+const _fallback = kFallback;
 const _ink = Color(0xFF2B2D42);
 
 TextStyle _ts(double size, FontWeight w, Color c, {String family = _font}) =>
-    TextStyle(fontFamily: family, fontFamilyFallback: family == _font ? _fallback : const ['Menlo', 'monospace'], fontSize: size, fontWeight: w, color: c, height: 1);
+    TextStyle(fontFamily: family, fontFamilyFallback: family == _font ? _fallback : kMonoFallback, fontSize: size, fontWeight: w, color: c, height: 1);
 
 enum _Align { left, center, right }
 

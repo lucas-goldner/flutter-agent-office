@@ -100,7 +100,7 @@ class _ClaimPageState extends State<ClaimPage> {
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(color: Swatch.ink, width: 2),
                 ),
-                child: SelectableText(_password!, style: const TextStyle(fontFamily: 'monospace', fontSize: 15)),
+                child: SelectableText(_password!, style: const TextStyle(fontFamily: kMono, fontFamilyFallback: kMonoFallback, fontSize: 15)),
               ),
             ),
             const SizedBox(width: 8),

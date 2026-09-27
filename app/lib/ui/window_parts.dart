@@ -8,7 +8,6 @@ import 'package:flutter/services.dart';
 
 import 'theme.dart';
 
-const kMono = 'monospace';
 
 /// The .modal label: bold, above what it names.
 class FieldLabel extends StatelessWidget {
@@ -54,7 +53,7 @@ InlineSpan codeSpan(String text) => WidgetSpan(
     decoration: BoxDecoration(color: Swatch.paper2, borderRadius: BorderRadius.circular(5)),
     child: Text(
       text,
-      style: const TextStyle(fontFamily: kMono, fontSize: 12, color: Swatch.ink),
+      style: const TextStyle(fontFamily: kMono, fontFamilyFallback: kMonoFallback, fontSize: 12, color: Swatch.ink),
     ),
   ),
 );
@@ -190,7 +189,7 @@ class CommandBlock extends StatelessWidget {
             ),
             child: SelectableText(
               command,
-              style: const TextStyle(fontFamily: kMono, fontSize: 13, height: 1.5, color: Color(0xFFE9ECEF)),
+              style: const TextStyle(fontFamily: kMono, fontFamilyFallback: kMonoFallback, fontSize: 13, height: 1.5, color: Color(0xFFE9ECEF)),
             ),
           ),
         ),
