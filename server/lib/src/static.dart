@@ -8,7 +8,7 @@ const cacheRevalidate = 'no-cache';
 /// Where the client's files are. AGENT_OFFICE_PUBLIC_DIR overrides it (tests, a custom build).
 /// The compiled office looks in the `web` folder next to its binary first. `here` is the folder of
 /// the running server's entry point (server/bin under `dart run`), and the checkout's builds are
-/// listed relative to it, as they were for src/server and dist/server/server.
+/// listed relative to it: the Flutter build, then tool/build.dart's dist/agent-office/web.
 String findPublicDir(String here, [String? override]) {
   override ??= Platform.environment['AGENT_OFFICE_PUBLIC_DIR'];
   String resolve(String rel) => p.normalize(p.absolute(here, rel));
@@ -16,10 +16,8 @@ String findPublicDir(String here, [String? override]) {
       ? [p.normalize(p.absolute(override))]
       : [
           p.join(p.dirname(Platform.resolvedExecutable), 'web'), // agent-office next to web/ (packaged)
-          resolve('../../flutter'), // dist/server/server -> dist/flutter (packaged)
-          resolve('../../dist/flutter'), // src/server or server/bin -> dist/flutter
-          resolve('../../app/build/web'), // src/server or server/bin -> app/build/web (checkout)
-          resolve('../../../app/build/web'), // dist/server/server -> app/build/web
+          resolve('../../app/build/web'), // server/bin -> app/build/web (checkout)
+          resolve('../../dist/agent-office/web'), // server/bin -> tool/build.dart's output
         ];
   for (final c in candidates) {
     if (File(p.join(c, 'index.html')).existsSync()) return c;

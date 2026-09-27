@@ -128,11 +128,11 @@ void main() {
       () => findPublicDir('/nowhere', p.join(root, 'none')),
       throwsA(predicate((e) => e.toString().contains('dart run tool/build.dart'))),
     );
-    final dist = p.join(root, 'dist');
-    Directory(p.join(dist, 'flutter')).createSync(recursive: true);
-    File(p.join(dist, 'flutter', 'index.html')).writeAsStringSync('');
-    // Compiled, the TS server ran from dist/server/server.
-    expect(findPublicDir(p.join(dist, 'server', 'server'), ''), p.join(dist, 'flutter'));
+    // Under `dart run` the entry point is server/bin, and the checkout's Flutter build is found.
+    final build = p.join(root, 'app', 'build', 'web');
+    Directory(build).createSync(recursive: true);
+    File(p.join(build, 'index.html')).writeAsStringSync('');
+    expect(findPublicDir(p.join(root, 'server', 'bin'), ''), build);
   });
 
   test('findPublicDir: a web folder next to the binary comes first', () {

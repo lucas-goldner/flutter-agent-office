@@ -1,5 +1,5 @@
 // The whiteboard's Excalidraw, for the Flutter client (app/lib/ui/whiteboard.dart). Excalidraw is a
-// React component and stays JavaScript: scripts/build-whiteboard.mjs bundles this module with React
+// React component and stays JavaScript: tool/build_whiteboard.dart bundles this module with React
 // and Excalidraw into app/web/excalidraw/, which the office loads the first time the whiteboard is
 // needed. This side only drives Excalidraw; the syncing (what to send, when, pictures, who's drawing)
 // is in Dart. Everything crosses as JSON strings.

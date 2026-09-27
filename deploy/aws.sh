@@ -350,7 +350,7 @@ tunnel() {
 }
 
 # A worker's server from the 🌐 Services board: localhost:<port> tunnels to the office, which
-# relays it by that port (see src/server/relay.ts), so the local port must match the service's.
+# relays it by that port (see server/lib/src/relay.dart), so the local port must match the service's.
 service_tunnel() {
   local port="$1" pid i up=0
   port_busy "$port" && die "localhost:$port is already in use on this computer — stop whatever runs there first"

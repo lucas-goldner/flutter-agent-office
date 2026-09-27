@@ -162,6 +162,28 @@ the Flutter app. Findings along the way, and what's still open:
 - Smaller gaps: SVG pictures show "Image unavailable"; the HUD stays up while DEADFALL plays; IME input and
   mouse-wheel scrolling inside terminal apps weren't checked.
 
+## After the client: the server in Dart too
+
+With the client done, the Node server went the same way, so the office needs neither Node nor npm.
+It lives in `server/` (see `server/README.md`) and was ported module by module, keeping the wire
+messages, the files in `.agent-office/`, the CLI flags, password hashes and session cookies, so an
+office that ran on Node keeps its data, logins and workers. HTTP and WebSockets are `package:relic`;
+PTYs are `packages/office_pty` (pty2's Unix core, reworked to expose the child's pid and give it a
+clean signal state and environment); terminal state is the xterm.dart core vendored as
+`packages/xterm_core`, with the snapshot serializer in `server/lib/src/headless.dart`. The shared
+protocol moved to `packages/office_shared`, used by both sides.
+
+The office ships as one native binary per platform with the web client next to it
+(`dart run tool/build.dart --pack`); `install.sh`, the AWS deploy and the in-app upgrade download and
+verify those release tarballs. The whiteboard's Excalidraw bundle is built by
+`tool/build_whiteboard.dart` from pinned npm tarballs and esbuild's native binary, without npm.
+
+What is still JavaScript: Flutter web's own output, the whiteboard's Excalidraw bundle and its
+bridge, and the small plugin OpenCode loads (OpenCode only runs JS plugins, in its own runtime).
+Known gaps: dart:io's WebSocket doesn't report how much it has queued, so slow clients buffer
+rather than being skipped; the release workflow has to be applied by hand (the GitHub App can't
+push workflow files).
+
 ## Risks and fallbacks
 
 - **The toon look and ink outlines.** Flutter Scene has no toon material, so this is a custom `.fmat`. If the

@@ -1,5 +1,5 @@
-// The jukebox's score against the TS client's: music_ref.json is what src/client/music.ts computes
-// (regenerate it with gen_music_ref.ts), so a Dart client and a TS one play the same bar.
+// The jukebox's score against the old TypeScript client's: music_ref.json is what its music.ts
+// computed, recorded before that client was retired, so the Dart client still plays the same bar.
 
 import 'dart:convert';
 import 'dart:io';
