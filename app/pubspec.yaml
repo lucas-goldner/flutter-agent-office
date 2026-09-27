@@ -20,6 +20,7 @@ dependencies:
   shared_preferences: ^2.5.5
   flutter_web_plugins:
     sdk: flutter
+  xterm: ^4.0.0
 
 dev_dependencies:
   flutter_test:
@@ -37,3 +38,21 @@ flutter:
       fonts:
         - asset: assets/fonts/Nunito.ttf
 
+    # The terminals' monospace face (window and laptop screens): JetBrains Mono (no ligatures), with
+    # DejaVu Sans Mono for the box drawing and symbols it lacks. Both bundled: no system font on the web.
+    - family: JetBrainsMono
+      fonts:
+        - asset: assets/fonts/JetBrainsMonoNL-Regular.ttf
+        - asset: assets/fonts/JetBrainsMonoNL-Bold.ttf
+          weight: 700
+    - family: DejaVuSansMono
+      fonts:
+        - asset: assets/fonts/DejaVuSansMono.ttf
+    # Terminal symbols neither face has (Claude Code's ⏺ ⎿, spinners' braille, ✻ ✔ …): subsets of
+    # Noto Sans Symbols 2 and Noto Sans Symbols (arrows, technical, box, shapes, dingbats, braille).
+    - family: NotoSansSymbols2Term
+      fonts:
+        - asset: assets/fonts/NotoSansSymbols2-Term.ttf
+    - family: NotoSansSymbolsTerm
+      fonts:
+        - asset: assets/fonts/NotoSansSymbols-Term.ttf

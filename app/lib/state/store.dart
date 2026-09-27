@@ -13,22 +13,15 @@ import '../shared/jukebox.dart';
 import '../shared/protocol.dart';
 import '../shared/whiteboard.dart';
 import '../world/player.dart' show ViewMode;
+import 'screen_state.dart';
+
+export 'screen_state.dart';
 
 enum Topic {
   peers, workers, issues, pulls, chat, project, screens, team, upgrade, services, decor, usage, limits,
   queue, me, accounts, notify, floors, floor, repos, dog, jukebox, sky, whiteboard, drawing,
 }
 
-/// A worker's terminal as the laptop on its desk shows it: rows of styled runs (see `screen`).
-class ScreenState {
-  ScreenState({required this.cols, required this.rows, required this.cursor, this.version = 0});
-
-  final int cols;
-  final int rows;
-  final Map<int, List<Run>> lines = {};
-  (int, int) cursor;
-  int version;
-}
 
 /// Where someone is right now. peer.move updates it in place; the frame loop eases toward it.
 class PeerPose {
