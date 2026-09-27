@@ -1,5 +1,5 @@
 name: agent_office_tool
-description: Build and release tooling for the office (no Node.js needed): tool/build.dart, tool/build_whiteboard.dart.
+description: "Build and release tooling for the office, no Node.js needed: tool/build.dart and tool/build_whiteboard.dart."
 publish_to: none
 environment:
   sdk: ^3.5.0

@@ -17,7 +17,9 @@ import 'dart:convert';
 import 'dart:ffi' show Abi;
 import 'dart:io';
 
-import 'package:crypto/crypto.dart';
+// No package imports: this script has to run on a fresh clone before anything is fetched (Dart
+// only resolves a script's packages by itself from 3.10 on). It fetches tool/'s packages for
+// build_whiteboard.dart, which does use them.
 
 final _root = File.fromUri(Platform.script).parent.parent.path;
 String _p(List<String> parts) => parts.join(Platform.pathSeparator);
@@ -34,6 +36,7 @@ Future<void> main(List<String> argv) async {
 
   final web = _p([_root, 'app', 'build', 'web']);
   if (!args.skipWebBuild) {
+    await _run(dart, ['pub', 'get'], cwd: _p([_root, 'tool']));
     await _run(
         dart,
         [
@@ -94,7 +97,7 @@ Future<void> main(List<String> argv) async {
         ],
         cwd: _root,
         environment: {'COPYFILE_DISABLE': '1'});
-    final sum = (await sha256.bind(tarball.openRead()).first).toString();
+    final sum = _sha256(tarball.path);
     // One line per tarball, the format `sha256sum -c` reads; the release job concatenates them.
     File(_p([_root, 'dist', 'SHA256SUMS'])).writeAsStringSync('$sum  $name\n');
     _say('Packed ${_rel(tarball.path)} (sha256 $sum)');
@@ -216,4 +219,17 @@ void _say(String msg) => stderr.writeln('build: $msg');
 Never _die(String msg) {
   stderr.writeln('build: $msg');
   exit(1);
+}
+
+/// A file's sha256, from the system's own tool (sha256sum on Linux, shasum on macOS).
+String _sha256(String file) {
+  for (final (cmd, args) in [('sha256sum', <String>[]), ('shasum', ['-a', '256'])]) {
+    try {
+      final r = Process.runSync(cmd, [...args, file]);
+      if (r.exitCode == 0) return (r.stdout as String).trim().split(RegExp(r'\s+')).first;
+    } on ProcessException {
+      // not installed; try the next one
+    }
+  }
+  _die('Neither sha256sum nor shasum is installed');
 }
