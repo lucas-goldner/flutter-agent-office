@@ -10,7 +10,9 @@ class Collider {
   final double maxX;
   final double minZ;
   final double maxZ;
-  final double top;
+
+  /// Mutable for the elevator's doors, which stop blocking you once they're open.
+  double top;
 
   /// Underside, for things you walk beneath (the loft). Null means the floor.
   final double? bottom;
