@@ -193,6 +193,13 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.0.2"
+  office_pty:
+    dependency: "direct main"
+    description:
+      path: "../packages/office_pty"
+      relative: true
+    source: path
+    version: "0.0.0"
   office_shared:
     dependency: "direct main"
     description:

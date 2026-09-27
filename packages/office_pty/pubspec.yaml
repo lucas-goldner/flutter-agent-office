@@ -1,0 +1,12 @@
+name: office_pty
+description: Unix pseudo-terminals for the office server, adapted from pty2 0.5.4 (MIT, see LICENSE) so the child's pid is known and it starts the way node-pty starts it.
+publish_to: none
+
+environment:
+  sdk: ^3.11.0
+
+dependencies:
+  ffi: ^2.1.0
+
+dev_dependencies:
+  test: ^1.25.0

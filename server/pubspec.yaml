@@ -8,6 +8,8 @@ environment:
 dependencies:
   args: ^2.6.0
   crypto: ^3.0.6
+  office_pty:
+    path: ../packages/office_pty
   office_shared:
     path: ../packages/office_shared
   path: ^1.9.0
