@@ -75,11 +75,11 @@ curl -fsSL https://raw.githubusercontent.com/AgentSystemLabs/agent-office/main/i
 
 The script checks for Node.js 20+ and npm, downloads the newest [release](https://github.com/AgentSystemLabs/agent-office/releases) into `~/.local/share/agent-office` and installs its dependencies there. It also puts an `agent-office` command in `~/.local/bin`, so after the first run `agent-office` on its own starts the office. Run the curl line again to update. Set `AGENT_OFFICE_VERSION=v0.1.68` to install a particular release, or `AGENT_OFFICE_INSTALL_ONLY=1` to install without starting. The other settings are listed at the top of [`install.sh`](install.sh). It runs on macOS and Linux. On Windows, run it inside WSL.
 
-Or install from a clone, to work on the office itself:
+Or install from a clone, to work on the office itself. Building the browser client needs the [Flutter SDK](https://docs.flutter.dev/get-started/install) (3.47 stable) on your PATH; releases ship it built, so the one-line install above doesn't:
 
 ```bash
 git clone https://github.com/AgentSystemLabs/agent-office && cd agent-office
-npm install          # also builds the client and server
+npm install          # also builds the client (Flutter) and the server
 npm install -g .     # puts `agent-office` on your PATH
 ```
 
@@ -335,8 +335,10 @@ If you don't have a domain, `--self-signed` serves HTTPS directly. Browsers will
 
 ## How it works
 
+The browser client is a Flutter web app (`app/`); the 3D office is drawn with [flutter_scene](https://pub.dev/packages/flutter_scene) on WebGL2, and the office serves the whole app itself, fonts included, so it works on networks that can't reach a CDN.
+
 ```
-browser ──HTTPS/WSS──▶ agent-office (Node)
+browser (Flutter web) ──HTTPS/WSS──▶ agent-office (Node)
                          ├─ node-pty ─▶ claude / opencode (one PTY per worker, cwd = project dir)
                          │    └─ headless xterm mirror ─▶ laptop screen frames + late-join snapshots
                          ├─ loopback-only hook server ◀── curl from Claude Code hooks (per-worker token)
@@ -354,7 +356,7 @@ browser ──HTTPS/WSS──▶ agent-office (Node)
 - **Shared terminals.** Each worker's PTY lives in `agent-office-ptys` (`src/server/ptyhost.ts`), a detached process the server starts for each floor and talks to over a Unix socket in that project's `.agent-office/`. On SIGTERM the server leaves the PTYs running there, and the next server takes them back with a snapshot of each screen. Hooks that fire in between retry until it's up. If no server comes back within 30 minutes, the PTYs are ended. The server mirrors each PTY in a headless xterm. People who open the terminal get a serialized snapshot, then the live stream. Laptops get compact per-row diffs a few times a second. The PTY takes the size of whoever is typing.
 - **Scrollback and search.** Every 15 seconds, for each worker that printed something new, and again as the office shuts down, its last 3,000 lines are serialized, colors included, to `.agent-office/scrollback/<worker>.ansi`. A worker that starts again (after a restart, or when you resume it) gets its old lines replayed into its terminal first, then a dim *office restarted* line. The chat is appended to `.agent-office/chat.jsonl` and trimmed to the last 1,000 messages. `GET /api/search?q=` matches case-insensitively, treating runs of whitespace as one space, over the chat and each worker's terminal buffer. It returns the newest lines first, each distinct line once. The browser finds the hit again in its own copy of the terminal and scrolls to it.
 - **Cost.** Hooks carry no usage, but each one names the session's transcript (`~/.claude/projects/<dir>/<session>.jsonl`). The office reads what gets appended to it, and to the subagent transcripts next to it: every assistant message records the API's token usage and the model, which the office prices from its own table (cache writes and reads included). When a session ends, Claude Code appends its own tally (`cost-state`), and the worker's numbers snap to that, which also covers calls that never reach the transcript. Per-worker totals are saved with the worker, and `.agent-office/usage.json` keeps the office's all-time and per-day spend, so nothing is lost on a restart or when a worker is sent home. On an office deployed with `deploy/aws.sh`, put `AGENT_OFFICE_BUDGET=20` (and `AGENT_OFFICE_BUDGET_PAUSE=1`) in `/etc/agent-office/env` and restart the service.
-- **Sky.** The server decides the weather and tells everyone (`src/server/sky.ts`), and each browser works out where the sun is from that and its own clock. Without `--city`, the office sits in the middle of the host's time zone at 40° north (34° south if its clocks go forward in January), and the weather changes every 20 to 50 minutes, with the season's odds. With `--city` (a name, or `lat,lon`), it asks open-meteo.com for the place once and for its current weather every 15 minutes; no key is needed, and nothing but the city's name and coordinates is sent. The office has no roof, so the sun and the sky light the rooms too. At night a few lines added to every lit material put lamplight back in the office and the garage, and pools of light around the lamps outside (`src/client/world/sky.ts`). A server on AWS keeps UTC, so on an office deployed with `deploy/aws.sh`, put `AGENT_OFFICE_CITY="Portland, Oregon"` in `/etc/agent-office/env` and restart the service.
+- **Sky.** The server decides the weather and tells everyone (`src/server/sky.ts`), and each browser works out where the sun is from that and its own clock. Without `--city`, the office sits in the middle of the host's time zone at 40° north (34° south if its clocks go forward in January), and the weather changes every 20 to 50 minutes, with the season's odds. With `--city` (a name, or `lat,lon`), it asks open-meteo.com for the place once and for its current weather every 15 minutes; no key is needed, and nothing but the city's name and coordinates is sent. The office has no roof, so the sun and the sky light the rooms too. At night the office's toon material (`app/assets/materials/toon.fmat`) puts lamplight back in the office and the garage, and pools of light around the lamps nearest you (`app/lib/world/sky_model.dart`, `sky_view.dart`). A server on AWS keeps UTC, so on an office deployed with `deploy/aws.sh`, put `AGENT_OFFICE_CITY="Portland, Oregon"` in `/etc/agent-office/env` and restart the service.
 - **Services.** Every 4 seconds the office lists the TCP ports its user's processes listen on (`ss`, or `lsof` on macOS). It credits each port to the worker whose terminal started it. It goes by the process tree first. For a server that detached from it, it uses the `AGENT_OFFICE_WORKER_ID` the process inherited (Linux), then whether it runs inside that worker's worktree. Ports that answer HTTP are shown. A request for `localhost:<port>` that reaches the office's own port (that's what a service tunnel does) is relayed to that server, WebSockets included, so hot reload works.
 - **Pictures.** WebGL can only draw an image from another site if that site sends CORS headers, and most don't. So the office fetches each picture itself (`/api/image`, images up to 15 MB) and serves it from its own origin. Any image link works, and a picture on a worker's dev server does too. Browsers shrink each one to 1024 px before it goes on the wall.
 - **Whiteboard.** It syncs the way Excalidraw's own live collaboration does. Every change bumps an element's version, each browser sends the elements it changed over the office's socket, and everyone merges what arrives with Excalidraw's `reconcileElements`, keeping the newer copy of each element (equal versions go to the lower random nonce, so every copy agrees). The office applies the same rule to its own copy and saves it in the floor's `.agent-office/whiteboard/elements.json`. Deleted elements are kept for a week so a deletion reaches everyone. Pictures go up once over HTTP (`/api/whiteboard/file`, up to 6 MB each) and are fetched by id, a hash of the picture. Excalidraw, a few MB of JavaScript, only loads when someone opens the whiteboard or a floor has a drawing to show on the board, and its fonts are served by the office rather than a CDN.
@@ -380,15 +382,18 @@ Anyone who can sign in can drive Claude Code, OpenCode or Codex in that director
 
 ## Development
 
+You need Node.js 20+ and the Flutter SDK (3.47 stable) on your PATH.
+
 ```bash
 npm install
-npm run build        # vite (client) + tsc (server)
+npm run build        # the client (Flutter web, plus the Excalidraw bundle) + tsc (server)
 npm run typecheck
 npm test             # provider, event bridge, queue and PTY integration tests
+(cd app && flutter analyze lib test && flutter test)   # the client's own tests
 node bin/agent-office.js /path/to/project --password dev
 ```
 
-`npm run dev` runs Vite with hot reload on :5173 and proxies to the server on :4600. Server edits restart the server, not the workers. The PTY host keeps running its old code, though: after changing `ptyhost.ts`, bump `PTY_PROTOCOL` in `ptys.ts` and the next server replaces the host (its workers resume their sessions).
+`npm run dev` runs the server on :4600 with `tsx watch`, serving the client from `app/build/web`. After changing the client, `npm run build:client` (or `cd app && flutter build web --no-web-resources-cdn`) and reload the page. `app/lib` is laid out like the old client: `shared/` is the Dart port of `src/shared`, `world/` the 3D office, `ui/` the windows and the HUD, `office/controller.dart` the frame loop and the office's actions, and `net/` + `state/` the socket and the store. Server edits restart the server, not the workers. The PTY host keeps running its old code, though: after changing `ptyhost.ts`, bump `PTY_PROTOCOL` in `ptys.ts` and the next server replaces the host (its workers resume their sessions).
 
 **Releases.** Every change to the app that lands on `main` is published as a GitHub release by [`.github/workflows/release.yml`](.github/workflows/release.yml), and `install.sh` installs the newest one. The workflow builds and typechecks the office, runs the tests, packs the release with an `npm-shrinkwrap.json` so every install gets the tested dependency versions, then installs the pack through `install.sh` and starts it before publishing. Pull requests run the same steps but publish nothing. A release is named after `package.json`'s major.minor and the number of commits on `main` (`v0.1.68`), so bump `package.json` to start a new minor version.
 

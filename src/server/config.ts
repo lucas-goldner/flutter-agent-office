@@ -4,7 +4,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { WEATHERS, type Weather } from '../shared/protocol.js';
-import { CLIENT_KINDS, isClientKind, type ClientKind } from './static.js';
 
 export interface Config {
   /** The office's own folder: the building's data lives in its .agent-office. */
@@ -45,8 +44,6 @@ export interface Config {
   city?: string;
   /** Weather pinned for good, instead of made up or forecast. */
   weather?: Weather;
-  /** Which browser client is served: the Vite bundle or the Flutter web build (see static.ts). */
-  client: ClientKind;
 }
 
 export interface RTCIceServerLike {
@@ -118,9 +115,6 @@ Options:
                           machine's clock and the weather is made up
       --weather <kind>    Pin the weather: clear, cloudy, rain, storm, snow or
                           fog (env AGENT_OFFICE_WEATHER)
-      --client <kind>     Browser client to serve: legacy (default) or flutter
-                          (env AGENT_OFFICE_CLIENT; AGENT_OFFICE_PUBLIC_DIR
-                          overrides where its files are)
   -h, --help              Show this help
 
 Voice and screen sharing need a secure context: use https (a reverse proxy,
@@ -192,7 +186,6 @@ export function loadConfig(argv: string[]): Config {
   let webhook = process.env.AGENT_OFFICE_WEBHOOK;
   let city = process.env.AGENT_OFFICE_CITY || '';
   let weather = process.env.AGENT_OFFICE_WEATHER || '';
-  let client = process.env.AGENT_OFFICE_CLIENT || 'legacy';
   const iceServers: RTCIceServerLike[] = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
 
   for (let i = 0; i < argv.length; i++) {
@@ -262,9 +255,6 @@ export function loadConfig(argv: string[]): Config {
       case '--weather':
         weather = takeValue(argv, i++, a);
         break;
-      case '--client':
-        client = takeValue(argv, i++, a);
-        break;
       default:
         if (a.startsWith('-')) {
           console.error(`agent-office: unknown option ${a}\n`);
@@ -298,12 +288,6 @@ export function loadConfig(argv: string[]): Config {
   weather = weather.trim().toLowerCase();
   if (weather && !(WEATHERS as readonly string[]).includes(weather)) {
     console.error(`agent-office: --weather is one of ${WEATHERS.join(', ')}`);
-    process.exit(2);
-  }
-
-  client = client.trim().toLowerCase();
-  if (!isClientKind(client)) {
-    console.error(`agent-office: --client is one of ${CLIENT_KINDS.join(', ')}`);
     process.exit(2);
   }
 
@@ -396,7 +380,6 @@ export function loadConfig(argv: string[]): Config {
     webhook,
     city: city.trim() || undefined,
     weather: (weather as Weather) || undefined,
-    client,
   };
 }
 

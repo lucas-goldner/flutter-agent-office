@@ -1,20 +1,6 @@
 import { existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 
-/**
- * Which browser client the office serves: the Vite/three.js bundle (`legacy`) or the Flutter web
- * build (`flutter`). Picked with --client or AGENT_OFFICE_CLIENT; `legacy` until the cutover.
- */
-export type ClientKind = 'legacy' | 'flutter';
-export const CLIENT_KINDS: readonly ClientKind[] = ['legacy', 'flutter'];
-
-export function isClientKind(v: string): v is ClientKind {
-  return (CLIENT_KINDS as readonly string[]).includes(v);
-}
-
-/** Vite's /assets/* are content-hashed; nothing else of the legacy client is cached. */
-export const CACHE_IMMUTABLE = 'public, max-age=31536000, immutable';
-export const CACHE_NONE = 'no-store';
 /** Flutter's files keep their names from build to build, so browsers must revalidate them. */
 export const CACHE_REVALIDATE = 'no-cache';
 
@@ -23,20 +9,17 @@ export const CACHE_REVALIDATE = 'no-cache';
  * `here` is the folder of the running server file: src/server under tsx, dist/server/server once
  * compiled, so each candidate is listed for both.
  */
-export function findPublicDir(client: ClientKind, here: string, override = process.env.AGENT_OFFICE_PUBLIC_DIR): string {
+export function findPublicDir(here: string, override = process.env.AGENT_OFFICE_PUBLIC_DIR): string {
   const candidates = override
     ? [path.resolve(override)]
-    : client === 'flutter'
-      ? [
-          path.resolve(here, '../../flutter'), // dist/server/server -> dist/flutter (packaged)
-          path.resolve(here, '../../dist/flutter'), // src/server -> dist/flutter
-          path.resolve(here, '../../app/build/web'), // src/server -> app/build/web (checkout)
-          path.resolve(here, '../../../app/build/web'), // dist/server/server -> app/build/web
-        ]
-      : [path.resolve(here, '../../public'), path.resolve(here, '../../dist/public')];
+    : [
+        path.resolve(here, '../../flutter'), // dist/server/server -> dist/flutter (packaged)
+        path.resolve(here, '../../dist/flutter'), // src/server -> dist/flutter
+        path.resolve(here, '../../app/build/web'), // src/server -> app/build/web (checkout)
+        path.resolve(here, '../../../app/build/web'), // dist/server/server -> app/build/web
+      ];
   for (const c of candidates) if (existsSync(path.join(c, 'index.html'))) return c;
-  const build = client === 'flutter' ? '`npm run build:flutter`' : '`npm run build`';
-  throw new Error(`${client === 'flutter' ? 'Flutter' : 'Client'} bundle not found (looked in ${candidates.join(', ')}). Run ${build}.`);
+  throw new Error(`The client isn't built (looked in ${candidates.join(', ')}). Run \`npm run build:client\`.`);
 }
 
 /** A file of the client bundle, or undefined when it's missing, a folder, or outside the bundle. */

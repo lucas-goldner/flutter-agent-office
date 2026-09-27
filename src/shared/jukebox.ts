@@ -1,5 +1,5 @@
 // The lounge jukebox: the tunes it has and what it's playing, shared by the server (which keeps one
-// per floor) and the browser (which synthesizes the tunes, see client/music.ts).
+// per floor) and the browser (which synthesizes the tunes, see app/lib/audio/music.dart).
 
 export interface JukeboxTune {
   id: string;

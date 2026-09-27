@@ -32,7 +32,7 @@ import { JUKEBOX_TUNES, STREAM } from '../shared/jukebox.js';
 import { SEARCH_MAX, SEARCH_MIN, searchKey } from '../shared/search.js';
 import { WB_MAX_FILE_BYTES } from '../shared/whiteboard.js';
 import { lookFromSeed, sanitizeLook } from '../shared/avatar.js';
-import { CACHE_IMMUTABLE, CACHE_NONE, findPublicDir, flutterStatic, publicFile as bundleFile } from './static.js';
+import { findPublicDir, flutterStatic } from './static.js';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -160,8 +160,7 @@ const SEARCH_CHAT_HITS = 50;
 const SEARCH_TERMINAL_HITS = 25;
 
 export async function startServer(cfg: Config) {
-  const flutter = cfg.client === 'flutter';
-  const publicDir = findPublicDir(cfg.client, path.dirname(fileURLToPath(import.meta.url)));
+  const publicDir = findPublicDir(path.dirname(fileURLToPath(import.meta.url)));
   const accounts = new Accounts(cfg.dataDir);
   const auth = new Auth(cfg.verifier, cfg.salt, cfg.secret, accounts);
   const clients = new Map<string, Client>();
@@ -419,20 +418,17 @@ export async function startServer(cfg: Config) {
   );
 
   // --- HTTP ------------------------------------------------------------------------------------
-  const serveFile = (res: http.ServerResponse, file: string, cache: boolean | string) => {
+  const serveFile = (res: http.ServerResponse, file: string, cache: string) => {
     const ext = path.extname(file);
     res.writeHead(200, {
       'content-type': MIME[ext] ?? 'application/octet-stream',
-      'cache-control': typeof cache === 'string' ? cache : cache ? CACHE_IMMUTABLE : CACHE_NONE,
+      'cache-control': cache,
       'x-content-type-options': 'nosniff',
       'x-frame-options': 'DENY',
       'referrer-policy': 'no-referrer',
     });
     createReadStream(file).pipe(res);
   };
-
-  /** A file of the client bundle, or undefined when it's missing, a folder, or outside the bundle. */
-  const publicFile = (p: string): string | undefined => bundleFile(publicDir, p);
 
   /**
    * A password, claim-token or invite guess: counts it against the IP, then reads the small JSON
@@ -544,24 +540,14 @@ export async function startServer(cfg: Config) {
       }
       if (p === '/api/health') return send(res, 200, { ok: true });
 
-      // The Flutter client: its boot files and sign-in pages are public, the rest needs a session
-      // (see static.ts). /api keeps its own auth below.
-      if (flutter && p !== '/api' && !p.startsWith('/api/')) {
+      // The client (the Flutter web app): its boot files and sign-in pages are public, the rest
+      // needs a session (see static.ts). /api keeps its own auth below.
+      if (p !== '/api' && !p.startsWith('/api/')) {
         const answer = flutterStatic(publicDir, p, !!auth.fromRequest(req));
         if (answer.kind === 'file') return serveFile(res, answer.file, answer.cache);
         if (answer.kind === 'redirect') return void res.writeHead(302, { location: answer.location }).end();
         return void res.writeHead(404, { 'content-type': 'text/plain' }).end('Not found');
       }
-      if (p.startsWith('/assets/')) {
-        const file = publicFile(p);
-        if (file) return serveFile(res, file, true);
-        res.writeHead(404).end();
-        return;
-      }
-      if (p === '/login' || p === '/login.html') return serveFile(res, path.join(publicDir, 'login.html'), false);
-      if (p === '/claim' || p === '/claim.html') return serveFile(res, path.join(publicDir, 'claim.html'), false);
-      if (p === '/join' || p === '/join.html') return serveFile(res, path.join(publicDir, 'join.html'), false);
-      if (p === '/favicon.svg') return serveFile(res, path.join(publicDir, 'favicon.svg'), false);
 
       const session = auth.fromRequest(req);
       if (!session) {
@@ -636,9 +622,6 @@ export async function startServer(cfg: Config) {
         }
         return send(res, 404, { error: 'Not found' });
       }
-      if (p === '/' || p === '/index.html') return serveFile(res, path.join(publicDir, 'index.html'), false);
-      const file = publicFile(p);
-      if (file) return serveFile(res, file, false);
       res.writeHead(404, { 'content-type': 'text/plain' }).end('Not found');
     } catch (err) {
       console.error(err);

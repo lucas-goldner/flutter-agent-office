@@ -5,5 +5,5 @@ dist
 .DS_Store
 pw.txt
 
-# The whiteboard's Excalidraw bundle (scripts/build-whiteboard.mjs): several MB, built by npm run build:flutter.
+# The whiteboard's Excalidraw bundle (scripts/build-whiteboard.mjs): several MB, built by npm run build:client.
 /app/web/excalidraw/

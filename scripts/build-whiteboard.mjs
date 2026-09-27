@@ -7,7 +7,7 @@
 // Xiaolai (CJK, 12 MB) is left out, as in vite.config.ts: Excalidraw falls back to its CDN for that one,
 // only when someone writes Chinese, Japanese or Korean. So are the other languages: the board is in English.
 //
-// Run by `npm run build:flutter` before the Flutter build, or alone: `npm run build:whiteboard`.
+// Run by `npm run build:client` before the Flutter build, or alone: `npm run build:whiteboard`.
 // The output is gitignored (it's several MB).
 import { build } from 'esbuild';
 import { cpSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';

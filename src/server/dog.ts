@@ -47,7 +47,7 @@ type Leg = Omit<DogState, 'name' | 'coat' | 'elapsed'> & { start: number };
 /**
  * A floor's dog. It naps under the desks of workers who are busy, trots after people for a while,
  * sniffs around and hangs out on the lounge rug. When a worker needs input it drops everything, runs
- * to that desk and barks (the browsers do the barking; see client/world/dog.ts). Its name is kept
+ * to that desk and barks (the browsers do the barking; see app/lib/world/dog.dart). Its name is kept
  * in the floor's .agent-office/dog.json.
  */
 export class Dog {

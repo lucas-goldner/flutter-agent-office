@@ -84,7 +84,7 @@ meshes in code.
    `app/web/excalidraw/`: `whiteboard.js` (an ES module, ~0.7 MB, plus ~3 MB of chunks it imports), `whiteboard.css`
    and Excalidraw's fonts (no Xiaolai, no other languages), so they're served by the office, never a CDN.
    `flutter build web` copies it into `build/web/excalidraw/`, and the app imports it only when the whiteboard is
-   first needed. `npm run build:flutter` runs it first. It's ~7 MB in ~180 files, so it's gitignored: after a
+   first needed. `npm run build:client` runs it first. It's ~7 MB in ~180 files, so it's gitignored: after a
    bare `flutter build web` without it, the whiteboard window says it couldn't load and the board stays blank.
 
 ## App layout (`app/lib`)
@@ -116,24 +116,51 @@ Each phase ends with `flutter analyze`, the Dart unit tests, `flutter build web`
 the office against a real `agent-office` server.
 
 0. **Spike.** ✅ Toolchain, a web build and a render check.
-1. **Foundation.** Dart ports of `src/shared` with the TS tests ported. `OfficeSocket` and `Store`. Login, join
+1. **Foundation.** ✅ Dart ports of `src/shared` with the TS tests ported. `OfficeSocket` and `Store`. Login, join
    and claim. The server serves the Flutter build. The theme.
-2. **The walkable office.** Floor, walls, windows, desks, chairs, lounge, kitchen, loft, stairs, balcony,
+2. **The walkable office.** ✅ Floor, walls, windows, desks, chairs, lounge, kitchen, loft, stairs, balcony,
    elevator, gong, whiteboard frame, in the toon look. `PlayerController`, with collisions, stairs, jumping and
    the first- and third-person cameras. Peers drawn as characters with name tags, moving in real time.
-3. **Workers and terminals.** Worker characters with status bulbs and task cards. Laptops showing their live
+3. **Workers and terminals.** ✅ Worker characters with status bulbs and task cards. Laptops showing their live
    `screen` frames. The xterm terminal window. Hire, prompt, resume, send home, worktrees and PRs (E/P/B/R/X/O),
    the workers panel, notifications, and the tab title.
-4. **Boards and GitHub.** Issues, PR, services and queue boards. Issue and PR windows with markdown, diffs,
+4. **Boards and GitHub.** ✅ Issues, PR, services and queue boards. Issue and PR windows with markdown, diffs,
    reviews, merge and close. Ask-a-worker, the queue, services, changes, and the gong with confetti.
-5. **People.** Chat and bubbles, voice, screen sharing and the TV, search, accounts, invites, settings,
+5. **People.** ✅ Chat and bubbles, voice, screen sharing and the TV, search, accounts, invites, settings,
    character select, upgrade.
-6. **The rest of the world.** Sky, weather and day/night, the street, garage and cars, the dog, jukebox and music,
+6. **The rest of the world.** ✅ Sky, weather and day/night, the street, garage and cars, the dog, jukebox and music,
    office sounds, smoke breaks, coffee, sitting, floors and the elevator ride, workers leaving, hung pictures,
    the Excalidraw whiteboard, DEADFALL, first-person hands.
-7. **Cutover.** `package.json`, CI and the release build Flutter. Delete `src/client`, Vite and three.js.
+7. **Cutover.** ✅ `package.json`, CI and the release build Flutter. Delete `src/client`, Vite and three.js.
    Update the README. Run a perf pass with the render-quality tier and adaptive scale, and throttled widget
    captures for off-screen laptops.
+
+## Where it ended up
+
+Every phase is done: the old client (`src/client`, Vite, three.js, xterm.js) is gone, and the office serves
+the Flutter app. Findings along the way, and what's still open:
+
+- **Handedness.** flutter_scene is left-handed; the office's coordinates are three.js's right-handed ones. The
+  whole office hangs under a scale(1, 1, -1) root (`world/space.dart`), as flutter_scene's own glTF importer
+  does, so every ported number is unchanged; only the camera and raycasts convert.
+- **Toon look.** `toon.fmat` is an unlit material that does MeshToonMaterial's 3-step ramp itself, plus the
+  sky's lamplight, wet ground and snow (the old `onBeforeCompile` patch). No ink outlines and no shadows yet.
+- **Labels** (name tags, task cards, bubbles) are Flutter widgets over the scene, hidden behind walls by a few
+  line-of-sight raycasts a frame.
+- **Terminals** use the pure-Dart `xterm` package; laptop screens and the wall boards are Flutter widgets on
+  3D surfaces (`WidgetComponent`). The TV plays shared screens by uploading video frames straight into
+  flutter_scene's WebGL texture, which reaches into flutter_scene internals (`voice/video_texture.dart`):
+  recheck it on every flutter_scene upgrade.
+- **Fonts** are bundled (Nunito, Twemoji, DejaVu, JetBrains Mono, Noto symbol subsets) and the engine's font
+  fallback points at the app, so nothing is fetched from Google's CDN.
+- **Performance has not been measured on a real GPU.** In the headless test browser (SwiftShader, no GPU) a
+  frame takes about 3 s, nearly all of it the software readback that hands the scene to the page; the Dart
+  side of a frame is about 40 ms there. Measure on real machines (`?perf=1` prints frame and tick times; `?aa=`,
+  `?scale=`, `?boards=0`, `?hands=0`, `?labels=0` switch things off) before trusting it on low-end laptops.
+- **Size.** The built client is ~57 MB on disk (~21 MB in the release tarball): CanvasKit variants, flutter_scene's
+  shader bundles, the Excalidraw bundle and fonts. A browser downloads only what it uses.
+- Smaller gaps: SVG pictures show "Image unavailable"; the HUD stays up while DEADFALL plays; IME input and
+  mouse-wheel scrolling inside terminal apps weren't checked.
 
 ## Risks and fallbacks
 

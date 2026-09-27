@@ -12,14 +12,12 @@
   ],
   "scripts": {
     "test": "node --import tsx --test tests/*.test.ts",
-    "dev": "concurrently -k \"vite\" \"tsx watch src/server/cli.ts --port 4600 --password dev\"",
-    "dev:flutter": "tsx watch src/server/cli.ts --port 4600 --password dev --client flutter",
+    "dev": "tsx watch src/server/cli.ts --port 4600 --password dev",
     "build": "npm run build:client && npm run build:server",
-    "build:client": "vite build",
+    "build:client": "node scripts/build-client.mjs",
     "build:server": "tsc -p tsconfig.server.json",
-    "build:flutter": "node scripts/build-flutter.mjs",
     "build:whiteboard": "node scripts/build-whiteboard.mjs",
-    "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.client.json --noEmit",
+    "typecheck": "tsc -p tsconfig.server.json --noEmit",
     "start": "node bin/agent-office.js",
     "prepare": "npm run build"
   },
@@ -37,22 +35,11 @@
   "devDependencies": {
     "@excalidraw/excalidraw": "^0.18.1",
     "@types/node": "^26.6.3",
-    "@types/react": "^18.3.31",
-    "@types/react-dom": "^18.3.7",
-    "@types/three": "^0.186.0",
     "@types/ws": "^8.18.1",
-    "@xterm/addon-fit": "^0.11.0",
-    "@xterm/addon-web-links": "^0.12.0",
-    "@xterm/xterm": "^6.0.0",
-    "concurrently": "^10.0.5",
-    "dompurify": "^3.4.16",
-    "marked": "^18.0.14",
-    "playwright-core": "^1.63.0",
+    "esbuild": "^0.28.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "three": "^0.186.1",
     "tsx": "^4.23.15",
-    "typescript": "^7.0.2",
-    "vite": "^8.3.1"
+    "typescript": "^7.0.2"
   }
 }

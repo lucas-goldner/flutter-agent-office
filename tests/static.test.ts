@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { CACHE_REVALIDATE, findPublicDir, flutterStatic, isClientKind, publicFile } from '../src/server/static.js';
+import { CACHE_REVALIDATE, findPublicDir, flutterStatic, publicFile } from '../src/server/static.js';
 
 // A stand-in for app/build/web, with a secret next to it that must never be served.
 const root = mkdtempSync(path.join(os.tmpdir(), 'ao-flutter-'));
@@ -108,17 +108,11 @@ test('signed in: files, then the SPA fallback for routes, 404 for missing files'
 });
 
 test('findPublicDir: the override wins, and a missing bundle says how to build it', () => {
-  assert.equal(findPublicDir('flutter', '/nowhere', web), web);
-  assert.throws(() => findPublicDir('flutter', '/nowhere', path.join(root, 'none')), /build:flutter/);
+  assert.equal(findPublicDir('/nowhere', web), web);
+  assert.throws(() => findPublicDir('/nowhere', path.join(root, 'none')), /build:client/);
   const dist = path.join(root, 'dist');
   mkdirSync(path.join(dist, 'flutter'), { recursive: true });
   writeFileSync(path.join(dist, 'flutter', 'index.html'), '');
   // Compiled, the server runs from dist/server/server.
-  assert.equal(findPublicDir('flutter', path.join(dist, 'server', 'server'), ''), path.join(dist, 'flutter'));
-});
-
-test('client kinds', () => {
-  assert.ok(isClientKind('flutter'));
-  assert.ok(isClientKind('legacy'));
-  assert.ok(!isClientKind('vite'));
+  assert.equal(findPublicDir(path.join(dist, 'server', 'server'), ''), path.join(dist, 'flutter'));
 });
