@@ -3,8 +3,8 @@
 // frame loop (you, the camera, everyone else, the sky, sounds), and does what the keys and the
 // windows ask (hire, prompt, send home, sit, coffee, the gong…).
 //
-// Not here yet (see FLUTTER_WEB_PLAN.md): voice and screen sharing, the whiteboard, hanging
-// pictures, and DEADFALL. Their buttons say so.
+// Not here yet (see FLUTTER_WEB_PLAN.md): voice and screen sharing, and the whiteboard. Their
+// buttons say so.
 
 import 'dart:async';
 import 'dart:math' as math;
@@ -49,6 +49,7 @@ import '../ui/services.dart';
 import '../ui/settings.dart';
 import '../ui/team.dart';
 import '../ui/accounts.dart';
+import '../ui/arcade.dart';
 import '../ui/terminal.dart';
 import '../ui/upgrade.dart';
 import '../ui/usage.dart' show hiringPaused, usageLabel, usageTitle;
@@ -58,6 +59,7 @@ import '../world/character.dart';
 import '../world/collider.dart';
 import '../world/confetti.dart';
 import '../world/dog.dart';
+import '../world/gallery.dart';
 import '../world/hands.dart';
 import '../world/label_widgets.dart';
 import '../world/labels.dart';
@@ -69,6 +71,7 @@ import '../world/sky_model.dart';
 import '../world/smoke.dart';
 import '../world/space.dart';
 import '../world/toon.dart';
+import 'hanging.dart';
 
 /// How close (meters) you stop a worker jumping, and how far you go before it starts again.
 const double _holdNear = 4;
@@ -180,7 +183,7 @@ class OfficeController implements OfficeActions {
       onUpgrade: () => openUpgrade(scope),
       onSearch: showSearch,
       onWhiteboard: _notYet,
-      onDecor: _notYet,
+      onDecor: () => hanger.active ? hanger.cancel() : hanger.start(),
       onSettings: showSettings,
       onHelp: openHelp,
       onOpenWorker: openWorkerTerminal,
@@ -198,6 +201,9 @@ class OfficeController implements OfficeActions {
   late final Smoke smoke;
   late final OfficeSound sound;
   late final DesktopNotifier notifier;
+  late final Gallery gallery;
+  late final Hanger hanger;
+  late final Arcade arcade;
   final SkyModel skyModel = SkyModel();
   final Caffeine caffeine = Caffeine();
 
@@ -299,6 +305,17 @@ class OfficeController implements OfficeActions {
       },
     );
     notifier = DesktopNotifier(enabled: () => settings.notify, openWorker: openWorkerTerminal);
+    // Pictures on the walls (and the one you're hanging), and DEADFALL on the boss's monitor.
+    gallery = Gallery();
+    office.group.add(gallery.group);
+    hanger = Hanger(scope: scope, player: player, office: office, gallery: gallery, camera: () => camera);
+    hanger.onChange = () {
+      hanging.value = hanger.active;
+      _hintKey = 'stale';
+    };
+    root.add(hanger.ghost.group);
+    arcade = Arcade(office.bossScreen);
+    _listen(Topic.decor, () => gallery.sync(store.decor));
 
     _listen(Topic.peers, _syncPeers);
     _listen(Topic.workers, _syncWorkers);
@@ -340,6 +357,7 @@ class OfficeController implements OfficeActions {
       f();
     }
     _messages?.cancel();
+    hanger.dispose();
     net.close();
   }
 
@@ -438,13 +456,13 @@ class OfficeController implements OfficeActions {
     }
   }
 
-  /// Dev switch for screenshots: ?at=x,z[,yaw[,pitch]] puts you there, ?view=third orbits.
+  /// Dev switch for screenshots: ?at=x,z[,yaw[,pitch[,y]]] puts you there, ?view=third orbits.
   void _devPlace() {
     final q = _query;
     if (q['view'] == 'third') player.setView(ViewMode.third);
     final at = q['at']?.split(',').map(double.tryParse).toList();
     if (at == null || at.length < 2 || at[0] == null || at[1] == null) return;
-    player.pos.setValues(at[0]!, 0, at[1]!);
+    player.pos.setValues(at[0]!, at.length > 4 ? at[4] ?? 0 : 0, at[1]!);
     if (at.length > 2 && at[2] != null) {
       player.facing = at[2]!;
       player.camYaw = player.facing - math.pi;
@@ -479,6 +497,7 @@ class OfficeController implements OfficeActions {
   void ride(String floorId) {
     if (_riding != null || floorId == store.floor) return;
     ModalStack.instance.closeAll();
+    hanger.cancel();
     final inside = inElevator(player.pos.x, player.pos.z);
     _riding = (floor: floorId, timer: Timer(const Duration(seconds: 10), _rideFailed));
     player.enabled = false;
@@ -1008,7 +1027,9 @@ class OfficeController implements OfficeActions {
         }
       case InteractKind.gong:
         _hitGong();
-      case InteractKind.tv || InteractKind.whiteboard || InteractKind.decor:
+      case InteractKind.decor when target.decorId != null:
+        hanger.view(target.decorId!);
+      case InteractKind.tv || InteractKind.whiteboard:
         _notYet();
       default:
         break;
@@ -1098,7 +1119,7 @@ class OfficeController implements OfficeActions {
     final seat = seatingById[seatId];
     if (seat == null) return;
     if (player.seat?.seatId == seatId) {
-      if (seat.game) return _notYet();
+      if (seat.game) return arcade.play();
       return standUp();
     }
     final place = _freePlace(seat);
@@ -1188,7 +1209,7 @@ class OfficeController implements OfficeActions {
     if (player.pos.y < -slab - 1) return null;
     Interactable? best;
     var bestD = double.infinity;
-    for (final list in [office.interactables, dog.interactables]) {
+    for (final list in [office.interactables, gallery.interactables, dog.interactables]) {
       for (final it in list) {
         if (it.off) continue;
         // Up on the loft, or down underneath it.
@@ -1215,6 +1236,13 @@ class OfficeController implements OfficeActions {
   }
 
   void _renderHint() {
+    if (hanger.active && !ModalStack.instance.open) {
+      final (k, parts) = hanger.hint();
+      if (k == _hintKey) return;
+      _hintKey = k;
+      hint.value = parts;
+      return;
+    }
     final t = _target;
     if (t == null || ModalStack.instance.open) {
       if (_hintKey.isNotEmpty) {
@@ -1286,9 +1314,10 @@ class OfficeController implements OfficeActions {
         );
       case InteractKind.decor:
         final d = store.decor.where((x) => x.id == it.decorId).firstOrNull;
+        final name = d?.title?.isNotEmpty == true ? d!.title! : 'A picture';
         return (
-          '${d?.title}',
-          [HintTitle('🖼️ ${d?.title ?? 'A picture'}'), if (d != null) HintAside('hung by ${d.by}')],
+          '${d?.title}|${d?.by}',
+          [HintTitle('🖼️ $name'), if (d != null) HintAside('hung by ${d.by}'), const HintKey('E', 'Look closer')],
         );
       case InteractKind.seat:
         final seat = seatingById[it.seatId ?? ''];
@@ -1296,7 +1325,12 @@ class OfficeController implements OfficeActions {
         if (player.seat?.seatId == seat.id) {
           return (
             '${seat.id}|sitting',
-            [HintTitle(seat.label), const HintAside('sitting'), const HintKey('E', 'Get up')],
+            [
+              HintTitle(seat.label),
+              const HintAside('sitting'),
+              if (seat.game) ...[const HintKey('E', 'Play DEADFALL'), const HintKey('W A S D', 'Get up')]
+              else const HintKey('E', 'Get up'),
+            ],
           );
         }
         final full = _freePlace(seat) == null;
@@ -1389,6 +1423,7 @@ class OfficeController implements OfficeActions {
     if (ModalStack.instance.open || hud.typing) return false;
     final hk = HardwareKeyboard.instance;
     if (hk.isMetaPressed || hk.isControlPressed || hk.isAltPressed) return false;
+    if (hanger.key(e.physicalKey, reach: _reachOut)) return true;
     final deskKey = _deskKeys[e.physicalKey];
     if (deskKey != null) {
       _use(_target, deskKey);
@@ -1400,7 +1435,7 @@ class OfficeController implements OfficeActions {
       return true;
     }
     if (e.physicalKey == PhysicalKeyboardKey.keyF) {
-      _notYet();
+      hanger.start();
       return true;
     }
     return false;
@@ -1409,6 +1444,10 @@ class OfficeController implements OfficeActions {
   /// A click (not a drag) on the scene, at [screen] in a view of [view] size.
   void onClick(Offset screen, Size view) {
     if (ModalStack.instance.open) return;
+    if (hanger.active) {
+      _reachOut();
+      return hanger.place(screen);
+    }
     if (player.view == ViewMode.first) {
       // Reach out even at nothing, like poking the air.
       _reachOut();
@@ -1493,6 +1532,7 @@ class OfficeController implements OfficeActions {
       fovNear: 0.1,
       fovFar: 200,
     );
+    camera = arcade.update(camera, dt, view);
     final look = (player.camTarget - player.camPos)..normalize();
     hands.root.visible = firstPerson;
     if (firstPerson) {
@@ -1590,9 +1630,10 @@ class OfficeController implements OfficeActions {
     _checkSmokeBreak(now);
     smoke.update(dt, player.camPos, player.camTarget);
     confetti.update(dt);
+    hanger.update(view, locked: lockAvailable ? pointerLocked : null);
     _updateSky(dt, t);
 
-    if (ModalStack.instance.open) {
+    if (ModalStack.instance.open || hanger.active) {
       _target = null;
     } else if (firstPerson) {
       final aim = aimedAt(Offset(view.width / 2, view.height / 2), view);

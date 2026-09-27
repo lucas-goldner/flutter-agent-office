@@ -51,6 +51,7 @@ class ModalStack {
     bool escCloses = true,
     bool backdropCloses = true,
     VoidCallback? onClose,
+    bool clear = false,
   }) {
     late ModalHandle handle;
     final entry = OverlayEntry(
@@ -58,6 +59,7 @@ class ModalStack {
         onTapOutside: backdropCloses ? () => handle.close() : null,
         onEsc: escCloses ? () => handle.close() : null,
         isTop: () => _stack.isNotEmpty && identical(_stack.last, handle),
+        clear: clear,
         child: builder(handle),
       ),
     );
@@ -77,9 +79,12 @@ class ModalStack {
 
 /// The dimmed backdrop, centring its window, with Esc and click-outside.
 class _Backdrop extends StatelessWidget {
-  const _Backdrop({required this.child, this.onTapOutside, this.onEsc, required this.isTop});
+  const _Backdrop({required this.child, this.onTapOutside, this.onEsc, required this.isTop, this.clear = false});
 
   final Widget child;
+
+  /// Not dimmed, and the window gets the whole page to lay itself out in (DEADFALL over the monitor).
+  final bool clear;
   final VoidCallback? onTapOutside;
   final VoidCallback? onEsc;
   final bool Function() isTop;
@@ -96,7 +101,9 @@ class _Backdrop extends StatelessWidget {
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTapDown: onTapOutside == null ? null : (_) => onTapOutside!(),
-        child: ColoredBox(
+        child: clear
+            ? child
+            : ColoredBox(
           color: Swatch.backdrop,
           child: SafeArea(
             child: Padding(
