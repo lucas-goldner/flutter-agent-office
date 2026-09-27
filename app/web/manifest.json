@@ -1,14 +1,19 @@
 {
-    "name": "agent_office",
-    "short_name": "agent_office",
+    "name": "Agent Office",
+    "short_name": "Agent Office",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
-    "orientation": "portrait-primary",
+    "description": "A cartoon 3D office where your team runs Claude Code workers.",
+    "orientation": "any",
     "prefer_related_applications": false,
     "icons": [
+        {
+            "src": "favicon.svg",
+            "sizes": "any",
+            "type": "image/svg+xml"
+        },
         {
             "src": "icons/Icon-192.png",
             "sizes": "192x192",

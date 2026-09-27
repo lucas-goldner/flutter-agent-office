@@ -13,9 +13,11 @@
   "scripts": {
     "test": "node --import tsx --test tests/*.test.ts",
     "dev": "concurrently -k \"vite\" \"tsx watch src/server/cli.ts --port 4600 --password dev\"",
+    "dev:flutter": "tsx watch src/server/cli.ts --port 4600 --password dev --client flutter",
     "build": "npm run build:client && npm run build:server",
     "build:client": "vite build",
     "build:server": "tsc -p tsconfig.server.json",
+    "build:flutter": "node scripts/build-flutter.mjs",
     "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "start": "node bin/agent-office.js",
     "prepare": "npm run build"

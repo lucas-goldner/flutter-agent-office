@@ -1,7 +1,7 @@
 import http from 'node:http';
 import https from 'node:https';
 import { randomBytes } from 'node:crypto';
-import { createReadStream, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { createReadStream, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { Duplex } from 'node:stream';
@@ -32,6 +32,7 @@ import { JUKEBOX_TUNES, STREAM } from '../shared/jukebox.js';
 import { SEARCH_MAX, SEARCH_MIN, searchKey } from '../shared/search.js';
 import { WB_MAX_FILE_BYTES } from '../shared/whiteboard.js';
 import { lookFromSeed, sanitizeLook } from '../shared/avatar.js';
+import { CACHE_IMMUTABLE, CACHE_NONE, findPublicDir, flutterStatic, publicFile as bundleFile } from './static.js';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -43,7 +44,20 @@ const MIME: Record<string, string> = {
   '.ico': 'image/x-icon',
   '.json': 'application/json',
   '.woff2': 'font/woff2',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.map': 'application/json',
+  '.webmanifest': 'application/manifest+json',
   '.wasm': 'application/wasm',
+  '.otf': 'font/otf',
+  '.ttf': 'font/ttf',
+  '.woff': 'font/woff',
+  '.bin': 'application/octet-stream',
+  '.frag': 'application/octet-stream',
+  '.shaderbundle': 'application/octet-stream',
+  '.fsceneb': 'application/octet-stream',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.wav': 'audio/wav',
   '.mp3': 'audio/mpeg',
   '.ogg': 'audio/ogg',
 };
@@ -76,13 +90,6 @@ interface Client {
 }
 
 const SLOW_CLIENT_BYTES = 8 * 1024 * 1024;
-
-function findPublicDir(): string {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  const candidates = [path.resolve(here, '../../public'), path.resolve(here, '../../dist/public')];
-  for (const c of candidates) if (existsSync(path.join(c, 'index.html'))) return c;
-  throw new Error(`Client bundle not found (looked in ${candidates.join(', ')}). Run \`npm run build\`.`);
-}
 
 /** A path under the home folder as ~/…, for showing people. */
 function tildify(p: string): string {
@@ -153,7 +160,8 @@ const SEARCH_CHAT_HITS = 50;
 const SEARCH_TERMINAL_HITS = 25;
 
 export async function startServer(cfg: Config) {
-  const publicDir = findPublicDir();
+  const flutter = cfg.client === 'flutter';
+  const publicDir = findPublicDir(cfg.client, path.dirname(fileURLToPath(import.meta.url)));
   const accounts = new Accounts(cfg.dataDir);
   const auth = new Auth(cfg.verifier, cfg.salt, cfg.secret, accounts);
   const clients = new Map<string, Client>();
@@ -411,11 +419,11 @@ export async function startServer(cfg: Config) {
   );
 
   // --- HTTP ------------------------------------------------------------------------------------
-  const serveFile = (res: http.ServerResponse, file: string, cache: boolean) => {
+  const serveFile = (res: http.ServerResponse, file: string, cache: boolean | string) => {
     const ext = path.extname(file);
     res.writeHead(200, {
       'content-type': MIME[ext] ?? 'application/octet-stream',
-      'cache-control': cache ? 'public, max-age=31536000, immutable' : 'no-store',
+      'cache-control': typeof cache === 'string' ? cache : cache ? CACHE_IMMUTABLE : CACHE_NONE,
       'x-content-type-options': 'nosniff',
       'x-frame-options': 'DENY',
       'referrer-policy': 'no-referrer',
@@ -424,10 +432,7 @@ export async function startServer(cfg: Config) {
   };
 
   /** A file of the client bundle, or undefined when it's missing, a folder, or outside the bundle. */
-  const publicFile = (p: string): string | undefined => {
-    const file = path.join(publicDir, path.normalize(p).replace(/^(\.\.[/\\])+/, ''));
-    return file.startsWith(publicDir + path.sep) && existsSync(file) && statSync(file).isFile() ? file : undefined;
-  };
+  const publicFile = (p: string): string | undefined => bundleFile(publicDir, p);
 
   /**
    * A password, claim-token or invite guess: counts it against the IP, then reads the small JSON
@@ -539,6 +544,14 @@ export async function startServer(cfg: Config) {
       }
       if (p === '/api/health') return send(res, 200, { ok: true });
 
+      // The Flutter client: its boot files and sign-in pages are public, the rest needs a session
+      // (see static.ts). /api keeps its own auth below.
+      if (flutter && p !== '/api' && !p.startsWith('/api/')) {
+        const answer = flutterStatic(publicDir, p, !!auth.fromRequest(req));
+        if (answer.kind === 'file') return serveFile(res, answer.file, answer.cache);
+        if (answer.kind === 'redirect') return void res.writeHead(302, { location: answer.location }).end();
+        return void res.writeHead(404, { 'content-type': 'text/plain' }).end('Not found');
+      }
       if (p.startsWith('/assets/')) {
         const file = publicFile(p);
         if (file) return serveFile(res, file, true);
