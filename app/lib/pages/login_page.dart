@@ -43,6 +43,13 @@ class _LoginPageState extends State<LoginPage> {
   /// Focuses a field once it has been laid out (asking earlier throws on the web).
   void _focusLater(FocusNode node) => WidgetsBinding.instance.addPostFrameCallback((_) => node.requestFocus());
 
+  /// Why the desktop app couldn't talk to the server, with the system's own reason (refused, no such
+  /// host, not allowed), since "can't reach" alone doesn't say what to fix.
+  String _unreachable(Object e) {
+    final why = '$e'.replaceFirst(RegExp(r'^\w*Exception:\s*'), '').split('\n').first;
+    return "Can't reach an office at $serverOrigin: $why";
+  }
+
   Future<void> _load() async {
     try {
       final r = await Api.getJson('/api/login');
@@ -55,8 +62,8 @@ class _LoginPageState extends State<LoginPage> {
         _name.text = storageGet(kLoginNameKey) ?? '';
       });
       _focusLater(_name.text.isEmpty ? _nameFocus : _passwordFocus);
-    } catch (_) {
-      if (desktopApp && mounted) setState(() => _error = "Can't reach an office at $serverOrigin");
+    } catch (e) {
+      if (desktopApp && mounted) setState(() => _error = _unreachable(e));
       _focusLater(_passwordFocus);
     }
   }
@@ -116,8 +123,8 @@ class _LoginPageState extends State<LoginPage> {
       setState(() => _error = r.error('Could not sign in'));
       _password.selection = TextSelection(baseOffset: 0, extentOffset: _password.text.length);
       _passwordFocus.requestFocus();
-    } catch (_) {
-      setState(() => _error = desktopApp ? "Can't reach an office at $serverOrigin" : 'Server unreachable');
+    } catch (e) {
+      setState(() => _error = desktopApp ? _unreachable(e) : 'Server unreachable');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
