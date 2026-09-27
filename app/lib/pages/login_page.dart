@@ -35,23 +35,23 @@ class _LoginPageState extends State<LoginPage> {
     _load();
   }
 
+  /// Focuses a field once it has been laid out (asking earlier throws on the web).
+  void _focusLater(FocusNode node) => WidgetsBinding.instance.addPostFrameCallback((_) => node.requestFocus());
+
   Future<void> _load() async {
     try {
       final r = await Api.getJson('/api/login');
       final accounts = r.body['accounts'] == true;
       final shared = r.body['shared'] != false;
-      if (!accounts && shared) {
-        _passwordFocus.requestFocus();
-        return;
-      }
+      if (!accounts && shared) return _focusLater(_passwordFocus);
       setState(() {
         _askName = true;
         _shared = shared;
         _name.text = storageGet(kLoginNameKey) ?? '';
       });
-      (_name.text.isEmpty ? _nameFocus : _passwordFocus).requestFocus();
+      _focusLater(_name.text.isEmpty ? _nameFocus : _passwordFocus);
     } catch (_) {
-      _passwordFocus.requestFocus();
+      _focusLater(_passwordFocus);
     }
   }
 

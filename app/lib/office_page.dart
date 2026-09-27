@@ -162,7 +162,7 @@ class _OfficePageState extends State<OfficePage> {
                   ),
                 ),
                 Positioned.fill(
-                  child: LabelLayer(hub: c.labels, camera: () => c.camera),
+                  child: LabelLayer(hub: c.labels, camera: () => c.camera, blocked: c.labelBlocked),
                 ),
                 Positioned.fill(
                   child: IgnorePointer(

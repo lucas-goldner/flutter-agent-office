@@ -66,6 +66,7 @@ import '../world/leaving.dart';
 import '../world/office/office.dart';
 import '../world/player.dart';
 import '../world/sky_model.dart';
+import '../world/sky_view.dart';
 import '../world/smoke.dart';
 import '../world/space.dart';
 import '../world/toon.dart';
@@ -199,6 +200,7 @@ class OfficeController implements OfficeActions {
   late final OfficeSound sound;
   late final DesktopNotifier notifier;
   final SkyModel skyModel = SkyModel();
+  late final SkyView skyView;
   final Caffeine caffeine = Caffeine();
 
   final Map<String, _Remote> _remotes = {};
@@ -246,11 +248,15 @@ class OfficeController implements OfficeActions {
     if (q['scale'] != null) scene.renderScale = double.tryParse(q['scale']!) ?? 1;
     devHands = q['hands'] != '0';
     devPerf = q['perf'] == '1';
+    if (q['hour'] != null || q['weather'] != null) {
+      skyModel.show(SkyPreview(hour: double.tryParse(q['hour'] ?? ''), weather: q['weather'] == null ? null : Weather.parse(q['weather'])));
+    }
     devLabels = q['labels'] != '0';
 
     office = buildOffice(labels: labels);
     root.add(office.group);
     if (q['boards'] != '0') _mountBoards();
+    skyView = SkyView(root, office.night);
     confetti = Confetti((x, z, y) => groundAt(office.colliders, x, z, y));
     smoke = Smoke();
     root
@@ -1214,6 +1220,16 @@ class OfficeController implements OfficeActions {
     return (it: it, near: hit.worldPoint.distanceTo(eye) <= _reach[it.kind]! + slack);
   }
 
+  /// Whether something solid stands between the camera and [point] (engine space): for labels.
+  bool labelBlocked(vm.Vector3 point) {
+    final eye = camera.position;
+    final to = point - eye;
+    final dist = to.length;
+    if (dist < 0.5) return false;
+    final ray = vm.Ray.originDirection(eye, to / dist);
+    return scene.raycast(ray, maxDistance: dist - 0.35, layerMask: ~Hands.layer) != null;
+  }
+
   void _renderHint() {
     final t = _target;
     if (t == null || ModalStack.instance.open) {
@@ -1629,6 +1645,7 @@ class OfficeController implements OfficeActions {
 
   void _updateSky(double dt, double t) {
     final m = skyModel..update(dt, t);
+    skyView.update(dt, t, m, player.camPos);
     final l = Toon.light
       ..sunDirection = m.lightDir
       ..sunColor = m.lightColor.color

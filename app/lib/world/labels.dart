@@ -41,6 +41,9 @@ class WorldLabel {
 
   /// Where it was drawn last frame, for hit testing and tests.
   Offset? screen;
+
+  /// Something solid stands between it and the camera (checked a few labels a frame).
+  bool hidden = false;
 }
 
 /// Every label in the office. The world adds and removes them; [LabelLayer] draws them.
@@ -61,9 +64,16 @@ class LabelHub {
 
 /// Lays the hub's labels over a SceneView of the same size, re-projecting every frame.
 class LabelLayer extends StatefulWidget {
-  const LabelLayer({super.key, required this.hub, required this.camera});
+  const LabelLayer({super.key, required this.hub, required this.camera, this.blocked, this.checksPerFrame = 6});
 
   final LabelHub hub;
+
+  /// Whether something solid is in the way from the camera to [point] (engine space), for hiding
+  /// labels behind walls the way the old depth-tested sprites were. Null: labels always show.
+  final bool Function(vm.Vector3 point)? blocked;
+
+  /// How many labels a frame get their line of sight checked, round-robin.
+  final int checksPerFrame;
 
   /// The camera the scene is drawn with this frame.
   final Camera Function() camera;
@@ -74,6 +84,18 @@ class LabelLayer extends StatefulWidget {
 
 class _LabelLayerState extends State<LabelLayer> with SingleTickerProviderStateMixin {
   late final Ticker _ticker;
+  int _next = 0;
+
+  void _checkSight() {
+    final blocked = widget.blocked;
+    final labels = widget.hub.labels;
+    if (blocked == null || labels.isEmpty) return;
+    for (var i = 0; i < widget.checksPerFrame && i < labels.length; i++) {
+      final l = labels[_next++ % labels.length];
+      if (!l.visible) continue;
+      l.hidden = blocked(l.anchor.globalTransform.transform3(l.offset.clone()));
+    }
+  }
 
   @override
   void initState() {
@@ -93,10 +115,11 @@ class _LabelLayerState extends State<LabelLayer> with SingleTickerProviderStateM
       final size = constraints.biggest;
       final cam = widget.camera();
       final eye = cam.position;
+      _checkSight();
       final placed = <(double, WorldLabel, Offset, double)>[];
       for (final l in widget.hub.labels) {
         l.screen = null;
-        if (!l.visible || !_shown(l.anchor)) continue;
+        if (!l.visible || l.hidden || !_shown(l.anchor)) continue;
         final p = l.anchor.globalTransform.transform3(l.offset.clone());
         final dist = p.distanceTo(eye);
         if (dist > l.maxDistance) continue;
