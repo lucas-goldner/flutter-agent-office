@@ -36,8 +36,8 @@ abstract final class TermTheme {
 
 /// The bundled monospace face (JetBrains Mono), then DejaVu Sans Mono and two Noto symbol subsets
 /// for the box drawing, spinners and marks TUIs use that it lacks. No system font on the web.
-const kMonoFont = 'JetBrainsMono';
-const kMonoFallback = ['DejaVuSansMono', 'NotoSansSymbols2Term', 'NotoSansSymbolsTerm'];
+const kTermFont = 'JetBrainsMono';
+const kTermFontFallback = ['DejaVuSansMono', 'NotoSansSymbols2Term', 'NotoSansSymbolsTerm'];
 
 const _base16 = [
   TermTheme.black,
@@ -209,8 +209,8 @@ void paintScreen(Canvas c, Size size, ScreenState? s, {String? placeholder, int 
 void _drawText(Canvas c, TextOp op) {
   final style = ui.TextStyle(
     color: op.alpha < 1 ? op.color.withValues(alpha: op.alpha) : op.color,
-    fontFamily: kMonoFont,
-    fontFamilyFallback: kMonoFallback,
+    fontFamily: kTermFont,
+    fontFamilyFallback: kTermFontFallback,
     fontSize: op.fontSize,
     fontWeight: op.bold ? FontWeight.w700 : FontWeight.w400,
     height: 1,

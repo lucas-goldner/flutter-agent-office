@@ -55,7 +55,7 @@ const kTermTheme = x.TerminalTheme(
 );
 
 /// ui-monospace 14px at a 1.1 line height, in the bundled face.
-const kTermStyle = x.TerminalStyle(fontSize: 14, height: 1.1, fontFamily: kMonoFont, fontFamilyFallback: kMonoFallback);
+const kTermStyle = x.TerminalStyle(fontSize: 14, height: 1.1, fontFamily: kTermFont, fontFamilyFallback: kTermFontFallback);
 
 /// Copy with Ctrl+Shift+C (Cmd+C on a Mac). Paste is the browser's own (see interceptPaste), and
 /// Ctrl+A goes to the program (readline's start of line), not select-all.

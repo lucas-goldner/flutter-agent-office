@@ -11,7 +11,7 @@ import '../net/api.dart';
 import '../office_scope.dart';
 import '../shared/protocol.dart';
 import '../shared/search.dart';
-import '../world/laptop_screen.dart' show kMonoFont, kMonoFallback, TermTheme;
+import '../world/laptop_screen.dart' show kTermFont, kTermFontFallback, TermTheme;
 import 'modal.dart';
 import 'search_logic.dart';
 import 'theme.dart';
@@ -367,7 +367,7 @@ class _TermHitState extends State<_TermHit> {
           ),
           child: Text.rich(
             TextSpan(children: _marks(widget.hit.text, widget.needle)),
-            style: const TextStyle(fontFamily: kMonoFont, fontFamilyFallback: kMonoFallback, fontSize: 12.5, color: TermTheme.foreground),
+            style: const TextStyle(fontFamily: kTermFont, fontFamilyFallback: kTermFontFallback, fontSize: 12.5, color: TermTheme.foreground),
           ),
         ),
       ),

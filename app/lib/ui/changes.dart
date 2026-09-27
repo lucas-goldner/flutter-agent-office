@@ -11,7 +11,7 @@ import '../interop/portable.dart';
 import '../office_scope.dart';
 import '../shared/protocol.dart';
 import '../state/store.dart';
-import '../world/laptop_screen.dart' show kMonoFont, kMonoFallback;
+import '../world/laptop_screen.dart' show kTermFont, kTermFontFallback;
 import 'changes_logic.dart';
 import 'child_button.dart';
 import 'modal.dart';
@@ -40,7 +40,7 @@ void openChanges(OfficeScope scope, String workerId, {VoidCallback? onTerminal})
   previous?.modal.close();
 }
 
-const _mono = TextStyle(fontFamily: kMonoFont, fontFamilyFallback: kMonoFallback, color: Swatch.ink);
+const _mono = TextStyle(fontFamily: kTermFont, fontFamilyFallback: kTermFontFallback, color: Swatch.ink);
 const _addColor = Color(0xFF2A9D4B);
 const _delColor = Color(0xFFC3423F);
 const _faint = Color(0x262B2D42); // rgba(43,45,66,.15)

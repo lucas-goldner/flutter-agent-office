@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../office_scope.dart';
 import '../shared/protocol.dart';
-import '../world/laptop_screen.dart' show kMonoFont, kMonoFallback;
+import '../world/laptop_screen.dart' show kTermFont, kTermFontFallback;
 import 'child_button.dart';
 import 'modal.dart';
 import 'prompt.dart';
@@ -218,7 +218,7 @@ class _AskWindowState extends State<_AskWindow> {
             ),
             child: SelectableText(
               text,
-              style: const TextStyle(fontFamily: kMonoFont, fontFamilyFallback: kMonoFallback, fontSize: 12, height: 1.5, color: Swatch.ink),
+              style: const TextStyle(fontFamily: kTermFont, fontFamilyFallback: kTermFontFallback, fontSize: 12, height: 1.5, color: Swatch.ink),
             ),
           ),
       ],
