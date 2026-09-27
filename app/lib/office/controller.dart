@@ -240,7 +240,7 @@ class OfficeController implements OfficeActions {
       ..mode = FogMode.linear;
     scene.add(root);
     // Dev switches for measuring what costs what: ?aa=none&scale=0.5&boards=0&hands=0&labels=0.
-    final q = Uri.base.queryParameters;
+    final q = _query;
     if (q['aa'] == 'none') scene.antiAliasingMode = AntiAliasingMode.none;
     if (q['aa'] == 'fxaa') scene.antiAliasingMode = AntiAliasingMode.fxaa;
     if (q['scale'] != null) scene.renderScale = double.tryParse(q['scale']!) ?? 1;
@@ -440,7 +440,7 @@ class OfficeController implements OfficeActions {
 
   /// Dev switch for screenshots: ?at=x,z[,yaw[,pitch]] puts you there, ?view=third orbits.
   void _devPlace() {
-    final q = Uri.base.queryParameters;
+    final q = _query;
     if (q['view'] == 'third') player.setView(ViewMode.third);
     final at = q['at']?.split(',').map(double.tryParse).toList();
     if (at == null || at.length < 2 || at[0] == null || at[1] == null) return;
@@ -1605,6 +1605,9 @@ class OfficeController implements OfficeActions {
     final next = CrosshairState(show: show, on: _target != null, free: show && lockAvailable && !pointerLocked);
     if (next != crosshair.value) crosshair.value = next;
   }
+
+  /// The page's query string, as the page was opened.
+  Map<String, String> get _query => startupQuery;
 
   bool devHands = true;
   bool devPerf = false;

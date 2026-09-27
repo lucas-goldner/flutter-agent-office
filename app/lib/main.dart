@@ -13,6 +13,7 @@ import 'pages/login_page.dart';
 import 'ui/theme.dart';
 
 void main() {
+  startupQuery; // read the query before the router rewrites the address
   usePathUrlStrategy();
   runApp(const AgentOfficeApp());
 }

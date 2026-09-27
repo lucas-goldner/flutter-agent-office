@@ -8,6 +8,9 @@ import 'package:web/web.dart' as web;
 String get locationPath => web.window.location.pathname;
 String get locationHash => web.window.location.hash;
 String get locationSearch => web.window.location.search;
+
+/// The page's query as it was when the app started, before the router rewrote the address.
+final Map<String, String> startupQuery = Uri.parse('http://x/${web.window.location.search}').queryParameters;
 String get locationHost => web.window.location.host;
 bool get isSecure => web.window.location.protocol == 'https:';
 
