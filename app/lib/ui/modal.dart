@@ -127,6 +127,7 @@ class ModalWindow extends StatelessWidget {
     this.bodyPadding = const EdgeInsets.all(16),
     this.background = Swatch.paper,
     this.scrollBody = true,
+    this.closable = true,
   });
 
   final ModalHandle modal;
@@ -141,6 +142,9 @@ class ModalWindow extends StatelessWidget {
   final EdgeInsetsGeometry bodyPadding;
   final Color background;
   final bool scrollBody;
+
+  /// Shows the ✕ in the header. Off for windows that must be answered (a confirm, the restart).
+  final bool closable;
 
   @override
   Widget build(BuildContext context) {
@@ -184,8 +188,10 @@ class ModalWindow extends StatelessWidget {
                         ),
                       ),
                       ...headerExtras.map((w) => Padding(padding: const EdgeInsets.only(left: 8), child: w)),
-                      const SizedBox(width: 8),
-                      OfficeButton(label: '✕', onPressed: modal.close, tooltip: 'Close', dense: true),
+                      if (closable) ...[
+                        const SizedBox(width: 8),
+                        OfficeButton(label: '✕', onPressed: modal.close, tooltip: 'Close', dense: true),
+                      ],
                     ],
                   ),
                 ),
