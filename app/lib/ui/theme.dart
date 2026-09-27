@@ -1,6 +1,7 @@
 // The office's chunky cartoon look, from the old client's style.css: paper panels with a 3px ink
 // border and a hard offset shadow, heavy rounded type (Nunito 800/900), and bright status colours.
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 abstract final class Swatch {
@@ -20,13 +21,22 @@ abstract final class Swatch {
 
 const kFont = 'Nunito';
 
-/// Glyphs Nunito doesn't have: emoji (Twemoji) and symbols like → ✓ ⌨ (DejaVu). Both are bundled,
-/// so the page never reaches for Flutter's font CDN (offices run on private networks too).
-const kFallback = ['Twemoji', 'DejaVuSans', 'NotoSansSymbols2Term', 'NotoSansSymbolsTerm'];
+/// Where emoji come from. On the web, the bundled Twemoji, so the page never reaches for Flutter's
+/// font CDN (offices run on private networks too); CanvasKit draws its COLR layers.
+///
+/// Natively it's the system's own emoji font instead. Twemoji's glyphs are COLRv0: every base glyph
+/// is empty and the picture is in colour layers, which the macOS engine (CoreText under Impeller)
+/// doesn't draw, so each emoji came out as a blank gap. And since Twemoji does have the character,
+/// the fallback stopped there and never reached Apple Color Emoji. Naming the system fonts (the
+/// ones a platform doesn't have are skipped) lets the engine's own fallback do the rest.
+const List<String> kEmojiFallback = kIsWeb ? ['Twemoji'] : ['Apple Color Emoji', 'Noto Color Emoji', 'Segoe UI Emoji'];
+
+/// Glyphs Nunito doesn't have: emoji ([kEmojiFallback]) and symbols like → ✓ ⌨ (DejaVu, bundled).
+const kFallback = [...kEmojiFallback, 'DejaVuSans', 'NotoSansSymbols2Term', 'NotoSansSymbolsTerm'];
 
 /// Code, diffs, commands and passwords.
 const kMono = 'DejaVuSansMono';
-const kMonoFallback = ['NotoSansSymbols2Term', 'NotoSansSymbolsTerm', 'Twemoji', 'DejaVuSans'];
+const kMonoFallback = ['NotoSansSymbols2Term', 'NotoSansSymbolsTerm', ...kEmojiFallback, 'DejaVuSans'];
 const kBorder = 3.0;
 
 ThemeData officeTheme() {
@@ -47,7 +57,12 @@ ThemeData officeTheme() {
     borderSide: BorderSide(color: c, width: kBorder),
   );
   return base.copyWith(
-    textTheme: base.textTheme.apply(bodyColor: Swatch.ink, displayColor: Swatch.ink, fontFamily: kFont, fontFamilyFallback: kFallback),
+    textTheme: base.textTheme.apply(
+      bodyColor: Swatch.ink,
+      displayColor: Swatch.ink,
+      fontFamily: kFont,
+      fontFamilyFallback: kFallback,
+    ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
       fillColor: Colors.white,
@@ -59,15 +74,27 @@ ThemeData officeTheme() {
       labelStyle: const TextStyle(fontWeight: FontWeight.w800, color: Swatch.ink),
     ),
     tooltipTheme: const TooltipThemeData(
-      textStyle: TextStyle(fontFamily: kFont, fontFamilyFallback: kFallback, fontWeight: FontWeight.w700, color: Colors.white, fontSize: 12),
+      textStyle: TextStyle(
+        fontFamily: kFont,
+        fontFamilyFallback: kFallback,
+        fontWeight: FontWeight.w700,
+        color: Colors.white,
+        fontSize: 12,
+      ),
       decoration: BoxDecoration(color: Swatch.ink, borderRadius: BorderRadius.all(Radius.circular(8))),
     ),
   );
 }
 
 /// Heavy text in the office's type.
-TextStyle heavy(double size, {Color color = Swatch.ink, FontWeight weight = FontWeight.w800}) =>
-    TextStyle(fontFamily: kFont, fontFamilyFallback: kFallback, fontSize: size, fontWeight: weight, color: color, height: 1.25);
+TextStyle heavy(double size, {Color color = Swatch.ink, FontWeight weight = FontWeight.w800}) => TextStyle(
+  fontFamily: kFont,
+  fontFamilyFallback: kFallback,
+  fontSize: size,
+  fontWeight: weight,
+  color: color,
+  height: 1.25,
+);
 
 /// A paper panel: 3px ink border, rounded, with a hard shadow straight down (no blur).
 class Panel extends StatelessWidget {
@@ -185,7 +212,10 @@ class Pill extends StatelessWidget {
       borderRadius: BorderRadius.circular(999),
       border: Border.all(color: Swatch.ink, width: 2),
     ),
-    child: Text(text, style: heavy(11, color: textColor, weight: FontWeight.w900)),
+    child: Text(
+      text,
+      style: heavy(11, color: textColor, weight: FontWeight.w900),
+    ),
   );
 }
 
