@@ -180,6 +180,8 @@ class _OfficePageState extends State<OfficePage> {
                   child: Hud(
                     controller: c.hud,
                     voice: c.voice,
+                    speaking: c.voiceRoom.speaking,
+                    shares: c.voiceRoom.sharesWidget,
                     connected: c.connected,
                     hint: c.hint,
                     crosshair: c.crosshair,

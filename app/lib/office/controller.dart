@@ -3,8 +3,8 @@
 // frame loop (you, the camera, everyone else, the sky, sounds), and does what the keys and the
 // windows ask (hire, prompt, send home, sit, coffee, the gong…).
 //
-// Not here yet (see FLUTTER_WEB_PLAN.md): voice and screen sharing, the whiteboard, hanging
-// pictures, and DEADFALL. Their buttons say so.
+// Not here yet (see FLUTTER_WEB_PLAN.md): the whiteboard, hanging pictures, and DEADFALL. Their
+// buttons say so.
 
 import 'dart:async';
 import 'dart:math' as math;
@@ -53,6 +53,7 @@ import '../ui/terminal.dart';
 import '../ui/upgrade.dart';
 import '../ui/usage.dart' show hiringPaused, usageLabel, usageTitle;
 import '../ui/worker_text.dart' show statusLabel;
+import '../voice/office_voice.dart';
 import '../world/board_faces.dart';
 import '../world/character.dart';
 import '../world/collider.dart';
@@ -168,9 +169,9 @@ class OfficeController implements OfficeActions {
   late final HudController hud = HudController(
     HudCallbacks(
       onElevator: showElevator,
-      onVoice: _notYet,
-      onMute: _notYet,
-      onShare: _notYet,
+      onVoice: () => voiceRoom.toggleVoice(),
+      onMute: () => voiceRoom.toggleMute(),
+      onShare: () => voiceRoom.toggleShare(),
       onIssues: () => openBoard(scope, BoardKind.issues),
       onPulls: () => openBoard(scope, BoardKind.pulls),
       onServices: () => openServices(scope),
@@ -189,6 +190,9 @@ class OfficeController implements OfficeActions {
   );
 
   late final Office office;
+
+  /// Voice chat and screen sharing (the TV, the thumbnails, mouths and proximity volume).
+  late final OfficeVoice voiceRoom;
   late final PlayerController player;
   late final Person me;
   late final Hands hands;
@@ -250,6 +254,7 @@ class OfficeController implements OfficeActions {
 
     office = buildOffice(labels: labels);
     root.add(office.group);
+    voiceRoom = OfficeVoice(store: store, net: net, tv: office.tvScreen, state: voice);
     if (q['boards'] != '0') _mountBoards();
     confetti = Confetti((x, z, y) => groundAt(office.colliders, x, z, y));
     smoke = Smoke();
@@ -340,6 +345,7 @@ class OfficeController implements OfficeActions {
       f();
     }
     _messages?.cancel();
+    voiceRoom.dispose();
     net.close();
   }
 
@@ -373,6 +379,7 @@ class OfficeController implements OfficeActions {
   // ---- Messages ---------------------------------------------------------------------------------
 
   void _onMessage(ServerMsg msg) {
+    if (msg is WelcomeMsg) voiceRoom.beforeWelcome();
     if (msg is WelcomeMsg || msg is FloorEnterMsg) departures.clear();
     if (msg is WorkerRemoveMsg) _sentHome.add(msg.workerId);
     try {
@@ -405,6 +412,9 @@ class OfficeController implements OfficeActions {
           showUpgraded(m.upgrade);
         }
         _upgradePhase = m.upgrade.phase;
+        voiceRoom.welcomed();
+      case RtcMsg m:
+        voiceRoom.signal(m.from, m.data);
       case FloorEnterMsg _:
         _arrive();
       case ToastMsg m:
@@ -1008,7 +1018,9 @@ class OfficeController implements OfficeActions {
         }
       case InteractKind.gong:
         _hitGong();
-      case InteractKind.tv || InteractKind.whiteboard || InteractKind.decor:
+      case InteractKind.tv:
+        voiceRoom.watchShare();
+      case InteractKind.whiteboard || InteractKind.decor:
         _notYet();
       default:
         break;
@@ -1093,11 +1105,12 @@ class OfficeController implements OfficeActions {
     return best;
   }
 
-  /// E at a seat: sit down on it. Sitting there already, get up.
+  /// E at a seat: sit down on it. Sitting there already, get up, or on the couch facing the TV, watch it.
   void _useSeat(String seatId) {
     final seat = seatingById[seatId];
     if (seat == null) return;
     if (player.seat?.seatId == seatId) {
+      if (seat.tv && voiceRoom.tvShowing) return voiceRoom.watchShare();
       if (seat.game) return _notYet();
       return standUp();
     }
@@ -1109,6 +1122,8 @@ class OfficeController implements OfficeActions {
     player.sit(place);
     me.sit(place.hips);
     net.send(SitCmd(seat: place.key));
+    // The couch in front of the TV is where you watch whoever's sharing.
+    if (seat.tv && voiceRoom.tvShowing) voiceRoom.watchShare();
   }
 
   void standUp() {
@@ -1245,7 +1260,7 @@ class OfficeController implements OfficeActions {
         final n = store.queue.tasks.where((t) => t.status != TaskStatus.done).length;
         return ('$n', [HintTitle('📋 Task queue${n > 0 ? ' · $n' : ''}'), const HintKey('E', 'Open')]);
       case InteractKind.tv:
-        return ('', [const HintTitle('📺 Office TV'), const HintAside('screen sharing is coming to the new client')]);
+        return voiceRoom.tvHint();
       case InteractKind.coffee:
         final buzzed = caffeine.buzzed(nowMs() / 1000);
         return ('$buzzed', [const HintTitle('☕ Coffee machine'), HintKey('E', buzzed ? 'Another cup' : 'Grab a cup')]);
@@ -1579,6 +1594,7 @@ class OfficeController implements OfficeActions {
         math.sqrt(math.pow(desk.x - player.camPos.x, 2) + math.pow(desk.z - player.camPos.z, 2)),
       );
     }
+    voiceRoom.tick(now, me, {for (final e in _remotes.entries) e.key: e.value.person}, player.pos);
     departures.update(dt, t);
     dog.update(dt);
     office.update(t, dt, [
