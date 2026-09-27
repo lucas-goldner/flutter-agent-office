@@ -22,6 +22,16 @@ class ToonLight {
   Color ground = const Color(0xFFC9A27A);
   double hemiIntensity = 1.5 / math.pi;
   double ambient = 0.5 / math.pi;
+
+  /// Lamplight filling the office and the garage at night: linear colour x strength.
+  vm.Vector3 officeLight = vm.Vector3.zero();
+  vm.Vector3 garageLight = vm.Vector3.zero();
+
+  /// Up to eight pools of lamplight: position and reach, and linear colour x power.
+  final List<vm.Vector4> lampPos = List.generate(8, (_) => vm.Vector4.zero());
+  final List<vm.Vector3> lampColor = List.generate(8, (_) => vm.Vector3.zero());
+  double wet = 0;
+  double snow = 0;
 }
 
 class _Shader {
@@ -82,9 +92,27 @@ class Toon {
     }
   }
 
+  static vm.Matrix4 _columns(Iterable<vm.Vector4> cols) {
+    final m = vm.Matrix4.zero();
+    var i = 0;
+    for (final c in cols) {
+      m.setColumn(i++, c);
+    }
+    return m;
+  }
+
   static void _apply(PreprocessedMaterial m) {
     final l = light;
+    vm.Vector4 col(vm.Vector3 c) => vm.Vector4(c.x, c.y, c.z, 0);
     m.parameters
+      ..setVec3('office_light', l.officeLight)
+      ..setVec3('garage_light', l.garageLight)
+      ..setMat4('lamp_pos_a', _columns(l.lampPos.take(4)))
+      ..setMat4('lamp_pos_b', _columns(l.lampPos.skip(4)))
+      ..setMat4('lamp_col_a', _columns(l.lampColor.take(4).map(col)))
+      ..setMat4('lamp_col_b', _columns(l.lampColor.skip(4).map(col)))
+      ..setFloat('wet', l.wet)
+      ..setFloat('snow', l.snow)
       ..setVec3('sun_direction', l.sunDirection.normalized())
       ..setColor('sun_color', l.sunColor)
       ..setFloat('sun_intensity', l.sunIntensity)

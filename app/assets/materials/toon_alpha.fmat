@@ -16,6 +16,19 @@ material {
     { type: float, name: hemi_intensity, default: 0.48 },
     { type: float, name: ambient, default: 0.16 },
     { type: vec4, name: emissive, hint: source_color, default: [0, 0, 0, 1] },
+    // The sky's lamplight (world/sky.dart): the office's and the garage's fill, and pools of light
+    // round the eight lamps nearest the camera (xyz + reach in lamp_pos, rgb x power in lamp_col).
+    { type: vec3, name: office_light, default: [0, 0, 0] },
+    { type: vec3, name: garage_light, default: [0, 0, 0] },
+    { type: mat4, name: lamp_pos_a, default: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
+    { type: mat4, name: lamp_pos_b, default: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
+    { type: mat4, name: lamp_col_a, default: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
+    { type: mat4, name: lamp_col_b, default: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
+    // How wet the ground outside is, and how much snow lies on what faces up out there: 0-1.
+    { type: float, name: wet, default: 0 },
+    { type: float, name: snow, default: 0 },
+    // 0 for things the sky's extras must leave alone (your first-person hands).
+    { type: float, name: sky_on, default: 1 },
     { type: sampler2d, name: base_color_texture, hint: default_white },
   ],
 }
@@ -27,6 +40,35 @@ fragment {
     if (x < 1.0 / 3.0) return 90.0 / 255.0;
     if (x < 2.0 / 3.0) return 185.0 / 255.0;
     return 1.0;
+  }
+
+  // Inside the office's walls (and up through its open top). Floor -18..18 x -13..13.
+  float InOffice(vec3 p) {
+    vec3 d = max(vec3(-18.02, -0.06, -13.02) - p, p - vec3(18.02, 40.0, 13.02));
+    return 1.0 - smoothstep(0.0, 0.12, length(max(d, 0.0)));
+  }
+
+  // Under the office: walled at the back and on the west, open to the street on the south and east.
+  float InGarage(vec3 p) {
+    if (p.x < -18.25 || p.z < -13.25 || p.y < -4.1 || p.y > -0.28) return 0.0;
+    return 1.0 - smoothstep(0.0, 3.0, length(max(p.xz - vec2(18.3, 13.3), 0.0)));
+  }
+
+  vec3 Pool(vec4 lamp, vec3 color, vec3 p, vec3 n) {
+    if (lamp.w <= 0.0) return vec3(0.0);
+    vec3 d = lamp.xyz - p;
+    float r = length(d);
+    float k = 1.0 - clamp(r / lamp.w, 0.0, 1.0);
+    return color * k * k * (0.3 + 0.7 * max(dot(n, d / max(r, 0.001)), 0.0));
+  }
+
+  vec3 Lamps(vec3 p, vec3 n) {
+    vec3 sum = vec3(0.0);
+    for (int i = 0; i < 4; i++) {
+      sum += Pool(material_params.lamp_pos_a[i], material_params.lamp_col_a[i].rgb, p, n);
+      sum += Pool(material_params.lamp_pos_b[i], material_params.lamp_col_b[i].rgb, p, n);
+    }
+    return sum;
   }
 
   void Surface(inout MaterialInputs material) {
@@ -43,9 +85,23 @@ fragment {
     vec4 tex = texture(base_color_texture, GetUV0());
     vec4 vc = GetVertexColor();
     vec3 albedo = material_params.base_color.rgb * vc.rgb * tex.rgb;
+
+    // Wet ground is darker; snow covers what faces up. Only outdoors.
+    vec3 p = GetWorldPosition();
+    float on = material_params.sky_on;
+    float indoor = on * InOffice(p);
+    float garage = on * InGarage(p);
+    float faceUp = on * (1.0 - max(indoor, garage)) * smoothstep(0.45, 0.85, n.y);
+    albedo *= 1.0 - 0.38 * material_params.wet * faceUp;
+    albedo = mix(albedo, vec3(0.93, 0.96, 1.0), material_params.snow * faceUp);
     // Intensities are the old client's (hemi 1.5, ambient 0.5, sun 2.2) over pi, as three.js's
     // Lambert BRDF divides them.
     vec3 light = material_params.sun_color.rgb * sun + hemi + vec3(material_params.ambient);
+    // The lamps' light, where it's dark: three.js's indirect diffuse is BRDF_Lambert, albedo / pi.
+    if (on > 0.0) {
+      light += (indoor * material_params.office_light * (0.65 + 0.35 * n.y) +
+          (1.0 - indoor) * (garage * material_params.garage_light + Lamps(p, n))) / 3.14159265;
+    }
     vec3 color = albedo * light + material_params.emissive.rgb;
     material.base_color = vec4(color, material_params.base_color.a * vc.a * tex.a);
     PrepareMaterial(material);
