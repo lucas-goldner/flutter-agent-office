@@ -15,6 +15,7 @@ import '../shared/dog.dart';
 import '../shared/protocol.dart';
 import '../ui/theme.dart';
 import '../world/character.dart';
+import '../audio/sound_model.dart' show DogSounds;
 import '../world/dog.dart';
 import '../world/geo.dart';
 import '../world/hands.dart';

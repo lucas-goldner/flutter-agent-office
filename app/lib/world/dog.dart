@@ -2,6 +2,7 @@
 // that walks where the server says (see shared/dog.dart), sits, lies down, naps with its head on its
 // paws, sniffs, barks at a worker that needs input and wags when it's petted. Forward is +z.
 
+import '../audio/sound_model.dart' show DogSounds;
 import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart' show Alignment;
@@ -14,13 +15,6 @@ import 'geo.dart';
 import 'label_widgets.dart';
 import 'labels.dart';
 import 'toon.dart';
-
-abstract class DogSounds {
-  void bark(double x, double z, int times);
-
-  /// A happy little yip, when someone pets it.
-  void yip(double x, double z);
-}
 
 /// What the body eases toward for each thing it does.
 class DogPoseTarget {
