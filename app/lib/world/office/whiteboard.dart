@@ -9,7 +9,7 @@ import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
 import '../../shared/layout.dart' as lay;
-import '../../ui/theme.dart' show kFont;
+import '../../ui/theme.dart' show kFallback, kFont;
 import '../collider.dart';
 import '../text.dart';
 import '../toon.dart';
@@ -73,7 +73,7 @@ class WhiteboardStand {
       } else {
         void line(String s, double size, FontWeight weight, double y) {
           final tp = TextPainter(
-            text: TextSpan(text: s, style: TextStyle(fontFamily: kFont, fontSize: size, fontWeight: weight, color: hex('#b8c0c8'))),
+            text: TextSpan(text: s, style: TextStyle(fontFamily: kFont, fontFamilyFallback: kFallback, fontSize: size, fontWeight: weight, color: hex('#b8c0c8'))),
             textDirection: TextDirection.ltr,
           )..layout();
           tp.paint(g, Offset((w - tp.width) / 2, y - tp.height / 2));

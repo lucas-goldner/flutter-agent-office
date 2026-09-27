@@ -18,6 +18,7 @@
     "build:client": "vite build",
     "build:server": "tsc -p tsconfig.server.json",
     "build:flutter": "node scripts/build-flutter.mjs",
+    "build:whiteboard": "node scripts/build-whiteboard.mjs",
     "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "start": "node bin/agent-office.js",
     "prepare": "npm run build"

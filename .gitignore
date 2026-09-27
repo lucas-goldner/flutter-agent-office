@@ -4,3 +4,6 @@ dist
 *.log
 .DS_Store
 pw.txt
+
+# The whiteboard's Excalidraw bundle (scripts/build-whiteboard.mjs): several MB, built by npm run build:flutter.
+/app/web/excalidraw/

@@ -2,8 +2,6 @@
 // the scene in step with the store (people, workers, their laptops, the dog, the boards), runs the
 // frame loop (you, the camera, everyone else, the sky, sounds), and does what the keys and the
 // windows ask (hire, prompt, send home, sit, coffee, the gong…).
-//
-// Not here yet (see FLUTTER_WEB_PLAN.md): the whiteboard. Its buttons say so.
 
 import 'dart:async';
 import 'dart:math' as math;
@@ -51,6 +49,8 @@ import '../ui/accounts.dart';
 import '../ui/arcade.dart';
 import '../ui/terminal.dart';
 import '../ui/upgrade.dart';
+import '../ui/whiteboard.dart';
+import '../ui/whiteboard_logic.dart' show othersDrawing, whiteboardHint;
 import '../ui/usage.dart' show hiringPaused, usageLabel, usageTitle;
 import '../ui/worker_text.dart' show statusLabel;
 import '../voice/office_voice.dart';
@@ -183,7 +183,7 @@ class OfficeController implements OfficeActions {
       onAccounts: () => openAccounts(scope),
       onUpgrade: () => openUpgrade(scope),
       onSearch: showSearch,
-      onWhiteboard: _notYet,
+      onWhiteboard: () => whiteboard.open(),
       onDecor: () => hanger.active ? hanger.cancel() : hanger.start(),
       onSettings: showSettings,
       onHelp: openHelp,
@@ -196,6 +196,8 @@ class OfficeController implements OfficeActions {
 
   /// Voice chat and screen sharing (the TV, the thumbnails, mouths and proximity volume).
   late final OfficeVoice voiceRoom;
+  /// The 📝 whiteboard: its window, and the drawing on the board in the office.
+  late final WhiteboardHub whiteboard;
   late final PlayerController player;
   late final Person me;
   late final Hands hands;
@@ -265,6 +267,7 @@ class OfficeController implements OfficeActions {
     office = buildOffice(labels: labels);
     root.add(office.group);
     voiceRoom = OfficeVoice(store: store, net: net, tv: office.tvScreen, state: voice);
+    whiteboard = WhiteboardHub(scope, office.whiteboard);
     if (q['boards'] != '0') _mountBoards();
     skyView = SkyView(root, office.night);
     confetti = Confetti((x, z, y) => groundAt(office.colliders, x, z, y));
@@ -369,10 +372,9 @@ class OfficeController implements OfficeActions {
     _messages?.cancel();
     voiceRoom.dispose();
     hanger.dispose();
+    whiteboard.dispose();
     net.close();
   }
-
-  void _notYet() => toast('That part of the office is still moving over to the new client', ToastKind.warn);
 
   // ---- Boards: each face is a live Flutter widget on the wall -----------------------------------
 
@@ -412,6 +414,7 @@ class OfficeController implements OfficeActions {
       debugPrint('store.apply(${msg.runtimeType}) failed: $e\n$st');
     }
     _sentHome.clear();
+    whiteboard.route(msg);
     switch (msg) {
       case WelcomeMsg m:
         // A few pings, to line this page's clock up with the office's for the jukebox.
@@ -1047,7 +1050,7 @@ class OfficeController implements OfficeActions {
       case InteractKind.decor when target.decorId != null:
         hanger.view(target.decorId!);
       case InteractKind.whiteboard:
-        _notYet();
+        whiteboard.open();
       default:
         break;
     }
@@ -1327,10 +1330,7 @@ class OfficeController implements OfficeActions {
           ],
         );
       case InteractKind.whiteboard:
-        return (
-          '',
-          [const HintTitle('📝 Whiteboard'), const HintAside('drawing together is coming to the new client')],
-        );
+        return whiteboardHint(othersDrawing(store.drawing, store.you, store.peers));
       case InteractKind.elevator:
         final f = store.currentFloor();
         final n = store.floors.length;

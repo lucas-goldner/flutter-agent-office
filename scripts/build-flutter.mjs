@@ -1,5 +1,6 @@
 // Builds the Flutter web client (app/) and copies it to dist/flutter, where a packaged office
-// serves it from with --client flutter. Needs the Flutter SDK on PATH.
+// serves it from with --client flutter. Needs the Flutter SDK on PATH. The whiteboard's Excalidraw
+// bundle is built first (scripts/build-whiteboard.mjs), into app/web/excalidraw/, so Flutter copies it in.
 import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, rmSync } from 'node:fs';
 import path from 'node:path';
@@ -7,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const app = path.join(root, 'app');
+const wb = spawnSync(process.execPath, [path.join(root, 'scripts', 'build-whiteboard.mjs')], { cwd: root, stdio: 'inherit' });
+if (wb.status !== 0) process.exit(wb.status ?? 1);
 const r = spawnSync('flutter', ['build', 'web', '--release', '--no-web-resources-cdn'], {
   cwd: app,
   stdio: 'inherit',
