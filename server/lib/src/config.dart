@@ -168,6 +168,7 @@ Options:
                           machine's clock and the weather is made up
       --weather <kind>    Pin the weather: clear, cloudy, rain, storm, snow or
                           fog (env AGENT_OFFICE_WEATHER)
+      --version           Print the office's version
   -h, --help              Show this help
 
 Voice and screen sharing need a secure context: use https (a reverse proxy,

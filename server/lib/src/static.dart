@@ -24,7 +24,7 @@ String findPublicDir(String here, [String? override]) {
   for (final c in candidates) {
     if (File(p.join(c, 'index.html')).existsSync()) return c;
   }
-  throw StateError("The client isn't built (looked in ${candidates.join(', ')}). Run `npm run build:client`.");
+  throw StateError("The client isn't built (looked in ${candidates.join(', ')}). Run `dart run tool/build.dart`.");
 }
 
 final _leadingParents = RegExp(r'^(\.\.[/\\])+');

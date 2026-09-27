@@ -126,7 +126,7 @@ void main() {
     expect(findPublicDir('/nowhere', web), web);
     expect(
       () => findPublicDir('/nowhere', p.join(root, 'none')),
-      throwsA(predicate((e) => e.toString().contains('build:client'))),
+      throwsA(predicate((e) => e.toString().contains('dart run tool/build.dart'))),
     );
     final dist = p.join(root, 'dist');
     Directory(p.join(dist, 'flutter')).createSync(recursive: true);
