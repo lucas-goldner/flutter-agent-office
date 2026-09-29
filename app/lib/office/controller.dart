@@ -18,6 +18,7 @@ import '../interop/browser.dart';
 import '../interop/open_link.dart';
 import '../net/api.dart';
 import '../net/office_socket.dart' hide Profile;
+import '../nextup.dart';
 import '../notify.dart';
 import '../office_scope.dart';
 import 'package:office_shared/avatar.dart';
@@ -31,6 +32,7 @@ import '../state/store.dart';
 import '../ui/ask.dart';
 import '../ui/boards.dart';
 import '../ui/changes.dart';
+import '../ui/compass.dart';
 import '../ui/character.dart';
 import '../ui/elevator.dart';
 import '../ui/help.dart';
@@ -332,6 +334,7 @@ class OfficeController implements OfficeActions {
 
     _listen(Topic.peers, _syncPeers);
     _listen(Topic.workers, _syncWorkers);
+    _listen(Topic.workers, _renderWaiting);
     _listen(Topic.floors, _paintFloor);
     _listen(Topic.dog, () => dog.sync(store.dog, store.dogStart));
     _listen(Topic.jukebox, _syncJukebox);
@@ -881,15 +884,84 @@ class OfficeController implements OfficeActions {
     final desk = deskById[deskId];
     if (desk == null) return;
     ModalStack.instance.closeAll();
-    // Behind the worker, looking over their shoulder at the laptop.
+    _standAt(desk);
+    final w = store.workerAtDesk(deskId);
+    toast(w != null ? "You're at ${desk.label}, ${w.name}'s desk" : "You're at ${desk.label}");
+  }
+
+  /// Behind the worker, looking over their shoulder at the laptop. From a seat or mid-picture it gets you up first.
+  void _standAt(DeskDef desk) {
+    if (player.seat != null) standUp();
+    if (hanger.active) hanger.cancel();
     final spot = deskSeat(desk, desk.beanbag ? 1.6 : 2.4);
     player.pos.setValues(spot.x, 0, spot.z);
     player.vy = 0;
     player.facing = math.atan2(desk.x - spot.x, desk.z - spot.z);
     player.camYaw = player.facing - math.pi;
     player.lookPitch = -0.2;
-    final w = store.workerAtDesk(deskId);
-    toast(w != null ? "You're at ${desk.label}, ${w.name}'s desk" : "You're at ${desk.label}");
+  }
+
+  // ---- Who's waiting on you: N, the chip that counts them, and the compass ------------------------
+
+  final NextUp _nextUp = NextUp();
+
+  /// The chip's text ("🙋 2 waiting · ✅ 1 done", empty for none) and whether they're all done.
+  final ValueNotifier<(String, bool)> waitingChip = ValueNotifier(('', false));
+
+  /// N: to the worker that has waited longest on someone, and on each press after, the next.
+  void goToNextWaiting() {
+    if (_riding != null) return;
+    final w = _nextUp.next(store.workers.values, _waitingBeside());
+    final desk = w == null ? null : deskById[w.deskId];
+    if (w == null || desk == null) {
+      final other = store.floors.where((f) => f.id != store.floor && f.waiting > 0).firstOrNull;
+      toast(other != null
+          ? "🛗 Nobody's waiting on this floor. ${other.waiting} on the ${other.name} floor: take the elevator"
+          : '👍 Nobody is waiting on you');
+      return;
+    }
+    ModalStack.instance.closeAll();
+    _standAt(desk);
+    final waiting = waitingInOrder(store.workers.values);
+    final of = waiting.length > 1 ? ' (${waiting.indexWhere((x) => x.id == w.id) + 1} of ${waiting.length})' : '';
+    toast('${w.status == WorkerStatus.needsInput ? '🙋 ${w.name} needs input' : '✅ ${w.name} is done'}$of. E opens its terminal');
+  }
+
+  /// The waiting worker you're standing at, if any: N skips it while anyone else is waiting.
+  String? _waitingBeside() {
+    String? best;
+    var bestD = 2.5;
+    for (final w in store.workers.values) {
+      final desk = deskById[w.deskId];
+      if (desk == null || !_workerViews.containsKey(w.id) || !waitingOnSomeone(w)) continue;
+      final d = math.sqrt(math.pow(desk.x - player.pos.x, 2) + math.pow(desk.z - player.pos.z, 2));
+      if (d < bestD) {
+        bestD = d;
+        best = w.id;
+      }
+    }
+    return best;
+  }
+
+  void _renderWaiting() {
+    final waiting = waitingInOrder(store.workers.values);
+    final next = (waitingLabel(waiting), waiting.every((w) => w.status == WorkerStatus.done));
+    if (next != waitingChip.value) waitingChip.value = next;
+  }
+
+  /// Arrows to the waiting workers you can't see from where you're looking (engine space, at their heads).
+  List<Bearing> waitingBearings() {
+    if (_riding != null || ModalStack.instance.open) return const [];
+    return [
+      for (final w in store.workers.values)
+        if (waitingOnSomeone(w) && _workerViews[w.id] != null)
+          Bearing(
+            id: w.id,
+            name: w.name,
+            status: w.status,
+            at: _workerViews[w.id]!.model.root.globalTransform.transform3(vm.Vector3(0, 1.2, 0)),
+          ),
+    ];
   }
 
   /// Opening a sleeping worker's terminal wakes it, so there's nothing to press first.
@@ -1466,6 +1538,10 @@ class OfficeController implements OfficeActions {
     }
     if (e.physicalKey == PhysicalKeyboardKey.keyF) {
       hanger.start();
+      return true;
+    }
+    if (e.physicalKey == PhysicalKeyboardKey.keyN) {
+      goToNextWaiting();
       return true;
     }
     return false;

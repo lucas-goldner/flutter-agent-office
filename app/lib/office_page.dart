@@ -9,6 +9,7 @@ import 'interop/pointer_lock.dart';
 import 'office/controller.dart';
 import 'office_scope.dart';
 import 'ui/arcade.dart';
+import 'ui/compass.dart';
 import 'ui/hud.dart';
 import 'ui/modal.dart';
 import 'world/hands.dart';
@@ -175,6 +176,14 @@ class _OfficePageState extends State<OfficePage> {
                 ),
                 Positioned.fill(
                   child: LabelLayer(hub: c.labels, camera: () => c.camera, blocked: c.labelBlocked),
+                ),
+                Positioned.fill(
+                  child: CompassLayer(
+                    camera: () => c.camera,
+                    bearings: c.waitingBearings,
+                    waiting: c.waitingChip,
+                    onNext: c.goToNextWaiting,
+                  ),
                 ),
                 Positioned.fill(
                   child: IgnorePointer(
