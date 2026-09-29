@@ -148,7 +148,7 @@ class WhiteboardHub {
       // doesn't take part in hit testing), so a click on the drawing would count as one outside.
       backdropCloses: false,
       onClose: () => _closed(b),
-    );
+    )..doing = '🖍️ at the whiteboard';
     // Esc first gets you out of whatever you're doing in Excalidraw (typing, drawing, a menu, a tool),
     // then lets go of what's selected, and once there's nothing left, closes the window.
     b.removeKeys = onWindowKeyDown((e) {

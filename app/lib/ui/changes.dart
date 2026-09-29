@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../interop/portable.dart';
+import '../net/server.dart';
 import '../office_scope.dart';
 import 'package:office_shared/protocol.dart';
 import '../state/store.dart';
@@ -36,6 +37,7 @@ void openChanges(OfficeScope scope, String workerId, {VoidCallback? onTerminal})
       if (identical(_current?.modal, modal)) _current = null;
     },
   );
+  modal.doing = "🌿 looking over ${scope.store.workers[workerId]!.name}'s changes";
   _current = (workerId: workerId, modal: modal);
   previous?.modal.close();
 }
@@ -275,7 +277,15 @@ class _ChangesWindowState extends State<_ChangesWindow> {
           builder: (context, box) {
             final narrow = box.maxWidth < 700;
             final files = _FilesList(state: _state, selected: _selected, onSelect: _select, scroll: _listScroll);
-            final diff = _DiffPane(state: _state, file: _file(_selected), diff: _diff, error: _diffError, name: _name, onDiscard: _discardOne);
+            final diff = _DiffPane(
+              state: _state,
+              file: _file(_selected),
+              diff: _diff,
+              error: _diffError,
+              name: _name,
+              onDiscard: _discardOne,
+              pictureUrl: (f, side) => serverUrl(pictureUrl(widget.scope.store.floor, widget.workerId, f, side)),
+            );
             return Flex(
               direction: narrow ? Axis.vertical : Axis.horizontal,
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -508,7 +518,15 @@ class _FileRowState extends State<_FileRow> {
 }
 
 class _DiffPane extends StatelessWidget {
-  const _DiffPane({required this.state, required this.file, required this.diff, required this.error, required this.name, required this.onDiscard});
+  const _DiffPane({
+    required this.state,
+    required this.file,
+    required this.diff,
+    required this.error,
+    required this.name,
+    required this.onDiscard,
+    required this.pictureUrl,
+  });
 
   final ChangesState? state;
   final ChangedFile? file;
@@ -516,6 +534,9 @@ class _DiffPane extends StatelessWidget {
   final String? error;
   final String name;
   final ValueChanged<ChangedFile> onDiscard;
+
+  /// Where one side ('old' or 'new') of a changed picture loads from.
+  final String Function(ChangedFile f, String side) pictureUrl;
 
   @override
   Widget build(BuildContext context) {
@@ -577,13 +598,174 @@ class _DiffPane extends StatelessWidget {
         ],
       );
     }
-    if (error != null) return _Empty(children: [_EmptyText(error!)]);
-    final lines = diff;
-    if (lines == null) return const SizedBox.shrink();
-    return SelectionArea(
-      child: ListView.builder(padding: const EdgeInsets.only(bottom: 12), itemCount: lines.length, itemBuilder: (context, i) => _DiffRow(lines[i])),
+    final type = changedImageType(f.path);
+    final text = error != null
+        ? _Empty(children: [_EmptyText(error!)])
+        : diff == null
+            ? null
+            : SelectionArea(
+                child: ListView.builder(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  itemCount: diff!.length,
+                  itemBuilder: (context, i) => _DiffRow(diff![i]),
+                ),
+              );
+    if (text == null) return const SizedBox.shrink();
+    if (type == null) return text;
+    // A picture's diff only says it differs, so show the picture instead. An SVG is text too: its diff stays below.
+    final preview = _PicturePreview(file: f, url: pictureUrl);
+    if (type != 'image/svg+xml') return SingleChildScrollView(child: preview);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ConstrainedBox(constraints: const BoxConstraints(maxHeight: 320), child: SingleChildScrollView(child: preview)),
+        Expanded(child: text),
+      ],
     );
   }
+}
+
+/// A changed picture, before and after, each on a checkerboard so its transparent parts show.
+class _PicturePreview extends StatelessWidget {
+  const _PicturePreview({required this.file, required this.url});
+
+  final ChangedFile file;
+  final String Function(ChangedFile f, String side) url;
+
+  @override
+  Widget build(BuildContext context) {
+    final sides = pictureSides(file);
+    final figures = [for (final side in sides) Expanded(child: _Figure(file: file, side: side, url: url(file, side)))];
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: LayoutBuilder(
+        builder: (context, c) => c.maxWidth < 500
+            ? Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [for (final side in sides) _Figure(file: file, side: side, url: url(file, side))])
+            : Row(crossAxisAlignment: CrossAxisAlignment.start, children: [for (var i = 0; i < figures.length; i++) ...[if (i > 0) const SizedBox(width: 12), figures[i]]]),
+      ),
+    );
+  }
+}
+
+class _Figure extends StatefulWidget {
+  const _Figure({required this.file, required this.side, required this.url});
+
+  final ChangedFile file;
+  final String side;
+  final String url;
+
+  @override
+  State<_Figure> createState() => _FigureState();
+}
+
+class _FigureState extends State<_Figure> {
+  String _size = '';
+
+  @override
+  Widget build(BuildContext context) {
+    final old = widget.side == 'old';
+    final label = old ? 'Before' : 'After';
+    final alt = '${old ? widget.file.from ?? widget.file.path : widget.file.path} (${label.toLowerCase()})';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Text(label.toUpperCase(), style: heavy(12, color: Swatch.muted, weight: FontWeight.w900)),
+              const SizedBox(width: 8),
+              Text(_size, style: heavy(12, color: Swatch.muted)),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Container(
+            constraints: const BoxConstraints(minHeight: 120),
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(borderRadius: BorderRadius.circular(10), border: Border.all(color: _faint, width: 2)),
+            child: CustomPaint(
+              painter: const _Checkerboard(),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.6),
+                  child: Semantics(
+                    label: alt,
+                    image: true,
+                    child: Image.network(
+                      widget.url,
+                      key: ValueKey(widget.url),
+                      headers: imageHeaders(),
+                      fit: BoxFit.contain,
+                      loadingBuilder: (context, child, progress) => progress == null ? child : const Padding(padding: EdgeInsets.all(20), child: Spinner()),
+                      errorBuilder: (_, _, _) => Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8)),
+                        child: Text(
+                          "Couldn't load the picture ${old ? 'from before' : 'as it is now'}.",
+                          style: heavy(13, color: Swatch.muted, weight: FontWeight.w700),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _resolveSize();
+  }
+
+  @override
+  void didUpdateWidget(_Figure old) {
+    super.didUpdateWidget(old);
+    if (old.url != widget.url) _resolveSize();
+  }
+
+  ImageStream? _stream;
+  ImageStreamListener? _listener;
+
+  void _resolveSize() {
+    if (_listener != null) _stream?.removeListener(_listener!);
+    final stream = NetworkImage(widget.url, headers: imageHeaders()).resolve(createLocalImageConfiguration(context));
+    final listener = ImageStreamListener((info, _) {
+      if (mounted) setState(() => _size = '${info.image.width} × ${info.image.height}');
+    }, onError: (_, _) {});
+    stream.addListener(listener);
+    _stream = stream;
+    _listener = listener;
+  }
+
+  @override
+  void dispose() {
+    if (_listener != null) _stream?.removeListener(_listener!);
+    super.dispose();
+  }
+}
+
+/// The checkerboard behind a picture (16px squares of #eeeae4 and white).
+class _Checkerboard extends CustomPainter {
+  const _Checkerboard();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(Offset.zero & size, Paint()..color = Colors.white);
+    final p = Paint()..color = const Color(0xFFEEEAE4);
+    for (var y = 0.0; y < size.height; y += 8) {
+      for (var x = ((y / 8).round().isOdd ? 8.0 : 0.0); x < size.width; x += 16) {
+        canvas.drawRect(Rect.fromLTWH(x, y, 8, 8), p);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_Checkerboard old) => false;
 }
 
 class _DiffRow extends StatelessWidget {

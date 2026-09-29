@@ -5,6 +5,7 @@
 // typist (see TermSizePolicy).
 
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -90,6 +91,7 @@ void openTerminal(OfficeScope scope, String workerId, {VoidCallback? onChanges, 
       if (identical(_current?.modal, modal)) _current = null;
     },
   );
+  modal.doing = "💻 in ${scope.store.workers[workerId]!.name}'s terminal";
   _current = (workerId: workerId, modal: modal, find: (f) => key.currentState?.find(f));
 }
 
@@ -127,6 +129,27 @@ class _TerminalWindowState extends State<_TerminalWindow> {
   Offset? _downAt;
   bool _overLink = false;
 
+  /// Who else is typing here right now (PeerInfo ids), until when (ms).
+  final Map<String, int> _typing = {};
+  Timer? _typingTimer;
+  int _typingSentAt = 0;
+
+  /// Tells the others here you're typing, about once a second while you are. Only your own keys and
+  /// pastes count, not the terminal answering the program's queries.
+  void _sayTyping() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now - _typingSentAt < 1000) return;
+    _typingSentAt = now;
+    widget.scope.net.send(TermTypingCmd(widget.workerId));
+  }
+
+  /// Drops typists whose last word is too old, or who've left.
+  void _pruneTyping() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final ids = worker?.viewerIds ?? const <String>[];
+    _typing.removeWhere((id, until) => until <= now || !ids.contains(id));
+  }
+
   Store get store => widget.scope.store;
   WorkerInfo? get worker => store.workers[widget.workerId];
 
@@ -143,7 +166,15 @@ class _TerminalWindowState extends State<_TerminalWindow> {
       }),
     );
     store.topic(Topic.workers).addListener(_refresh);
+    // A viewer's name or colour can change while they're here.
+    store.topic(Topic.peers).addListener(_refreshPeers);
+    // Typing stops showing a couple of seconds after the last keystroke.
+    _typingTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
+      if (_typing.isEmpty || !mounted) return;
+      setState(_pruneTyping);
+    });
     _stopPaste = interceptPaste(() => _focus.hasFocus, (text) {
+      _sayTyping();
       _sendSize(typing: true);
       _term.paste(text);
     });
@@ -159,6 +190,8 @@ class _TerminalWindowState extends State<_TerminalWindow> {
       s.cancel();
     }
     store.topic(Topic.workers).removeListener(_refresh);
+    store.topic(Topic.peers).removeListener(_refreshPeers);
+    _typingTimer?.cancel();
     _stopPaste();
     _resizeDebounce?.cancel();
     widget.scope.net.send(WorkerDetachCmd(widget.workerId));
@@ -179,6 +212,8 @@ class _TerminalWindowState extends State<_TerminalWindow> {
     switch (msg) {
       case TermDataMsg(:final workerId, :final data) when workerId == widget.workerId:
         _term.write(data);
+      case TermTypingMsg m when m.workerId == widget.workerId:
+        setState(() => _typing[m.id] = DateTime.now().millisecondsSinceEpoch + kTypingShowsMs);
       case TermSnapshotMsg m when m.workerId == widget.workerId:
         // A fresh terminal is xterm.js's reset(): new buffers, modes and scrollback.
         setState(() {
@@ -243,6 +278,10 @@ class _TerminalWindowState extends State<_TerminalWindow> {
     if (mounted) setState(() {});
   }
 
+  void _refreshPeers() {
+    if (mounted) setState(() {});
+  }
+
   void _scrollToBottom() {
     if (_scroll.hasClients) _scroll.jumpTo(_scroll.position.maxScrollExtent);
   }
@@ -292,6 +331,7 @@ class _TerminalWindowState extends State<_TerminalWindow> {
 
   KeyEventResult _onKey(FocusNode node, KeyEvent e) {
     if (e is! KeyDownEvent && e is! KeyRepeatEvent) return KeyEventResult.ignored;
+    _sayTyping();
     final ctrl = HardwareKeyboard.instance.isControlPressed;
     final meta = HardwareKeyboard.instance.isMetaPressed;
     if (ctrl && (e.logicalKey == LogicalKeyboardKey.bracketRight || e.character == ']')) {
@@ -309,6 +349,7 @@ class _TerminalWindowState extends State<_TerminalWindow> {
       Clipboard.getData(Clipboard.kTextPlain).then((d) {
         final text = d?.text ?? '';
         if (text.isEmpty || !mounted) return;
+        _sayTyping();
         _sendSize(typing: true);
         _term.paste(text);
       });
@@ -413,6 +454,30 @@ class _TerminalWindowState extends State<_TerminalWindow> {
     );
   }
 
+  /// The viewers' faces, and who's typing (or who typed last, once nobody is).
+  List<Widget> _presence(WorkerInfo w, TextStyle muted) {
+    _pruneTyping();
+    final people = viewersOf(w.viewerIds, store.peers, store.you, _typing.keys.toSet());
+    final typists = [for (final v in people) if (v.typing && !v.you) v.name];
+    return [
+      if (people.isNotEmpty)
+        Tooltip(
+          message: 'In this terminal: ${people.map((v) => v.you ? '${v.name} (you)' : v.name).join(', ')}',
+          child: Row(mainAxisSize: MainAxisSize.min, children: [for (final v in people) Padding(padding: const EdgeInsets.only(right: 4), child: _Face(v))]),
+        )
+      else if (w.viewers.isNotEmpty)
+        // An office from before viewerIds: just the names.
+        Text('👀 ${w.viewers.join(', ')}', style: muted),
+      if (typists.isNotEmpty)
+        Text('✍️ ${typingLine(typists)}', style: heavy(12))
+      else if (w.lastInput != null)
+        Tooltip(
+          message: '${w.lastInput!.by} typed here last, ${timeAgo(w.lastInput!.at)}',
+          child: Text('⌨️ ${w.lastInput!.by}', style: muted),
+        ),
+    ];
+  }
+
   List<Widget> _headerExtras(WorkerInfo w) {
     final project = store.project;
     final openCode = w.kind == WorkerKind.agent && resolvedProvider(w.provider, project) == AgentProvider.opencode;
@@ -425,12 +490,7 @@ class _TerminalWindowState extends State<_TerminalWindow> {
           message: workerCostTitle(w, project),
           child: Text(cost, style: muted),
         ),
-      if (w.viewers.isNotEmpty) Text('👀 ${w.viewers.join(', ')}', style: muted),
-      if (w.lastInput != null)
-        Tooltip(
-          message: '${w.lastInput!.by} typed here last, ${timeAgo(w.lastInput!.at)}',
-          child: Text('⌨️ ${w.lastInput!.by}', style: muted),
-        ),
+      ..._presence(w, muted),
       if (openCode)
         OfficeButton(
           label: '🧠 Models',
@@ -447,6 +507,87 @@ class _TerminalWindowState extends State<_TerminalWindow> {
           },
         ),
     ];
+  }
+}
+
+/// A viewer's face in the header: their initials on their colour, bobbing with a ✎ while they type.
+class _Face extends StatefulWidget {
+  const _Face(this.v);
+  final TermViewer v;
+
+  @override
+  State<_Face> createState() => _FaceState();
+}
+
+class _FaceState extends State<_Face> with SingleTickerProviderStateMixin {
+  late final AnimationController _bob = AnimationController(vsync: this, duration: const Duration(milliseconds: 900));
+
+  @override
+  void initState() {
+    super.initState();
+    _sync();
+  }
+
+  @override
+  void didUpdateWidget(_Face old) {
+    super.didUpdateWidget(old);
+    _sync();
+  }
+
+  void _sync() {
+    final still = WidgetsBinding.instance.platformDispatcher.accessibilityFeatures.disableAnimations;
+    if (widget.v.typing && !still) {
+      if (!_bob.isAnimating) _bob.repeat();
+    } else {
+      _bob.stop();
+      _bob.value = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _bob.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final v = widget.v;
+    final face = Container(
+      width: 26,
+      height: 26,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(color: hexColor(v.color), shape: BoxShape.circle, border: Border.all(color: Swatch.ink, width: 2)),
+      child: Text(initials(v.name), style: heavy(10, weight: FontWeight.w900)),
+    );
+    return Tooltip(
+      message: '${v.name}${v.you ? ' (you)' : ''}${v.typing ? ' · typing' : ''}',
+      child: Padding(
+        padding: EdgeInsets.only(right: v.typing ? 4 : 0),
+        child: AnimatedBuilder(
+          animation: _bob,
+          builder: (context, child) => Transform.translate(offset: Offset(0, -3 * math.sin(_bob.value * math.pi)), child: child),
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              face,
+              if (v.typing)
+                Positioned(
+                  right: -9,
+                  bottom: -7,
+                  child: Container(
+                    width: 15,
+                    height: 15,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(color: Swatch.paper, shape: BoxShape.circle, border: Border.all(color: Swatch.ink, width: 2)),
+                    child: Text('✎', style: heavy(7, weight: FontWeight.w900).copyWith(height: 1)),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 

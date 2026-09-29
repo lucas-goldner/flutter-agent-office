@@ -102,6 +102,31 @@ abstract final class SkyColors {
   static final rain = Rgb.hex(0xbcd0e6);
 }
 
+/// Halloween's sky: a bruised purple overhead going blood orange at the horizon, and a big harvest moon.
+abstract final class SpookyColors {
+  static final day = Rgb.hex(0x6f5b8e);
+  static final dusk = Rgb.hex(0xff5a1f);
+  static final night = Rgb.hex(0x24102f);
+  static final greyDay = Rgb.hex(0x5b5068);
+  static final greyNight = Rgb.hex(0x150d1f);
+  static final fogDay = Rgb.hex(0x7e7194);
+  static final fogNight = Rgb.hex(0x34223f);
+  static final cloud = Rgb.hex(0x5a4f6e);
+  static final hemiSky = Rgb.hex(0xc3b0ff);
+  static final hemiGround = Rgb.hex(0x5a3d2b);
+  static final sun = Rgb.hex(0xff8a45);
+  static final moon = Rgb.hex(0xffc46b);
+  static final moonLight = Rgb.hex(0xc9b3ff);
+}
+
+/// Where Halloween's harvest moon hangs, whatever the hour: low in the south, just over the roofs
+/// across the street from the balcony, and in sight through the south windows.
+const double kSpookyMoonEl = 21 * _deg, kSpookyMoonAz = 182 * _deg;
+
+/// The way to (el, az) from the middle of the sky.
+vm.Vector3 skyward(double el, double az) =>
+    vm.Vector3(math.cos(el) * math.sin(az), math.sin(el), -math.cos(el) * math.cos(az));
+
 /// How strong the sun and the sky's light are on a clear day, which is what the lamps make up for.
 const double kFullDay = 1.5 + 0.5 + 0.6 * 2.2;
 
@@ -191,6 +216,32 @@ class SkyModel {
   final List<double> _flashes = [];
   double _nextFlash = 0;
 
+  /// The building's holiday (see [setTheme]), and how far into Halloween's and Christmas's skies it's eased, 0-1.
+  HolidayTheme? theme;
+  double spooky = 0;
+  double festive = 0;
+
+  /// Seconds left of hurrying the weather along, after the theme changed.
+  double _rush = 0;
+
+  /// When a far-off flash lights the Halloween sky next.
+  double _nextSpook = 0;
+
+  /// Which way the moon is (a unit vector), how big, and its colour: at Halloween, a big orange
+  /// harvest moon hangs low over the street all day.
+  vm.Vector3 moonDir = vm.Vector3(0, 1, 0);
+  double moonScale = 1;
+  Rgb moonColor = SkyColors.white;
+
+  /// The building's holiday: Halloween's sky is a creepy one, purple and blood orange with a harvest
+  /// moon hanging low and the odd far-off flash, dim enough that the lamps and the jack-o'-lanterns
+  /// glow; Christmas brings snow. Either eases in over a few seconds.
+  void setTheme(HolidayTheme? t) {
+    if (t == theme) return;
+    theme = t;
+    if (_heard) _rush = 10;
+  }
+
   /// The server's word on the sky. The weather eases from one spell to the next; a new place lands at once.
   void set(SkyState s) {
     if (!_heard || s.lat != state.lat || s.lon != state.lon) _snap = true;
@@ -217,11 +268,23 @@ class SkyModel {
 
   void update(double dt, double t, [int? wallMs]) {
     final s = state;
-    final weather = preview.weather ?? s.weather;
-    final k = preview.intensity ?? (preview.weather != null ? 0.8 : s.intensity);
+    var weather = preview.weather ?? s.weather;
+    var k = preview.intensity ?? (preview.weather != null ? 0.8 : s.intensity);
+    // It snows all through Christmas, whatever the forecast says.
+    if (theme == HolidayTheme.christmas && preview.weather == null) {
+      k = weather == Weather.snow ? math.max(k, 0.5) : 0.6;
+      weather = Weather.snow;
+    }
     final snap = _snap;
     _snap = false;
-    double step(double x, double to, double secs) => snap ? to : ease(x, to, dt, secs);
+    // Just after the theme changed, the weather turns in seconds rather than minutes.
+    final quick = _rush > 0 ? 0.2 : 1.0;
+    final rushing = _rush > 0;
+    _rush = math.max(0, _rush - dt);
+    double step(double x, double to, double secs) => snap ? to : ease(x, to, dt, secs * quick);
+    spooky = step(spooky, theme == HolidayTheme.halloween ? 1 : 0, 12);
+    festive = step(festive, theme == HolidayTheme.christmas ? 1 : 0, 12);
+    final spook = spooky;
 
     // The weather, easing from one spell to the next.
     final wantCover = switch (weather) {
@@ -234,7 +297,15 @@ class SkyModel {
     };
     final wantRain = weather == Weather.rain ? k : weather == Weather.storm ? math.max(0.8, k) : 0.0;
     final wantSnow = weather == Weather.snow ? k : 0.0;
-    final wantFog = weather == Weather.fog ? k : weather == Weather.rain ? 0.12 * k : weather == Weather.snow ? 0.3 * k : 0.0;
+    var wantFog = weather == Weather.fog
+        ? k
+        : weather == Weather.rain
+        ? 0.12 * k
+        : weather == Weather.snow
+        ? 0.3 * k
+        : 0.0;
+    // A thin, creepy mist hangs about all Halloween.
+    if (theme == HolidayTheme.halloween) wantFog = math.max(wantFog, 0.3);
     cover = step(cover, wantCover, 20);
     rain = step(rain, wantRain, 12);
     snow = step(snow, wantSnow, 12);
@@ -243,24 +314,32 @@ class SkyModel {
     // Wet ground dries off slowly; snow piles up over a few minutes and takes a while to melt.
     final raining = rain > 0.05, snowing = snow > 0.05;
     wet = snap ? (raining ? 1 : 0) : ease(wet, raining ? 1 : 0, dt, raining ? 30 : 400);
-    lying = snap ? (snowing ? 1 : 0) : ease(lying, snowing ? 1 : 0, dt, snowing ? 120 : 900);
+    lying = snap ? (snowing ? 1 : 0) : ease(lying, snowing ? 1 : 0, dt, (snowing ? 120 : 900) * (rushing ? 0.04 : 1));
 
     // The sun, and how much light it and the sky give.
     final sp = sunPosition(now(wallMs), s.lat, s.lon);
     sunEl = sp.el;
     sunAz = sp.az;
     final elD = sp.el / _deg;
-    final day = smooth(-8, 4, elD);
+    // Halloween's days are a long, gloomy dusk.
+    final day = smooth(-8, 4, elD) * (1 - 0.6 * spook);
     final dusk = math.max(0.0, 1 - (elD + 1).abs() / 9) * (1 - cover);
     daylight = day;
+    if (spook > 0.5 && storm < 0.5 && t >= _nextSpook) {
+      if (_nextSpook > 0) {
+        _flashes.addAll([t, t + _rand(0.12, 0.3)]);
+        onThunder?.call(_rand(1.5, 4), _rand(0.25, 0.45));
+      }
+      _nextSpook = t + _rand(25, 70);
+    }
     _lightning(t, dt);
-    final sunI = 2.2 * smooth(-3, 10, elD) * (1 - 0.8 * cover) * (1 - 0.6 * fog);
+    final sunI = 2.2 * smooth(-3, 10, elD) * (1 - 0.8 * cover) * (1 - 0.6 * fog) * (1 - 0.65 * spook);
     final moonI = 0.4 * smooth(-4, -12, elD) * (1 - 0.75 * cover);
     final hemiI = _lerp(0.38, 1.5 * (1 - 0.25 * cover) * (1 - 0.35 * storm), day);
     final ambI = _lerp(0.12, 0.5, day);
     hemiIntensity = hemiI + flash * 3;
-    hemiSky = SkyColors.hemiSkyNight.lerp(SkyColors.hemiSky, day);
-    hemiGround = SkyColors.hemiGroundNight.lerp(SkyColors.hemiGround, day);
+    hemiSky = SkyColors.hemiSkyNight.lerp(SkyColors.hemiSky, day).lerp(SpookyColors.hemiSky, spook * 0.5);
+    hemiGround = SkyColors.hemiGroundNight.lerp(SkyColors.hemiGround, day).lerp(SpookyColors.hemiGround, spook * 0.5);
     ambientIntensity = ambI + flash;
     ambientColor = SkyColors.ambientNight.lerp(SkyColors.white, day);
     // A cartoon sun: never so low its shadows fill the room. At night the moon lights things, from across the sky.
@@ -269,7 +348,9 @@ class SkyModel {
     final lightAz = moonlit ? sp.az + math.pi : sp.az;
     lightDir.setValues(math.cos(lightEl) * math.sin(lightAz), math.sin(lightEl), -math.cos(lightEl) * math.cos(lightAz));
     lightIntensity = moonlit ? moonI : sunI;
-    lightColor = moonlit ? SkyColors.moon : SkyColors.sunLow.lerp(SkyColors.sunHigh, smooth(0, 25, elD));
+    lightColor = moonlit
+        ? SkyColors.moon.lerp(SpookyColors.moonLight, spook)
+        : SkyColors.sunLow.lerp(SkyColors.sunHigh, smooth(0, 25, elD)).lerp(SpookyColors.sun, spook);
     level = _clamp01((hemiI + ambI + 0.6 * (sunI + moonI)) / kFullDay);
 
     // Lamps come on as it gets dark: the office's and the garage's, and the ones outside.
@@ -279,22 +360,40 @@ class SkyModel {
     garageLight = SkyColors.garage.scale(need * 2);
 
     // The sky's colour, and the fog, which fades far things into it.
-    var sky = SkyColors.night.lerp(SkyColors.day, day);
-    sky = sky.lerp(SkyColors.dusk, dusk * 0.55);
-    sky = sky.lerp(SkyColors.greyNight.lerp(SkyColors.greyDay, day), cover * 0.85);
-    sky = sky.lerp(SkyColors.fogNight.lerp(SkyColors.fogDay, day), fog);
+    // Halloween's is its own.
+    Rgb pal(Rgb plain, Rgb spooky) => plain.lerp(spooky, spook);
+    var sky = pal(SkyColors.night, SpookyColors.night).lerp(pal(SkyColors.day, SpookyColors.day), day);
+    // Halloween's gloomy days glow at the horizon all day; its nights keep only a rim of it.
+    sky = sky.lerp(
+      pal(SkyColors.dusk, SpookyColors.dusk),
+      math.max(dusk, spook * _lerp(0.08, 0.35, math.min(1, day / 0.4))) * 0.55,
+    );
+    sky = sky.lerp(
+      pal(SkyColors.greyNight, SpookyColors.greyNight).lerp(pal(SkyColors.greyDay, SpookyColors.greyDay), day),
+      cover * 0.85,
+    );
+    sky = sky.lerp(
+      pal(SkyColors.fogNight, SpookyColors.fogNight).lerp(pal(SkyColors.fogDay, SpookyColors.fogDay), day),
+      fog,
+    );
     sky = sky.lerp(SkyColors.flash, flash * 0.5);
     background = sky;
     final precip = math.max(rain, snow);
     fogNear = _lerp(40, 3, fog) * (1 - 0.4 * precip);
     fogFar = _lerp(90, 28, fog) * (1 - 0.3 * precip);
-    clouds = SkyColors.white.lerp(SkyColors.cloudGrey, cover);
+    clouds = SkyColors.white.lerp(SkyColors.cloudGrey, cover).lerp(SpookyColors.cloud, spook);
 
     final clear = (1 - cover) * (1 - fog);
     starOpacity = math.pow(1 - day, 2) * clear;
     sunDiscColor = SkyColors.sunLow.lerp(SkyColors.white, smooth(0, 20, elD));
-    sunDiscOpacity = smooth(-3, 0, elD) * clear;
-    moonDiscOpacity = smooth(2, -2, elD) * clear;
+    // At Halloween the sun hides, and a big orange harvest moon hangs low over the street all day.
+    sunDiscOpacity = smooth(-3, 0, elD) * clear * (1 - spook);
+    final plainMoon = skyward(-sunEl, sunAz + math.pi);
+    final moonAt = plainMoon + (skyward(kSpookyMoonEl, kSpookyMoonAz) - plainMoon) * spook;
+    moonDir = moonAt.length2 > 1e-6 ? (moonAt..normalize()) : skyward(kSpookyMoonEl, kSpookyMoonAz);
+    moonScale = 1 + 2.2 * spook;
+    moonColor = SkyColors.white.lerp(SpookyColors.moon, spook);
+    moonDiscOpacity = math.max(smooth(2, -2, elD) * clear, spook * (1 - 0.5 * cover));
     precipLit = 0.3 + 0.7 * math.max(level, lampsOn * 0.5);
   }
 

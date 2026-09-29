@@ -47,7 +47,11 @@ class DeskView {
     required this.chair,
     required this.vacancy,
     required this.vacancyY,
-  });
+    Node? stage,
+  }) : stage = stage ?? Node(name: 'stage');
+
+  /// Where the worker gets up to dance when a pull request merges: its feet, and the way it faces.
+  final Node stage;
 
   final DeskDef def;
   final Node group;
@@ -137,6 +141,10 @@ class Office {
 
   /// The ceiling, the floor, and the ladder and fire pole between the floors of the building.
   final FloorStack stack;
+
+  /// The potted plants' leaves (their pots are merged with the decor): hidden while holiday.dart
+  /// turns the plants into Christmas trees.
+  late final Node plantLeaves;
 
   final List<WallRect> _fixtures;
   final Looks _looks;
@@ -267,6 +275,10 @@ DeskView _buildDesk(DeskDef def, int index, Material trimMat) {
   final seatAnchor = place(Node(name: 'seat-anchor'), y: 0.4, z: 0.93, rot: yaw(math.pi), scale: 0.82);
   group.add(seatAnchor);
 
+  // Up on the desk beside the laptop, clear of the mug or books at the back, facing the chair.
+  final stage = place(Node(name: 'stage'), x: 0.72, y: height - 0.07, z: 0.18);
+  group.add(stage);
+
   final ch = place(chair(Palette.chairs[index % Palette.chairs.length]), z: 0.9);
   group.add(ch);
 
@@ -281,6 +293,7 @@ DeskView _buildDesk(DeskDef def, int index, Material trimMat) {
     chair: ch,
     vacancy: vacancy,
     vacancyY: vacancyY,
+    stage: stage,
   );
 }
 
@@ -312,6 +325,15 @@ DeskView _buildBeanbag(DeskDef def, int index) {
   final seatAnchor = place(Node(name: 'seat-anchor'), y: 0.32, z: 0.04, rot: yaw(math.pi), scale: 0.82);
   group.add(seatAnchor);
 
+  // Standing up on the bag, sunk in a little.
+  final stage = place(
+    Node(name: 'stage'),
+    y: BeanbagBox.top - 0.1,
+    z: -0.05,
+    rot: yaw(math.pi),
+  );
+  group.add(stage);
+
   const vacancyY = 1.25;
   final vacancy = vacancyMarker(vacancyY);
   group.add(vacancy);
@@ -323,6 +345,7 @@ DeskView _buildBeanbag(DeskDef def, int index) {
     chair: chairNode,
     vacancy: vacancy,
     vacancyY: vacancyY,
+    stage: stage,
   );
 }
 
@@ -541,10 +564,21 @@ Office buildOffice({required LabelHub labels}) {
   fixture(Side.south, -15.7, 0.9, 0.6, 1.8);
   fixture(Side.south, -11.3, 1.1, 1.1, 2.2);
 
-  // Plants around the room.
+  // Plants around the room: the pots with the decor, the leaves on their own, so holiday.dart can
+  // trim them into Christmas trees.
+  final leaves = Node(name: 'plant-leaves');
   for (final (x, z, s) in roomPlants) {
-    decor.add(place(plant(s), x: x, z: z, scale: s));
+    final pot = place(plant(s), x: x, z: z, scale: s);
+    final leaf = place(plant(s), x: x, z: z, scale: s);
+    for (final c in pot.children.skip(1).toList()) {
+      c.detach();
+    }
+    leaf.children.first.detach();
+    decor.add(pot);
+    leaves.add(leaf);
   }
+  final plantLeaves = mergeByMaterial(leaves);
+  group.add(plantLeaves);
 
   // Ceiling lamps (cartoon pendants), hung on long cords down from the high ceiling.
   const lampY = 4.05;
@@ -584,23 +618,25 @@ Office buildOffice({required LabelHub labels}) {
   group.add(mergeByMaterial(decor));
   looks.paintPlanks(floorPalettes[0]);
   return Office._(
-    fixtures,
-    looks,
-    doors,
-    beanbags,
-    group: group,
-    colliders: colliders..insertAll(0, officeColliders(elevator: elevator.colliders, ground: groundCs)),
-    interactables: interactables,
-    desks: desks,
-    boardMeshes: boardMeshes,
-    tvScreen: Face(tvNode, tvMat, Tv.width, Tv.height),
-    bossScreen: bossScreen,
-    elevator: elevator,
-    gong: gong,
-    jukebox: jukebox,
-    whiteboard: whiteboard,
-    night: night,
-    stack: stack,
-    level: _Level(ground, [for (final c in groundCs) (c, c.top, c.bottom ?? 0)], exit.door, plug, tower),
-  )..setLevel(0, 1);
+      fixtures,
+      looks,
+      doors,
+      beanbags,
+      group: group,
+      colliders: colliders..insertAll(0, officeColliders(elevator: elevator.colliders, ground: groundCs)),
+      interactables: interactables,
+      desks: desks,
+      boardMeshes: boardMeshes,
+      tvScreen: Face(tvNode, tvMat, Tv.width, Tv.height),
+      bossScreen: bossScreen,
+      elevator: elevator,
+      gong: gong,
+      jukebox: jukebox,
+      whiteboard: whiteboard,
+      night: night,
+      stack: stack,
+      level: _Level(ground, [for (final c in groundCs) (c, c.top, c.bottom ?? 0)], exit.door, plug, tower),
+    )
+    ..plantLeaves = plantLeaves
+    ..setLevel(0, 1);
 }

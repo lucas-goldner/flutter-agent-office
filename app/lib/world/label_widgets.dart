@@ -60,12 +60,15 @@ class CardChip {
 /// to 2 lines) and a smaller [body] (up to 3), and a tail pointing down. Hang it with
 /// Alignment.bottomCenter so the tail's tip is on the anchor.
 class TaskCard extends StatelessWidget {
-  const TaskCard({super.key, this.chip, required this.title, this.body, required this.bg, this.maxWidth = 400});
+  const TaskCard({super.key, this.chip, required this.title, this.body, required this.bg, this.maxWidth = 400, this.border});
 
   final CardChip? chip;
   final String title;
   final String? body;
   final String bg;
+
+  /// The outline's colour, when it isn't the usual ink (a worker's pull request).
+  final String? border;
 
   /// Widest a line may get, in old canvas pixels.
   final double maxWidth;
@@ -82,7 +85,7 @@ class TaskCard extends StatelessWidget {
     final c = chip;
     final top = c != null ? lw / 2 : lw + pad;
     return CustomPaint(
-      painter: _CardPainter(hex(bg), top: c != null ? chipH / 2 : lw),
+      painter: _CardPainter(hex(bg), top: c != null ? chipH / 2 : lw, border: border != null ? hex(border!) : Swatch.ink),
       child: Padding(
         padding: EdgeInsets.fromLTRB(pad, top, pad, pad * 0.7 + tail + lw),
         child: ConstrainedBox(
@@ -136,10 +139,11 @@ class TaskCard extends StatelessWidget {
 
 /// The card and its tail in one outline, so the border runs unbroken down the tail.
 class _CardPainter extends CustomPainter {
-  _CardPainter(this.bg, {required this.top});
+  _CardPainter(this.bg, {required this.top, this.border = Swatch.ink});
 
   final Color bg;
   final double top;
+  final Color border;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -167,10 +171,10 @@ class _CardPainter extends CustomPainter {
         ..style = PaintingStyle.stroke
         ..strokeWidth = lw
         ..strokeJoin = StrokeJoin.round
-        ..color = Swatch.ink,
+        ..color = border,
     );
   }
 
   @override
-  bool shouldRepaint(_CardPainter old) => old.bg != bg || old.top != top;
+  bool shouldRepaint(_CardPainter old) => old.bg != bg || old.top != top || old.border != border;
 }

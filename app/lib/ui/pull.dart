@@ -5,6 +5,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -22,6 +23,7 @@ import 'markdown.dart';
 import 'modal.dart';
 import 'pull_diff.dart';
 import 'theme.dart';
+import 'window_parts.dart' show BoxInput;
 
 // ---- REST ---------------------------------------------------------------------------------------
 
@@ -61,7 +63,8 @@ abstract final class GhApi {
 }
 
 /// The board windows ask about the floor you're on.
-String onFloor(Store store, String url) => store.floor != null ? '$url&floor=${Uri.encodeComponent(store.floor!)}' : url;
+String onFloor(Store store, String url) =>
+    store.floor != null ? '$url${url.contains('?') ? '&' : '?'}floor=${Uri.encodeComponent(store.floor!)}' : url;
 
 // ---- Preferences --------------------------------------------------------------------------------
 
@@ -627,6 +630,9 @@ class BoardActions {
   /// Walks you to the desk a pull request came from.
   void goToDesk(String deskId) => scope.actions.goToDesk(deskId);
 
+  /// Take the issue's card off the board, to carry to a desk or the queue.
+  void pickUp(GhIssue issue) => scope.actions.pickUp(issue);
+
   /// Put an issue on the 📋 task queue; a worker is seated for it when there's room.
   void queue(String prompt, String title, int issue, {AgentProvider? provider, String? model}) =>
       scope.net.send(QueueAddCmd(prompt: prompt, title: title, issue: issue, provider: provider, model: model));
@@ -901,11 +907,291 @@ class _CloseDialogState extends State<_CloseDialog> {
   }
 }
 
+// ---- Label picker -------------------------------------------------------------------------------
+
+/// Picks an issue's or PR's labels from the repo's own, like GitHub's sidebar: tick them on and off,
+/// then save, and the office's gh account adds and takes off the difference.
+void openLabels(OfficeScope scope, GhKind kind, int number, String title, String url, List<GhLabel> labels, {ValueChanged<List<GhLabel>>? onSaved}) {
+  ModalStack.instance.show(
+    (modal) => _LabelDialog(
+      modal: modal,
+      net: _sock(scope),
+      store: scope.store,
+      kind: kind,
+      number: number,
+      title: title,
+      url: url,
+      labels: labels,
+      onSaved: onSaved,
+    ),
+  );
+}
+
+/// The repo's labels (GET /api/gh/labels), a list the server answers with.
+Future<List<GhLabel>> _repoLabels(Store store) async {
+  final j = jsonDecode(await GhApi.getText(onFloor(store, '/api/gh/labels')));
+  if (j is! List) throw GhApiError('No labels came back');
+  return [for (final l in j) if (l is Map<String, dynamic>) GhLabel.fromJson(l)];
+}
+
+class _LabelDialog extends StatefulWidget {
+  const _LabelDialog({
+    required this.modal,
+    required this.net,
+    required this.store,
+    required this.kind,
+    required this.number,
+    required this.title,
+    required this.url,
+    required this.labels,
+    this.onSaved,
+  });
+  final ModalHandle modal;
+  final OfficeSocketLike net;
+  final Store store;
+  final GhKind kind;
+  final int number;
+  final String title;
+  final String url;
+  final List<GhLabel> labels;
+  final ValueChanged<List<GhLabel>>? onSaved;
+
+  @override
+  State<_LabelDialog> createState() => _LabelDialogState();
+}
+
+class _LabelDialogState extends State<_LabelDialog> {
+  late final Set<String> had = widget.labels.map((l) => l.name).toSet();
+  late final Set<String> on = {...had};
+  List<GhLabel>? repo;
+  String error = '';
+  bool busy = false;
+  String? result;
+  List<GhLabel> rows = const [];
+  final _filter = TextEditingController();
+  final _filterFocus = FocusNode();
+  StreamSubscription<ServerMsg>? _sub;
+  Timer? _timer;
+
+  String get noun => widget.kind == GhKind.pull ? 'PR' : 'issue';
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+    _filterFocus.requestFocus();
+  }
+
+  @override
+  void dispose() {
+    _settle();
+    _filter.dispose();
+    _filterFocus.dispose();
+    super.dispose();
+  }
+
+  void _load() {
+    setState(() {
+      error = '';
+      repo = null;
+      rows = labelRows(widget.labels, null);
+    });
+    _repoLabels(widget.store).then((l) {
+      if (mounted) setState(() => rows = labelRows(widget.labels, repo = l));
+    }).catchError((Object err) {
+      if (mounted) setState(() => error = '$err');
+    });
+  }
+
+  void _settle() {
+    _sub?.cancel();
+    _sub = null;
+    _timer?.cancel();
+    busy = false;
+  }
+
+  void _submit() {
+    final c = labelChanges(had, on);
+    if (busy || (c.add.isEmpty && c.remove.isEmpty)) return;
+    setState(() {
+      busy = true;
+      result = null;
+    });
+    _sub = widget.net.messages.listen((m) {
+      if (m is! GhLabeledMsg || m.kind != widget.kind || m.number != widget.number) return;
+      _settle();
+      final labels = m.labels;
+      if (labels == null) {
+        if (mounted) setState(() => result = m.error ?? 'GitHub did not take the labels');
+        return;
+      }
+      widget.modal.close();
+      widget.onSaved?.call(labels);
+    });
+    // The office drops messages while it's disconnected, and then no answer comes.
+    _timer = Timer(const Duration(seconds: 45), () {
+      _settle();
+      if (mounted) setState(() => result = 'No answer from the office. Look at the board to see whether the labels changed before saving again.');
+    });
+    widget.net.send(GhLabelsCmd(kind: widget.kind, number: widget.number, add: c.add, remove: c.remove));
+  }
+
+  void _toggle(String name) {
+    if (busy) return;
+    setState(() => on.contains(name) ? on.remove(name) : on.add(name));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = labelChanges(had, on);
+    final shown = rows.where((l) => labelMatches(l, _filter.text)).toList();
+    final q = _filter.text.trim();
+    final manage = '${repoUrlOf(widget.url)}/labels';
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.enter, meta: true): _submit,
+        const SingleActivator(LogicalKeyboardKey.enter, control: true): _submit,
+      },
+      child: ModalWindow(
+        modal: widget.modal,
+        width: 580,
+        title: Text('🏷️ Labels on $noun #${widget.number}'),
+        body: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: _vgap([
+            _mergeTitle(widget.title, null),
+            Semantics(
+              label: 'Filter labels',
+              child: BoxInput(
+                controller: _filter,
+                focusNode: _filterFocus,
+                hint: 'Filter labels…',
+                onChanged: (_) => setState(() {}),
+                // Enter in the filter ticks (or unticks) the first label it shows.
+                onSubmitted: (_) {
+                  if (shown.isNotEmpty) _toggle(shown.first.name);
+                  _filterFocus.requestFocus();
+                },
+              ),
+            ),
+            Container(
+              constraints: BoxConstraints(maxHeight: math.min(420, MediaQuery.sizeOf(context).height * 0.5)),
+              padding: const EdgeInsets.all(4),
+              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: Swatch.ink, width: 3)),
+              child: ListView(
+                shrinkWrap: true,
+                children: [
+                  for (final l in shown) _LabelRow(label: l, on: on.contains(l.name), enabled: !busy, onTap: () => _toggle(l.name)),
+                  if (error.isNotEmpty)
+                    _errorBox(error, _load)
+                  else if (repo == null)
+                    _spinnerRow("Loading the repo's labels…")
+                  else if (shown.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.all(8),
+                      child: Wrap(
+                        alignment: WrapAlignment.center,
+                        children: [
+                          Text(q.isNotEmpty ? 'No labels match “$q”. ' : 'This repository has no labels yet. ', style: heavy(14, color: Swatch.muted, weight: FontWeight.w700)),
+                          _Link('Make one on GitHub ↗', manage, style: heavy(14, color: _blueLink)),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            if (busy || result != null) _result(busy ? 'Saving the labels on GitHub…' : null, result),
+          ], 10),
+        ),
+        footer: Row(
+          children: [
+            Expanded(
+              child: Text(labelSummary(had, on), maxLines: 1, overflow: TextOverflow.ellipsis, style: heavy(13, weight: FontWeight.w700)),
+            ),
+            const SizedBox(width: 8),
+            OfficeButton(label: 'Cancel', onPressed: widget.modal.close),
+            const SizedBox(width: 8),
+            OfficeButton(
+              label: busy ? 'Saving…' : '🏷️ Save labels',
+              kind: BtnKind.primary,
+              onPressed: busy || (c.add.isEmpty && c.remove.isEmpty) ? null : _submit,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A label in the picker: a tick box, its chip, and its description under it.
+class _LabelRow extends StatelessWidget {
+  const _LabelRow({required this.label, required this.on, required this.enabled, required this.onTap});
+  final GhLabel label;
+  final bool on;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final d = label.description;
+    return Semantics(
+      checked: on,
+      enabled: enabled,
+      label: label.name,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        hoverColor: Swatch.paper2,
+        onTap: enabled ? onTap : null,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [_TickBox(on, color: Swatch.accent), const SizedBox(width: 8), Flexible(child: _BigLabel(label))]),
+              if (d != null && d.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(left: 24, top: 3),
+                  child: Text(d, style: heavy(12, color: Swatch.muted, weight: FontWeight.w600)),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A label chip at the picker's size (12px).
+class _BigLabel extends StatelessWidget {
+  const _BigLabel(this.label);
+  final GhLabel label;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
+        decoration: BoxDecoration(color: parseHex(label.color), borderRadius: BorderRadius.circular(999), border: Border.all(color: Swatch.ink, width: 1.5)),
+        child: Text(label.name, style: heavy(12, color: labelIsDark(label.color) ? Colors.white : Swatch.ink)),
+      );
+}
+
+/// The button after an issue's or PR's labels that opens the label picker.
+class _LabelButton extends StatelessWidget {
+  const _LabelButton({required this.has, required this.onPressed});
+  final bool has;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+        label: 'Change the labels',
+        child: OfficeButton(label: has ? '🏷️ Edit' : '🏷️ Add labels', dense: true, tooltip: 'Change the labels', onPressed: onPressed),
+      );
+}
+
 // ---- The PR window ------------------------------------------------------------------------------
 
 /// Opens a pull request's window, on the tab you used last.
 ModalHandle openPull(OfficeScope scope, GhPull first) =>
-    ModalStack.instance.show((modal) => _PullWindow(modal: modal, scope: scope, first: first));
+    ModalStack.instance.show((modal) => _PullWindow(modal: modal, scope: scope, first: first))..doing = '🔀 reading PR #${first.number}';
 
 class _Section {
   _Section({required this.big});
@@ -981,6 +1267,8 @@ class _PullWindowState extends State<_PullWindow> {
     final d = detail;
     setState(() => it = d != null ? _withState(fresh, fresh.state == 'OPEN' ? d.state : fresh.state) : fresh);
   }
+
+  static GhPull _withLabels(GhPull p, List<GhLabel> labels) => GhPull.fromJson({...p.toJson(), 'labels': [for (final l in labels) l.toJson()]});
 
   static GhPull _withState(GhPull p, String state, {bool? isDraft, String? reviewDecision}) => GhPull(
         number: p.number,
@@ -1244,7 +1532,12 @@ class _PullWindowState extends State<_PullWindow> {
       Text('from', style: muted),
       _code(it.headRefName),
       _plusMinus(it.additions, it.deletions),
-      ...it.labels.take(5).map(LabelChip.new),
+      ...it.labels.map(LabelChip.new),
+      _LabelButton(
+        has: it.labels.isNotEmpty,
+        onPressed: () => openLabels(widget.scope, GhKind.pull, it.number, it.title, it.url, it.labels,
+            onSaved: (labels) => mounted ? setState(() => it = _withLabels(it, labels)) : null),
+      ),
       ?badge,
     ]);
   }
@@ -1900,7 +2193,7 @@ class _StatusBox extends StatelessWidget {
 // ---- The issue window -----------------------------------------------------------------------------
 
 ModalHandle openIssue(OfficeScope scope, GhIssue first) =>
-    ModalStack.instance.show((modal) => _IssueWindow(modal: modal, scope: scope, first: first));
+    ModalStack.instance.show((modal) => _IssueWindow(modal: modal, scope: scope, first: first))..doing = '📋 reading issue #${first.number}';
 
 class _IssueWindow extends StatefulWidget {
   const _IssueWindow({required this.modal, required this.scope, required this.first});
@@ -1948,6 +2241,8 @@ class _IssueWindowState extends State<_IssueWindow> {
     final d = detail;
     setState(() => it = d != null ? _issueWithState(fresh, fresh.state == 'OPEN' ? d.state : fresh.state) : fresh);
   }
+
+  static GhIssue _issueWithLabels(GhIssue i, List<GhLabel> labels) => GhIssue.fromJson({...i.toJson(), 'labels': [for (final l in labels) l.toJson()]});
 
   static GhIssue _issueWithState(GhIssue i, String state) => GhIssue(
         number: i.number,
@@ -2004,7 +2299,12 @@ class _IssueWindowState extends State<_IssueWindow> {
             Text(it.author, style: heavy(13, weight: FontWeight.w900)),
             Text('opened this ${timeAgo(it.createdAt)}', style: muted),
             if (it.assignees.isNotEmpty) Text('· 👤 ${it.assignees.join(', ')}', style: muted),
-            ...it.labels.take(6).map(LabelChip.new),
+            ...it.labels.map(LabelChip.new),
+            _LabelButton(
+              has: it.labels.isNotEmpty,
+              onPressed: () => openLabels(widget.scope, GhKind.issue, it.number, it.title, it.url, it.labels,
+                  onSaved: (labels) => mounted ? setState(() => it = _issueWithLabels(it, labels)) : null),
+            ),
           ]),
           Expanded(child: _conversation()),
         ],
@@ -2088,6 +2388,12 @@ class _IssueWindowState extends State<_IssueWindow> {
                   label: onQueue ? (task.status == TaskStatus.running ? '🤖 ${task.workerName ?? 'A worker'} is on it' : '📋 On the queue') : '📋 Add to queue',
                   tooltip: onQueue ? null : 'A worker picks it up by itself when a desk is free and there is room under the worker limit',
                   onPressed: onQueue ? null : _addToQueue,
+                ),
+              if (isOpen)
+                OfficeButton(
+                  label: '✋ Pick it up',
+                  tooltip: 'Carry its card to an empty desk, a worker or the queue board, and press E there',
+                  onPressed: () => actions.pickUp(it),
                 ),
               OfficeButton(
                 label: '🤖 Hand to a worker',

@@ -18,6 +18,9 @@ abstract class OfficeActions {
   void resumeWorker(WorkerInfo w);
   void goToDesk(String deskId);
 
+  /// ✋ Pick it up: the issue's card comes off the board and into your hands.
+  void pickUp(GhIssue issue);
+
   /// A prompt from the boards to a new worker at a free desk, or to one already at a desk.
   void sendToWorker(String title, {String? context, String? initial});
   void showSearch();

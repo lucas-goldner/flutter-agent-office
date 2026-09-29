@@ -15,7 +15,7 @@ import 'theme.dart';
 import 'window_parts.dart';
 
 ModalHandle openServices(OfficeScope scope) =>
-    ModalStack.instance.show((modal) => _ServicesWindow(scope: scope, modal: modal));
+    ModalStack.instance.show((modal) => _ServicesWindow(scope: scope, modal: modal))..doing = '🌐 at the services board';
 
 class _ServicesWindow extends StatefulWidget {
   const _ServicesWindow({required this.scope, required this.modal});

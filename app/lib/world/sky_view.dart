@@ -155,8 +155,11 @@ class SkyView {
     final sc = m.sunDiscColor;
     _sunMat.baseColorFactor = vm.Vector4(sc.r, sc.g, sc.b, m.sunDiscOpacity);
     _sun.visible = m.sunDiscOpacity > 0.01;
-    _moon.position = up(-m.sunEl, m.sunAz + math.pi);
-    _moonMat.baseColorFactor = _lin(0xf2f1ea, m.moonDiscOpacity);
+    _moon.position = m.moonDir * 160;
+    _moon.scale = vm.Vector3.all(m.moonScale);
+    final mc = m.moonColor;
+    final plain = _lin(0xf2f1ea, m.moonDiscOpacity);
+    _moonMat.baseColorFactor = vm.Vector4(plain.x * mc.r, plain.y * mc.g, plain.z * mc.b, plain.w);
     _moon.visible = m.moonDiscOpacity > 0.01;
 
     // Halos round the bulbs, when the lamps are on.
