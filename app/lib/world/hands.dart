@@ -20,6 +20,9 @@ import 'package:office_shared/emotes.dart';
 import 'package:office_shared/protocol.dart' show HolidayTheme;
 import 'package:vector_math/vector_math.dart' as vm;
 
+import 'package:office_shared/rooftop.dart' show Drink, DrinkId;
+
+import 'drinks.dart' show drinkGlass;
 import 'character.dart'
     show cigarette, coffeeMug, dragCurve, emoteEnvelope, kReachTime, kSmokeCycle, reachCurve, setEmissive;
 import 'costumes.dart';
@@ -197,6 +200,10 @@ class Hands {
   late final _Arm _left;
   double _reachT = -1;
   late final Node _mug;
+  bool _wantsMug = false;
+
+  /// A drink from the rooftop bar, held where the mug goes.
+  ({DrinkId id, Node node})? _glass;
 
   /// Seconds into a sip (negative while it waits for the reach to finish), or null.
   double? _sipT;
@@ -279,13 +286,29 @@ class Hands {
   /// Reach out with the right hand.
   void reach() => _reachT = 0;
 
-  /// A mug of coffee in the left hand, or not. It waits while the hands are full (a card).
+  /// A mug of coffee in the left hand, or not.
   void holdMug(bool on) {
     _wantsMug = on;
-    _mug.visible = on && !(_card?.held ?? false);
+    _mug.visible = on && _glass == null && !(_card?.held ?? false);
+    // The glass waits too while the hands are full.
+    _glass?.node.visible = !(_card?.held ?? false);
   }
 
-  bool _wantsMug = false;
+  /// A drink from the rooftop bar in the left hand, where the mug goes (and in its place), or none (null).
+  void holdDrink(Drink? d) {
+    if (d?.id == _glass?.id) return;
+    _glass?.node.detach();
+    _glass = null;
+    if (d != null) {
+      final node = drinkGlass(d)
+        ..position = vm.Vector3(0.09, -0.035, -0.03)
+        ..rotation = euler(_left.baseRot.x, _left.baseRot.y, _left.baseRot.z).inverted();
+      setLayers(node, layer);
+      _left.group.add(node);
+      _glass = (id: d.id, node: node);
+    }
+    holdMug(_wantsMug);
+  }
 
   /// An issue card off the board, held low in front of you in both hands, tipped back so you look
   /// down onto its front.

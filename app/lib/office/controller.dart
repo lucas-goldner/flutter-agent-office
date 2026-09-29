@@ -88,6 +88,7 @@ import 'blast.dart';
 import 'carry.dart';
 import 'hanging.dart';
 import 'rooms_hub.dart';
+import 'roof.dart';
 
 /// How close (meters) you stop a worker jumping, and how far you go before it starts again.
 const double _holdNear = 4;
@@ -212,7 +213,7 @@ class OfficeController implements OfficeActions {
       onUpgrade: () => openUpgrade(scope),
       onSearch: showSearch,
       onWhiteboard: () => whiteboard.open(),
-      onDecor: () => hanger.active ? hanger.cancel() : hanger.start(),
+      onDecor: () => hanger.active ? hanger.cancel() : _startHanging(),
       onSettings: showSettings,
       onHelp: openHelp,
       onOpenWorker: openWorkerTerminal,
@@ -245,6 +246,8 @@ class OfficeController implements OfficeActions {
 
   /// The games and rooms: board agents, the arcade cabinet, the machine monitor…
   late final RoomsHub rooms = RoomsHub(this);
+  /// The rooftop bar: up there and back, drinks and the DJ (roof.dart).
+  late final RoofHub roofHub;
   final SkyModel skyModel = SkyModel();
   late final SkyView skyView;
 
@@ -380,6 +383,19 @@ class OfficeController implements OfficeActions {
     root.add(hanger.ghost.group);
     arcade = Arcade(office.bossScreen);
     rooms.init();
+    roofHub = RoofHub(
+      root: root,
+      office: office,
+      store: store,
+      net: net,
+      sound: sound,
+      player: player,
+      me: me,
+      hands: hands,
+      labels: labels,
+      remote: (id) => _remotes[id]?.person,
+      reach: _reachOut,
+    );
     _listen(Topic.decor, () => gallery.sync(store.decor));
 
     _listen(Topic.peers, _syncPeers);
@@ -477,6 +493,7 @@ class OfficeController implements OfficeActions {
     }
     _sentHome.clear();
     whiteboard.route(msg);
+    roofHub.onMessage(msg);
     switch (msg) {
       case WelcomeMsg m:
         // A few pings, to line this page's clock up with the office's for the jukebox.
@@ -534,7 +551,7 @@ class OfficeController implements OfficeActions {
         _upgradePhase = m.state.phase;
       case ChatMsg m:
         _sayBubble(m.line.from, m.line.text);
-      case PeerActMsg m:
+      case PeerActMsg m when !m.drinkSet:
         final r = _remotes[m.id];
         if (m.smoke == null) {
           r?.person.reach();
@@ -661,6 +678,15 @@ class OfficeController implements OfficeActions {
         count: () => waitingElsewhere(store.floors, store.floor),
         title: () => 'Ride to another project',
         run: showElevator,
+      ),
+      HudAction(
+        id: 'roof',
+        icon: '🍸',
+        label: 'Rooftop bar',
+        section: HudSection.open,
+        shown: () => !roofHub.upTop && store.floors.any((f) => f.cloning != true),
+        title: () => 'Ride the elevator up to the roof: a DJ, drinks and the city',
+        run: () => ride(roof),
       ),
       // Up on the top bar while workers wait on someone (N does the same), next to the Workers button.
       HudAction(
@@ -832,7 +858,7 @@ class OfficeController implements OfficeActions {
     _riding = (floor: floorId, timer: Timer(const Duration(seconds: 10), _rideFailed));
     player.enabled = false;
     player.input.clear();
-    office.elevator.setOpen(false);
+    roofHub.lift().setOpen(false);
     // Wait for the doors to shut on you, then dim the lights and go.
     Timer(Duration(milliseconds: inside ? 650 : 0), () {
       fade.value = true;
@@ -884,7 +910,7 @@ class OfficeController implements OfficeActions {
     if (_riding == null) return;
     _riding = null;
     fade.value = false;
-    office.elevator.setOpen(store.floor != null);
+    roofHub.lift().setOpen(store.floor != null);
     player.enabled = !ModalStack.instance.open;
   }
 
@@ -897,6 +923,13 @@ class OfficeController implements OfficeActions {
 
   /// You're on a floor (or in the building without one): paint it, and open the doors.
   void _arrive() {
+    // Up on the roof, or back down: the roof has no dog, and no walls for pictures.
+    if (roofHub.setPlace()) {
+      dog.root.visible = !roofHub.upTop;
+      skyView.roof = roofHub.upTop;
+      hanger.cancel();
+      _hintKey = 'stale';
+    }
     _paintFloor();
     office.setProjectName(store.project?.name ?? 'Agent Office');
     final r = _riding;
@@ -914,7 +947,7 @@ class OfficeController implements OfficeActions {
     }
     fade.value = false;
     Timer(const Duration(milliseconds: 450), () {
-      office.elevator.setOpen(true);
+      roofHub.lift().setOpen(true);
       sound.ding(Ding.done);
       player.enabled = !ModalStack.instance.open;
     });
@@ -1214,6 +1247,7 @@ class OfficeController implements OfficeActions {
         r.person.setLook(peer.look);
       }
       r.person.setSmoking(peer.smoking ?? false);
+      r.person.holdDrink(roofHub.drinkOf(peer));
       r.person.sit(peer.seat != null ? seatAt(peer.seat!)?.hips : null);
       r.person.setDoing(whereabouts(peer));
       r.person.carry(peer.carrying);
@@ -1764,6 +1798,7 @@ class OfficeController implements OfficeActions {
       return;
     }
     if (key != DeskKey.e) return;
+    if (roofHub.interact(target)) return;
     switch (target.kind) {
       case InteractKind.elevator:
         showElevator();
@@ -1889,6 +1924,7 @@ class OfficeController implements OfficeActions {
     if (player.seat?.seatId == seatId) {
       if (seat.tv && voiceRoom.tvShowing) return voiceRoom.watchShare();
       if (seat.game) return arcade.play();
+      if (seat.bar) return roofHub.showBar();
       return standUp();
     }
     final place = _freePlace(seat);
@@ -1918,7 +1954,7 @@ class OfficeController implements OfficeActions {
   Interactable? _mySeat() {
     final id = player.seat?.seatId;
     if (id == null) return null;
-    return office.interactables.where((it) => it.kind == InteractKind.seat && it.seatId == id).firstOrNull;
+    return (roofHub.usable ?? office.interactables).where((it) => it.kind == InteractKind.seat && it.seatId == id).firstOrNull;
   }
 
   // ---- The gong -----------------------------------------------------------------------------------
@@ -2078,7 +2114,8 @@ class OfficeController implements OfficeActions {
     if (player.pos.y < -slab - 1) return null;
     Interactable? best;
     var bestD = double.infinity;
-    for (final list in [office.interactables, gallery.interactables, dog.interactables]) {
+    final up = roofHub.usable;
+    for (final list in up != null ? [up] : [office.interactables, gallery.interactables, dog.interactables]) {
       for (final it in list) {
         if (it.off) continue;
         // Up on the loft, or down underneath it.
@@ -2222,6 +2259,7 @@ class OfficeController implements OfficeActions {
               HintTitle(seat.label),
               const HintAside('sitting'),
               if (seat.game) ...[const HintKey('E', 'Play Minesweeper'), const HintKey('W A S D', 'Get up')]
+              else if (seat.bar) ...[const HintKey('E', 'Order a drink'), const HintKey('W A S D', 'Get up')]
               else const HintKey('E', 'Get up'),
             ],
           );
@@ -2235,6 +2273,8 @@ class OfficeController implements OfficeActions {
             full ? const HintAside('no room') : const HintKey('E', 'Sit down'),
           ],
         );
+      case InteractKind.bar || InteractKind.dj:
+        return roofHub.hintFor(it) ?? ('', []);
       case InteractKind.dog:
         final doing = dog.doing(
           (id) => store.workers[id]?.name,
@@ -2345,7 +2385,7 @@ class OfficeController implements OfficeActions {
       return true;
     }
     if (e.physicalKey == PhysicalKeyboardKey.keyF) {
-      hanger.start();
+      _startHanging();
       return true;
     }
     if (e.physicalKey == PhysicalKeyboardKey.keyN) {
@@ -2358,6 +2398,14 @@ class OfficeController implements OfficeActions {
       return true;
     }
     return false;
+  }
+
+  /// F: hang a picture on a wall of this floor. There are no walls for them up on the roof.
+  void _startHanging() {
+    if (roofHub.upTop) {
+      return toast('No walls to hang pictures on up here — take the elevator down to a floor', ToastKind.warn);
+    }
+    hanger.start();
   }
 
   /// A click (not a drag) on the scene, at [screen] in a view of [view] size.
@@ -2453,8 +2501,10 @@ class OfficeController implements OfficeActions {
       fovRadiansY: 55 * math.pi / 180,
       position: toEngine(player.camPos + jolt),
       target: toEngine(player.camTarget + jolt * 0.5),
+      up: _cameraUp(),
       fovNear: 0.1,
-      fovFar: 200,
+      // You can see the whole city from the roof.
+      fovFar: roofHub.upTop ? 700 : 200,
     );
     camera = arcade.update(camera, dt, view);
     camera = rooms.update(camera, dt, t, view);
@@ -2516,7 +2566,7 @@ class OfficeController implements OfficeActions {
       diff = math.atan2(math.sin(diff), math.cos(diff));
       r.person.root.rotation = vm.Quaternion.axisAngle(vm.Vector3(0, 1, 0), cur + diff * k);
       // On their feet if they're standing on something: the floor, a desk, a stair, the loft.
-      final airborne = sat == null && pose.y > groundAt(office.colliders, pose.x, pose.z, pose.y) + 0.05;
+      final airborne = sat == null && pose.y > groundAt(player.colliders, pose.x, pose.z, pose.y) + 0.05;
       final walking = sat == null && pose.moving && !airborne;
       r.person.update(dt, t, walking, airborne && (pos.y - target.y).abs() > 0.01);
       // Their walk cycle takes a step every pi/11 seconds.
@@ -2563,6 +2613,8 @@ class OfficeController implements OfficeActions {
     confetti.update(dt);
     holiday.update(t, skyModel.lampsOn, player.camPos);
     hanger.update(view, locked: lockAvailable ? pointerLocked : null);
+    // Drinks from the rooftop bar, and up there everything moving to the DJ's set.
+    roofHub.tick(now, t, dt, skyModel.lampsOn);
     _updateSky(dt, t);
 
     _aimedNote = null;
@@ -2602,6 +2654,18 @@ class OfficeController implements OfficeActions {
   /// Set by the page: whether the mouse can be captured for looking around, and whether it is.
   bool lockAvailable = true;
   bool pointerLocked = false;
+
+  /// The camera's up, in engine space: straight up, unless a few drinks have the view rolling.
+  vm.Vector3 _cameraUp() {
+    final roll = player.roll;
+    if (roll == 0) return vm.Vector3(0, 1, 0);
+    final look = (player.camTarget - player.camPos)..normalize();
+    final right = look.cross(vm.Vector3(0, 1, 0));
+    if (right.length2 < 1e-6) return vm.Vector3(0, 1, 0);
+    right.normalize();
+    final up = right.cross(look)..normalize();
+    return toEngine(up * math.cos(roll) + right * math.sin(roll));
+  }
 
   /// Set by the page when closing the last window may not have given you the mouse back: the next
   /// key you press takes it instead (a key counts for the browser, where the Esc that closed it doesn't).
@@ -2644,6 +2708,7 @@ class OfficeController implements OfficeActions {
         l.lampPos[i].setZero();
       }
     }
+    roofHub.light(l);
     Toon.updateLight();
     for (final b in office.night.bulbs) {
       b.glow(m.lampsOn);
@@ -2652,8 +2717,8 @@ class OfficeController implements OfficeActions {
     setToonColor(office.night.clouds, m.clouds.color);
     final fog = scene.fog;
     fog.color = m.background.vector;
-    fog.start = m.fogNear;
-    fog.end = m.fogFar;
+    fog.start = m.fogNear * roofHub.fogReach;
+    fog.end = m.fogFar * roofHub.fogReach;
     final bg = m.background.color;
     if (bg != sky.value) sky.value = bg;
     sound.setWeather(m.rain, 1 - m.daylight);

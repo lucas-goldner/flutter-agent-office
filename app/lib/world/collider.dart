@@ -25,6 +25,8 @@ enum InteractKind {
   desk, issues, pulls, services, queue, tv, coffee, decor, smoke, elevator, gong, dog, jukebox, seat, whiteboard,
   // The games and rooms (office/rooms_hub.dart).
   station, cabinet, meeting, golf, ball, bookshelf,
+  // The rooftop bar (office/roof.dart).
+  bar, dj,
 }
 
 /// Something you can use: walk up to it and press E, or click it.

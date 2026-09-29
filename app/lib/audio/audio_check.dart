@@ -7,6 +7,9 @@ import 'dart:math' as math;
 import 'package:web/web.dart' as web;
 
 import 'package:office_shared/protocol.dart' show GongWhy;
+
+import 'dnb.dart';
+import 'dnb_score.dart';
 import 'music.dart';
 import 'score.dart';
 import 'sound_web.dart';
@@ -56,6 +59,13 @@ Future<Map<String, double>> runAudioChecks() async {
       TunePlayer(ctx, ctx.destination, 'rainy-window').prerender(from * 16, from * 16 + 16);
     });
   }
+  // The DJ on the roof: a bar of the intro (hats), of the first drop, and the air horn and a pour.
+  for (final (name, bar) in const [('dj bar 0 (intro)', 0), ('dj bar 24 (drop)', 24), ('dj bar 64 (breakdown)', 64)]) {
+    out[name] = await renderRms(djBar + 1, (ctx) => DjPlayer(ctx, ctx.destination).prerender(bar * 16, bar * 16 + 16));
+  }
+  out['dj horn'] = await renderRms(2, (ctx) => DjPlayer(ctx, ctx.destination).horn(0.05));
+  out['pour'] = await renderRms(2, (ctx) => office(ctx).pour(0, 1, 0));
+  out['hiccup'] = await renderRms(1, (ctx) => office(ctx).hiccup());
   return out;
 }
 

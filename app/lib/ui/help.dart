@@ -39,6 +39,10 @@ const List<(String, String)> helpRows = [
   ('⛳', 'The golf tee on the balcony: E steps up, A/D aim, W/S loft, hold Space and let go to swing, E puts the club back'),
   ('📚', "The bookshelf on the south wall: E reads the project's Markdown docs"),
   ('🤝', 'The meeting room under the boss office: E at its table calls a meeting of 2 to 5 workers, or shows how it is going'),
+  (
+    '🍸',
+    'The elevator goes up to the rooftop bar: a DJ playing drum and bass under the lights, and the city all around. Press E at the bar for a drink (it goes to your head for a bit) and at the DJ booth for the air horn',
+  ),
   ('Drag / wheel', 'Orbit and zoom the camera in third person'),
   ('P', 'Prompt: give a task to a new or existing worker at the desk you face'),
   ('C', 'Changes: what the worker at the desk you face changed — files and diff, commit, discard, open a PR'),

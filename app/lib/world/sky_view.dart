@@ -93,6 +93,9 @@ class SkyView {
   final NightParts _night;
   final math.Random _rnd;
   final Node _dome = Node(name: 'sky-dome');
+  /// Up on the roof: rain and snow fall on it, and the office's bulbs (under your feet) have no halos.
+  bool roof = false;
+
   late final Node _stars, _sun, _moon, _haloNode, _rainNode, _snowNode;
   late final UnlitMaterial _starMat, _sunMat, _moonMat, _haloMat, _rainMat, _snowMat;
   late final InstancedMesh _halos, _rain, _snow;
@@ -141,7 +144,7 @@ class SkyView {
     _moon.visible = m.moonDiscOpacity > 0.01;
 
     // Halos round the bulbs, when the lamps are on.
-    _haloNode.visible = m.lampsOn > 0.01 && _night.halos.isNotEmpty;
+    _haloNode.visible = m.lampsOn > 0.01 && _night.halos.isNotEmpty && !roof;
     if (_haloNode.visible) {
       _haloMat.baseColorFactor = vm.Vector4(1, 1, 1, m.lampsOn * 0.85);
       final halos = _night.halos;
@@ -186,7 +189,7 @@ class SkyView {
           ..[d] = x
           ..[d + 1] = y
           ..[d + 2] = z;
-        if (_sheltered(x, z)) {
+        if (!roof && _sheltered(x, z)) {
           _rain.setInstanceTransform(i, _hidden);
           continue;
         }
@@ -223,7 +226,7 @@ class SkyView {
           ..[f] = x
           ..[f + 1] = y
           ..[f + 2] = z;
-        _snow.setInstanceTransform(i, _sheltered(x, z) ? _hidden : _facing(vm.Vector3(x, y, z), cam, 1));
+        _snow.setInstanceTransform(i, !roof && _sheltered(x, z) ? _hidden : _facing(vm.Vector3(x, y, z), cam, 1));
       }
     }
   }

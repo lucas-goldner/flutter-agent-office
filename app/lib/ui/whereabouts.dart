@@ -1,11 +1,12 @@
 // What a teammate is up to, for the line under their name tag and in the people list. A port of
 // ui/whereabouts.ts.
 
-import 'dart:math' as math;
 
 import 'package:office_shared/layout.dart';
 import 'package:office_shared/protocol.dart';
 import 'package:office_shared/rooftop.dart' show roof;
+
+import '../office/roof_logic.dart' show roofWhereabouts;
 
 /// Whatever they have open ("💻 in Pixel's terminal", "🔀 reading PR #12"), else somewhere worth
 /// saying they are ("🌇 on the balcony", "🛋️ on the couch"). Nothing while they're just walking
@@ -22,24 +23,12 @@ String? whereabouts(PeerInfo p) {
     return '${words.first} ${seat.game ? 'in' : 'on'} the ${words.skip(1).join(' ').toLowerCase()}';
   }
   // The roof is the office's size, but none of its rooms are up there.
-  if (p.floor == roof) return _onTheRoof(p);
+  if (p.floor == roof) return roofWhereabouts(p.x, p.z);
   // Down on the street, or out the back door on the stairs down to it.
   if (p.y < -1 || p.x < Floor.minX || p.x > Floor.maxX || p.z < Floor.minZ) return '🚶 outside';
   if (p.z > Floor.maxZ) return p.x >= Balcony.minX && p.x <= Balcony.maxX ? '🌇 on the balcony' : '🚶 outside';
   if (p.y > Loft.y - 0.5 && p.x > Loft.minX && p.z > Loft.minZ) return "👔 in the boss's office";
   if (p.x > MeetingRoom.minX && p.z > MeetingRoom.minZ) return '🤝 in the meeting room';
-  return null;
-}
-
-/// Somewhere on the rooftop bar worth saying they are, standing up.
-String? _onTheRoof(PeerInfo p) {
-  if (p.x > Stage.minX && p.x < Stage.maxX && p.z < Stage.maxZ) return '🎧 up on the stage';
-  final onDanceFloor = p.x > DanceFloor.minX && p.x < DanceFloor.maxX && p.z > DanceFloor.minZ && p.z < DanceFloor.maxZ;
-  if (onDanceFloor) return '🪩 on the dance floor';
-  if (p.x > RoofBar.x - 2.5 && p.z > RoofBar.minZ - 0.5 && p.z < RoofBar.maxZ + 0.5) return '🍸 at the bar';
-  double dist(double x, double z) => math.sqrt(math.pow(p.x - x, 2) + math.pow(p.z - z, 2));
-  if (roofTables.any((t) => dist(t.x, t.z) < 1.3)) return '🕯️ at a tall table';
-  if (dist(FirePit.x, FirePit.z) < 3.5) return '🔥 by the fire';
   return null;
 }
 

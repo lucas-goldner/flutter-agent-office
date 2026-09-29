@@ -13,6 +13,7 @@ import 'package:flutter/services.dart';
 import '../caffeine.dart';
 import '../interop/browser.dart';
 import '../office_scope.dart';
+import 'package:office_shared/rooftop.dart' show roof, roofName;
 import 'package:office_shared/protocol.dart';
 import '../state/store.dart';
 import 'hud_parts.dart';
@@ -602,6 +603,7 @@ class _PersonRow extends StatelessWidget {
       for (final f in store.floors) {
         if (f.id == p.floor) where = '🛗 ${f.name}';
       }
+      if (p.floor == roof) where = '🍸 $roofName';
     }
     final color = speaking ? Swatch.good : Swatch.ink;
     final sub = you ? null : whereabouts(p);

@@ -15,7 +15,9 @@ import 'package:vector_math/vector_math.dart' as vm;
 import 'package:office_shared/avatar.dart';
 import 'package:office_shared/emotes.dart';
 import 'package:office_shared/protocol.dart';
+import 'package:office_shared/rooftop.dart' show Drink, DrinkId;
 import 'package:office_shared/status.dart';
+import 'drinks.dart' show drinkGlass;
 
 import 'costumes.dart';
 import 'emoji_pop.dart';
@@ -223,7 +225,7 @@ class Person {
       arm.add(mesh(sphere(0.085, 12, 10), skin, 0, -0.38, 0));
     }
     // Forward is +z, so the character's left arm is the one on +x. The handle faces the hand.
-    final cup = coffeeMug(1.4)
+    final cup = _cup = coffeeMug(1.4)
       ..position = vm.Vector3(0.02, -0.08, 0.1)
       ..rotation = euler(0, -math.pi / 2);
     _mug.add(cup);
@@ -266,8 +268,13 @@ class Person {
   final Pivot _head = Pivot();
   final Node _hair = Node(name: 'hair');
 
-  /// Held in the left hand, kept upright however the arm swings.
+  /// Held in the left hand, kept upright however the arm swings: a mug of coffee or a drink.
   final Node _mug = Node();
+  late final Node _cup;
+  bool _wantsMug = false;
+
+  /// A drink from the rooftop bar, in the mug's place.
+  ({DrinkId id, Node node})? _glass;
   late final Pivot _legL, _legR, _armL, _armR;
   late final PreprocessedMaterial shirt;
   late final PreprocessedMaterial _skin;
@@ -480,13 +487,27 @@ class Person {
   /// Reach out with the right hand, as if pressing or grabbing something in front of you.
   void reach() => _reachT = 0;
 
-  /// A mug of coffee in the left hand, or not. It waits while the hands are full (a card).
+  /// A mug of coffee in the left hand, or not.
   void holdMug(bool on) {
     _wantsMug = on;
-    _mug.visible = on && !(_card?.held ?? false);
+    _cup.visible = _glass == null;
+    // A mug or a glass waits while the hands are full (a card).
+    _mug.visible = (on || _glass != null) && !(_card?.held ?? false);
   }
 
-  bool _wantsMug = false;
+  /// A drink from the rooftop bar in the left hand (in place of a mug), or none (null).
+  void holdDrink(Drink? d) {
+    if (d?.id == _glass?.id) return;
+    // The glass's shapes are shared (cached by size), so putting it down is letting go of the node.
+    _glass?.node.detach();
+    _glass = null;
+    if (d != null) {
+      final node = drinkGlass(d, 1.4)..position = vm.Vector3(0.02, -0.08, 0.1);
+      _mug.add(node);
+      _glass = (id: d.id, node: node);
+    }
+    holdMug(_wantsMug);
+  }
 
   /// An issue card off the board, held out in front in both hands (see carry).
   HeldCard? _card;
