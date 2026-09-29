@@ -123,9 +123,13 @@ class CompassLayer extends StatefulWidget {
     required this.bearings,
     required this.waiting,
     required this.onNext,
+    this.chip = true,
   });
 
   final PerspectiveCamera Function() camera;
+
+  /// Shows the waiting chip under the top bar. Off where the ☰ HUD's dock has it (its 'waiting' action).
+  final bool chip;
 
   /// The waiting workers to point to this frame (none while a window is open or you're riding the elevator).
   final List<Bearing> Function() bearings;
@@ -176,14 +180,15 @@ class _CompassLayerState extends State<CompassLayer> with SingleTickerProviderSt
                 child: _Mark(bearing: byId[m.id]!, angle: m.angle),
               ),
             ),
-          Positioned(
-            top: 64,
-            left: 0,
-            right: 0,
-            child: Center(
-              child: _WaitingChip(waiting: widget.waiting, onTap: widget.onNext),
+          if (widget.chip)
+            Positioned(
+              top: 64,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: _WaitingChip(waiting: widget.waiting, onTap: widget.onNext),
+              ),
             ),
-          ),
         ],
       );
     },

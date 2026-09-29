@@ -17,6 +17,9 @@ class ModalHandle {
   final VoidCallback? onClose;
   bool _closed = false;
 
+  /// The window's keyboard focus, handed back to it when the window over it closes.
+  FocusScopeNode? _focus;
+
   /// What having it open says you're doing, under your name tag (see PeerInfo.doing), like
   /// "🔀 reading PR #12".
   String? doing;
@@ -28,6 +31,8 @@ class ModalHandle {
     _closed = true;
     _entry.remove();
     _stack._stack.remove(this);
+    // The window under it has the keyboard again, so Esc closes that one next.
+    if (_stack._stack.isNotEmpty) _stack._stack.last._focus?.requestFocus();
     onClose?.call();
     _stack.changes.value = _stack._stack.isNotEmpty;
   }
@@ -67,6 +72,7 @@ class ModalStack {
         onTapOutside: backdropCloses ? () => handle.close() : null,
         onEsc: escCloses ? () => handle.close() : null,
         isTop: () => _stack.isNotEmpty && identical(_stack.last, handle),
+        onScope: (n) => handle._focus = n,
         clear: clear,
         child: builder(handle),
       ),
@@ -86,8 +92,15 @@ class ModalStack {
 }
 
 /// The dimmed backdrop, centring its window, with Esc and click-outside.
-class _Backdrop extends StatelessWidget {
-  const _Backdrop({required this.child, this.onTapOutside, this.onEsc, required this.isTop, this.clear = false});
+class _Backdrop extends StatefulWidget {
+  const _Backdrop({
+    required this.child,
+    this.onTapOutside,
+    this.onEsc,
+    required this.isTop,
+    required this.onScope,
+    this.clear = false,
+  });
 
   final Widget child;
 
@@ -96,21 +109,48 @@ class _Backdrop extends StatelessWidget {
   final VoidCallback? onTapOutside;
   final VoidCallback? onEsc;
   final bool Function() isTop;
+  final ValueChanged<FocusScopeNode> onScope;
+
+  @override
+  State<_Backdrop> createState() => _BackdropState();
+}
+
+class _BackdropState extends State<_Backdrop> {
+  final FocusScopeNode _scope = FocusScopeNode(debugLabel: 'modal');
+
+  @override
+  void initState() {
+    super.initState();
+    widget.onScope(_scope);
+    // The window takes the keyboard from the office (or the window under it), so Esc reaches it
+    // straight away, before anything in it was clicked. Autofocus alone doesn't: the office already
+    // has the focus in the scope around it.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && widget.isTop() && !_scope.hasFocus) _scope.requestFocus();
+    });
+  }
+
+  @override
+  void dispose() {
+    _scope.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) => CallbackShortcuts(
     bindings: {
       const SingleActivator(LogicalKeyboardKey.escape): () {
-        if (isTop()) onEsc?.call();
+        if (widget.isTop()) widget.onEsc?.call();
       },
     },
     child: FocusScope(
+      node: _scope,
       autofocus: true,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTapDown: onTapOutside == null ? null : (_) => onTapOutside!(),
-        child: clear
-            ? child
+        onTapDown: widget.onTapOutside == null ? null : (_) => widget.onTapOutside!(),
+        child: widget.clear
+            ? widget.child
             : ColoredBox(
           color: Swatch.backdrop,
           child: SafeArea(
@@ -118,7 +158,7 @@ class _Backdrop extends StatelessWidget {
               padding: const EdgeInsets.all(16),
               child: Center(
                 // Taps inside the window stay inside it.
-                child: GestureDetector(onTapDown: (_) {}, child: child),
+                child: GestureDetector(onTapDown: (_) {}, child: widget.child),
               ),
             ),
           ),

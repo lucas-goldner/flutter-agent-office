@@ -7,8 +7,10 @@ import 'package:flutter/material.dart';
 
 import '../interop/browser.dart';
 import '../office_scope.dart';
+
 import 'package:office_shared/protocol.dart';
 import 'package:office_shared/status.dart';
+
 import '../state/store.dart';
 import 'modal.dart';
 import 'theme.dart';
@@ -123,7 +125,13 @@ class _UpgradeWindowState extends State<_UpgradeWindow> {
           child: SingleChildScrollView(
             child: SelectableText(
               u.error!,
-              style: const TextStyle(fontFamily: kMono, fontFamilyFallback: kMonoFallback, fontSize: 12, height: 1.45, color: Swatch.ink),
+              style: const TextStyle(
+                fontFamily: kMono,
+                fontFamilyFallback: kMonoFallback,
+                fontSize: 12,
+                height: 1.45,
+                color: Swatch.ink,
+              ),
             ),
           ),
         ),
@@ -159,18 +167,9 @@ class _UpgradeWindowState extends State<_UpgradeWindow> {
       }
       if (n > changes.length) out.add(Note('…and ${n >= 50 ? 'more' : '${n - changes.length} more'}', top: 12));
       if (!busy) {
-        final awake = store.workers.values.where((w) => !isAsleep(w.status)).toList();
-        final working = awake
-            .where((w) => w.status == WorkerStatus.working || w.status == WorkerStatus.needsInput)
-            .toList();
-        final names = working.map((w) => w.name).join(', ');
-        out.add(
-          Note(
-            'Upgrading builds the new version while the office keeps running, then restarts it. Everyone reconnects on the new version automatically. '
-            '${awake.isNotEmpty ? 'Workers who are awake wake back up by themselves afterwards${working.isNotEmpty ? ', but $names ${working.length == 1 ? 'is' : 'are'} in the middle of something that will be interrupted' : ''}.' : ''}',
-            top: 12,
-          ),
-        );
+        // Terminals survive the restart now, and whoever was cut off mid-turn carries on (#140).
+        final awake = store.workers.values.any((w) => !isAsleep(w.status));
+        out.add(Note(upgradeNote(awake: awake), top: 12));
       }
     }
     return out;
@@ -312,3 +311,8 @@ class _BobState extends State<_Bob> with SingleTickerProviderStateMixin {
     child: widget.child,
   );
 }
+
+/// What the upgrade window says before you start one.
+String upgradeNote({required bool awake}) =>
+    'Upgrading builds the new version while the office keeps running, then restarts it. Everyone reconnects on the new version automatically. '
+    '${awake ? 'Workers keep working through the restart, and whatever they were in the middle of carries on.' : ''}';

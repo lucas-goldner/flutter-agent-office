@@ -6,9 +6,15 @@ import 'package:flutter/material.dart';
 import '../interop/browser.dart' show desktopApp, notInDesktopApp;
 import '../notify.dart';
 import '../office_scope.dart';
+
 import 'package:office_shared/dog.dart';
 import 'package:office_shared/protocol.dart';
+import 'package:office_shared/theme.dart' show themePicks;
+
 import '../state/store.dart';
+import 'prompts.dart';
+import 'provider.dart';
+import 'worker_limit.dart';
 import '../world/player.dart' show ViewMode;
 import 'modal.dart';
 import 'theme.dart';
@@ -27,6 +33,37 @@ const List<(ViewMode, String, String)> _views = [
   ),
 ];
 
+const Map<ThemePick, String> _themeLabel = {
+  ThemePick.auto: '📅 By the calendar',
+  ThemePick.halloween: '🎃 Halloween',
+  ThemePick.christmas: '🎄 Christmas',
+  ThemePick.off: 'Off',
+};
+
+/// What the holiday theme note says: what's up now, how auto picks, and who chose it.
+String themeNote(ThemeState t, {String Function(int at)? ago}) {
+  final now = switch (t.active) {
+    HolidayTheme.halloween => 'Halloween: the workers are zombies, your hands are an undead warlock’s, the dog’s in costume, the sky’s gone creepy and there are jack-o’-lanterns everywhere.',
+    HolidayTheme.christmas =>
+      'Christmas: the workers are elves, your hands are in mittens, the dog’s Rudolph, and it’s snowing outside.',
+    null => 'No decorations up right now.',
+  };
+  final how = t.pick == ThemePick.auto
+      ? ' By the calendar it’s Halloween through October and Christmas through December.'
+      : '';
+  final by = t.by != null ? ', set by ${t.by}${t.at != null && ago != null ? ' ${ago(t.at!)}' : ''}' : '';
+  return '$now$how It’s the same for everyone in the building$by.';
+}
+
+/// What the leave-on-merge note says.
+String leaveOnMergeNote(LeaveOnMergeState l, {String Function(int at)? ago}) {
+  final now = l.on
+      ? 'Once a worker’s pull request merges, it goes home as soon as it isn’t working or waiting on you and nobody has its terminal open, and its worktree and branch are deleted. A worktree with uncommitted changes, or commits that aren’t on GitHub, is kept.'
+      : 'A worker whose pull request merged stays at its desk, outlined in purple, until someone sends it home. Turned on, the ones already merged go too.';
+  final by = l.by != null ? ', set by ${l.by}${l.at != null && ago != null ? ' ${ago(l.at!)}' : ''}' : '';
+  return '$now It’s the same for everyone in the building$by.';
+}
+
 const Map<WebhookKind, String> _webhookName = {
   WebhookKind.slack: 'Slack',
   WebhookKind.discord: 'Discord',
@@ -34,13 +71,7 @@ const Map<WebhookKind, String> _webhookName = {
 };
 
 /// A copy to change, the way the TS spread `{ ...settings }`.
-Settings _copy(Settings s) => Settings()
-  ..view = s.view
-  ..volume = s.volume
-  ..muted = s.muted
-  ..music = s.music
-  ..musicMuted = s.musicMuted
-  ..notify = s.notify;
+Settings _copy(Settings s) => s.copy();
 
 /// `outside` describes the sky over the office (see describeSky), once the server has said.
 ModalHandle openSettings(
@@ -99,6 +130,19 @@ class _SettingsWindowState extends State<_SettingsWindow> with ListenTo {
   final _hookFocus = FocusNode();
   final _dog = TextEditingController();
   final _dogFocus = FocusNode();
+  final _limit = TextEditingController();
+  final _limitFocus = FocusNode();
+  final _dir = TextEditingController();
+  final _dirFocus = FocusNode();
+
+  /// The default worker's fields (admins), on the default as it is until someone touches them.
+  late final ProviderPickerController _agent = ProviderPickerController(
+    store.project,
+    office: store.prompts.agent,
+    fields: true,
+  )..addListener(_agentTouched);
+  bool _agentEdited = false;
+  bool _settingAgent = false;
 
   Store get store => widget.scope.store;
 
@@ -106,6 +150,28 @@ class _SettingsWindowState extends State<_SettingsWindow> with ListenTo {
   void initState() {
     super.initState();
     listenTo(store.topics(const [Topic.notify, Topic.dog, Topic.me]), () => setState(() {}));
+    listenTo(
+      store.topics(const [Topic.theme, Topic.leaveOnMerge, Topic.machine, Topic.projectsDir]),
+      () => setState(() {}),
+    );
+    // The default worker changed (here or by someone else): the fields show it unless you're editing.
+    listenTo(store.topic(Topic.prompts), () {
+      if (!_agentEdited) _resetAgent();
+      setState(() {});
+    });
+    _dir.text = store.projectsDir.dir;
+    listenTo(store.topic(Topic.projectsDir), () => _dir.text = store.projectsDir.dir);
+  }
+
+  void _agentTouched() {
+    if (!_settingAgent) _agentEdited = true;
+  }
+
+  void _resetAgent() {
+    _settingAgent = true;
+    _agent.office = store.prompts.agent;
+    _agent.set(officeChoice(store.project, store.prompts.agent));
+    _settingAgent = false;
   }
 
   @override
@@ -114,6 +180,11 @@ class _SettingsWindowState extends State<_SettingsWindow> with ListenTo {
     _hookFocus.dispose();
     _dog.dispose();
     _dogFocus.dispose();
+    _limit.dispose();
+    _limitFocus.dispose();
+    _dir.dispose();
+    _dirFocus.dispose();
+    _agent.dispose();
     super.dispose();
   }
 
@@ -179,6 +250,19 @@ class _SettingsWindowState extends State<_SettingsWindow> with ListenTo {
           const Note(
             'Workers typing, footsteps, the coffee machine, birds and rain outside, the dog, and the ding when a worker is done. Voice chat isn’t affected.',
           ),
+          const FieldLabel('Voice chat', top: 18),
+          SegButtons<bool>(
+            small: false,
+            gap: 8,
+            options: const [(false, '🎙️ Open mic'), (true, '✋ Push to talk')],
+            value: _s.pushToTalk,
+            onPick: (v) {
+              if (_s.pushToTalk != v) _change((s) => s.pushToTalk = v);
+            },
+          ),
+          const Note(
+            'Either way, V joins voice, holding V talks and you’re muted once you let go, and M mutes or unmutes. With push to talk you join muted. Leave voice from the ☰ menu.',
+          ),
           const FieldLabel('🎵 Jukebox', top: 18),
           _VolumeRow(
             label: 'Jukebox volume',
@@ -201,10 +285,22 @@ class _SettingsWindowState extends State<_SettingsWindow> with ListenTo {
               outside.live ? 'Everyone sees the same sky: the office’s clock and the live weather where it is.' : 'Everyone sees the same sky: the office’s clock, and weather that comes and goes. Start the office with --city to use a real city’s forecast.',
             ),
           ],
+          const FieldLabel('Holiday theme', top: 18),
+          SegButtons<ThemePick>(
+            small: false,
+            gap: 8,
+            options: [for (final p in themePicks) (p, _themeLabel[p]!)],
+            value: store.theme.pick,
+            onPick: (p) {
+              if (store.theme.pick != p) widget.scope.net.send(ThemeSetCmd(p));
+            },
+          ),
+          Note(themeNote(store.theme, ago: timeAgo)),
           const FieldLabel('Desktop notifications', top: 18),
           ..._notifications(),
           const FieldLabel('Team notifications (Slack / Discord)', top: 18),
           ..._webhook(),
+          ..._officeSections(),
           ..._dogSection(),
           const FieldLabel('Your character', top: 18),
           Align(
@@ -315,6 +411,150 @@ class _SettingsWindowState extends State<_SettingsWindow> with ListenTo {
           ),
         ),
       Note(status, bad: error != null),
+    ];
+  }
+
+  /// The building's settings: the default worker, the prompts, the worker limit, leave-on-merge and
+  /// the workspace folder. Everyone sees them; admins change them.
+  List<Widget> _officeSections() {
+    final admin = store.me.admin;
+    final net = widget.scope.net;
+    final picked = store.prompts.agent;
+    final m = store.machine;
+    final dir = store.projectsDir;
+    final n = rewrittenPrompts(store);
+    void saveLimit() {
+      final v = parseLimit(_limit.text);
+      if (v == null) return _limitFocus.requestFocus();
+      net.send(MachineLimitCmd(v));
+      _limit.clear();
+    }
+
+    void saveDir() {
+      final d = _dir.text.trim();
+      if (d.isEmpty) return _dirFocus.requestFocus();
+      if (d != dir.dir) net.send(FloorProjectsDirCmd(d));
+    }
+
+    return [
+      const FieldLabel('🤖 Default worker', top: 18),
+      if (admin) ...[
+        ProviderPicker(controller: _agent, label: 'Provider'),
+        Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Wrap(
+            spacing: 8,
+            children: [
+              OfficeButton(
+                key: const ValueKey('agent-save'),
+                label: 'Save',
+                kind: BtnKind.primary,
+                onPressed: () {
+                  if (!_agent.valid()) return;
+                  _agentEdited = false;
+                  net.send(PromptsAgentCmd(_agent.choice()));
+                },
+              ),
+              if (picked != null)
+                OfficeButton(
+                  label:
+                      'Back to ${store.project?.agentCmd.split(' ').first.split(RegExp(r'[\\/]')).last ?? 'the --agent'}',
+                  onPressed: () {
+                    _agentEdited = false;
+                    net.send(const PromptsAgentCmd(null));
+                  },
+                ),
+            ],
+          ),
+        ),
+      ] else
+        Text(choiceLabel(officeChoice(store.project, picked)), style: heavy(15)),
+      Note(
+        'Every worker starts on this: hired at a desk, handed an issue or a pull request from the boards, taken off the queue, the board agents and meetings. Where you start one, ✏️ Edit picks another just for it.'
+        '${picked != null ? ' Set by ${picked.by} ${timeAgo(picked.at)}.' : ' It’s the agent the office was started with, on its own default model.'}'
+        '${admin ? '' : ' Admins can change it.'}',
+      ),
+      const FieldLabel('📝 Prompts', top: 18),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: OfficeButton(
+          key: const ValueKey('open-prompts'),
+          label: admin ? '📝 Edit the prompts…' : '📝 Read the prompts…',
+          onPressed: () => openPromptEditor(widget.scope),
+        ),
+      ),
+      Note(
+        'What 🤖 Hand to a worker, 🔍 Review and the boards’ other buttons tell a worker, the note the queue adds to a task, the board agents’ briefs, the meeting room’s parts and the sign writer’s instructions. '
+        '${n > 0 ? '$n of them rewritten.' : 'All as the office wrote them.'}'
+        '${admin ? '' : ' Admins can rewrite them.'}',
+      ),
+      const FieldLabel('👷 Worker limit', top: 18),
+      if (admin)
+        Row(
+          children: [
+            Expanded(
+              child: BoxInput(
+                key: const ValueKey('limit-input'),
+                controller: _limit,
+                focusNode: _limitFocus,
+                hint: m.ceiling != null ? '1 to ${m.ceiling}' : 'e.g. 6',
+                onSubmitted: (_) => saveLimit(),
+              ),
+            ),
+            const SizedBox(width: 8),
+            OfficeButton(label: 'Set limit', kind: BtnKind.primary, onPressed: saveLimit),
+            if (m.set != null) ...[
+              const SizedBox(width: 8),
+              OfficeButton(
+                label: m.ceiling != null ? 'Back to ${m.ceiling}' : 'No limit',
+                onPressed: () => net.send(const MachineLimitCmd(null)),
+              ),
+            ],
+          ],
+        ),
+      Note(limitNote(m, admin: admin, ago: timeAgo)),
+      const FieldLabel('🎉 Workers whose pull request merged', top: 18),
+      SegButtons<bool>(
+        small: false,
+        gap: 8,
+        options: const [(true, '🏠 Go home by themselves'), (false, '🪑 Stay until sent home')],
+        value: store.leaveOnMerge.on,
+        onPick: (v) {
+          if (store.leaveOnMerge.on != v) net.send(LeaveOnMergeSetCmd(v));
+        },
+      ),
+      Note(leaveOnMergeNote(store.leaveOnMerge, ago: timeAgo)),
+      const FieldLabel('📁 Workspace folder', top: 18),
+      if (admin) ...[
+        Row(
+          children: [
+            Expanded(
+              child: BoxInput(
+                key: const ValueKey('dir-input'),
+                controller: _dir,
+                focusNode: _dirFocus,
+                hint: '~/Workspace',
+                onSubmitted: (_) => saveDir(),
+              ),
+            ),
+            const SizedBox(width: 8),
+            OfficeButton(label: 'Save', kind: BtnKind.primary, onPressed: saveDir),
+          ],
+        ),
+        if (dir.custom)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: OfficeButton(label: 'Use the default', onPressed: () => net.send(const FloorProjectsDirCmd(''))),
+            ),
+          ),
+      ],
+      Note(
+        'New projects from the elevator are cloned into ${dir.dir}/<owner>/<repo> on the office’s machine.'
+        '${dir.custom && dir.by != null && dir.at != null ? ' Set by ${dir.by} ${timeAgo(dir.at!)}.' : ''}'
+        '${admin ? ' A checkout of the same repository that’s already there is used as it is. Floors you already have stay where they are.' : ' An admin can move it.'}',
+      ),
     ];
   }
 

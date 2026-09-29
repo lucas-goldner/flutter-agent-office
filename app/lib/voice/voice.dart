@@ -47,6 +47,12 @@ class Voice {
   bool muted = false;
   double localLevel = 0;
 
+  /// Asking for the mic, so a second join waits for the first instead of asking again.
+  Future<String?>? _joining;
+
+  /// Push to talk is held down: letting go mutes you.
+  bool _talking = false;
+
   /// Voice and screen sharing need a secure context (https or localhost).
   static bool get available => web.window.isSecureContext;
 
@@ -86,8 +92,13 @@ class Voice {
   /// The RTCPeerConnection state towards each peer, for the dev console and tests.
   Map<String, String> get connectionStates => {for (final e in _conns.entries) e.key: e.value.pc.connectionState};
 
-  Future<String?> joinVoice() async {
-    if (_mic != null) return null;
+  /// [muted] joins with the mic off, for push to talk.
+  Future<String?> joinVoice({bool muted = false}) {
+    if (_mic != null) return Future.value(null);
+    return _joining ??= _join(muted).whenComplete(() => _joining = null);
+  }
+
+  Future<String?> _join(bool startMuted) async {
     if (!available) return 'Voice needs HTTPS (or localhost). Ask whoever runs the office to enable TLS.';
     try {
       final constraints = web.MediaStreamConstraints(
@@ -98,7 +109,11 @@ class Voice {
       return 'Microphone unavailable: ${_errText(err, 'message')}';
     }
     final mic = _mic!;
-    muted = false;
+    muted = startMuted;
+    _talking = false;
+    for (final t in mic.getAudioTracks().toDart) {
+      t.enabled = !startMuted;
+    }
     final ctx = _ensureAudioCtx();
     if (ctx != null) {
       _localAnalyser = ctx.createAnalyser()..fftSize = 1024;
@@ -131,17 +146,33 @@ class Voice {
     _mic = null;
     _localAnalyser = null;
     localLevel = 0;
+    _talking = false;
     _changed();
   }
 
-  void toggleMute() {
+  void toggleMute() => setMuted(!muted);
+
+  void setMuted(bool mute) {
     final mic = _mic;
     if (mic == null) return;
-    muted = !muted;
+    _talking = false;
+    if (mute == muted) return;
+    muted = mute;
     for (final t in mic.getAudioTracks().toDart) {
-      t.enabled = !muted;
+      t.enabled = !mute;
     }
     _changed();
+  }
+
+  /// Push to talk: the mic is on while it's held down, and muted once you let go (see [stopTalking]).
+  void startTalking() {
+    if (_mic == null || _talking) return;
+    setMuted(false);
+    _talking = true;
+  }
+
+  void stopTalking() {
+    if (_talking) setMuted(true);
   }
 
   Future<String?> startShare() async {

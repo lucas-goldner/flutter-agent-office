@@ -17,6 +17,7 @@ import 'package:office_shared/protocol.dart';
 import '../state/store.dart';
 import 'hud_parts.dart';
 import 'limits.dart';
+import 'menu.dart';
 import 'modal.dart';
 import 'provider.dart';
 import 'theme.dart';
@@ -25,6 +26,7 @@ import 'usage.dart';
 import 'whereabouts.dart';
 
 export 'hud_parts.dart' show CrosshairState, HintAside, HintCost, HintKey, HintPart, HintTitle;
+export 'menu.dart' show HudAction, HudPrefs, HudSection, HudTone;
 
 /// Voice chat and screen sharing, as the buttons show them.
 @immutable
@@ -70,6 +72,8 @@ class HudCallbacks {
     required this.onHelp,
     required this.onOpenWorker,
     required this.onEditProfile,
+    this.onFloors,
+    this.onTalk,
     this.onWalkTo,
   });
 
@@ -96,15 +100,38 @@ class HudCallbacks {
   /// Clicking yourself in the people list.
   final VoidCallback onEditProfile;
 
+  /// The project in the corner: the floors dropdown under it (else the elevator).
+  final void Function(Rect? anchor)? onFloors;
+
+  /// V in voice is push to talk: held down it's true, let go it's false. Without it V toggles voice.
+  final bool Function(bool down)? onTalk;
   /// Clicking anyone else there: walk over to them (riding the elevator first if they're on another floor).
   final void Function(String peerId)? onWalkTo;
 }
 
 /// The HUD's keyboard: the office page calls these.
 class HudController {
-  HudController(this.callbacks);
+  HudController(this.callbacks, {HudPrefs? prefs}) : prefs = prefs ?? HudPrefs();
 
   final HudCallbacks callbacks;
+
+  /// Your panels and pins, and the ☰ menu's actions.
+  final HudPrefs prefs;
+
+  /// On the ☰ button and the project, for the dropdowns to hang under.
+  final GlobalKey menuKey = GlobalKey(debugLabel: 'menu');
+  final GlobalKey projectKey = GlobalKey(debugLabel: 'project');
+
+  /// Tab, or ☰.
+  void toggleMenu() => toggleHudMenu(prefs, anchor: menuKey);
+
+  /// The project in the corner: the floors dropdown under it.
+  void floors() {
+    final on = callbacks.onFloors;
+    if (on == null) return callbacks.onElevator();
+    final box = projectKey.currentContext?.findRenderObject();
+    on(box is RenderBox && box.hasSize ? box.localToGlobal(Offset.zero) & box.size : null);
+  }
 
   /// The chat box's focus; while it has it, keys are for typing.
   final FocusNode chatFocus = FocusNode(debugLabel: 'chat');
@@ -127,11 +154,17 @@ class HudController {
   /// M
   void toggleMute() => callbacks.onMute();
 
-  /// The HUD's keys (T or Enter to chat, / to search, H for help, V voice, M mute). True when the
-  /// key was one of them. Call it only when no window is open and nobody is typing.
+  /// The HUD's keys (T or Enter to chat, / to search, H for help, V voice, M mute, Tab the ☰ menu).
+  /// True when the key was one of them. Call it only when no window is open and nobody is typing.
   bool handleKey(KeyEvent e) {
     if (e is! KeyDownEvent) return false;
     final k = e.logicalKey;
+    if (k == LogicalKeyboardKey.tab) {
+      toggleMenu();
+      return true;
+    }
+    // Joins voice; in it, it's push to talk (the office lets go of it on the key coming up).
+    if (k == LogicalKeyboardKey.keyV && callbacks.onTalk != null && callbacks.onTalk!(true)) return true;
     if (k == LogicalKeyboardKey.keyT || k == LogicalKeyboardKey.enter || k == LogicalKeyboardKey.numpadEnter) {
       focusChat();
       return true;
@@ -228,7 +261,7 @@ class Hud extends StatelessWidget {
             width: 250,
             child: ConstrainedBox(
               constraints: BoxConstraints(maxHeight: size.height - 110),
-              child: _SidePanels(callbacks: cb, speaking: speaking),
+              child: _SidePanels(callbacks: cb, prefs: controller.prefs, speaking: speaking),
             ),
           ),
         Positioned(
@@ -257,7 +290,7 @@ class Hud extends StatelessWidget {
           top: 12,
           left: 12,
           right: 12,
-          child: _TopBar(callbacks: cb, voice: voice, hanging: hanging, narrow: narrow),
+          child: _TopBar(controller: controller, voice: voice, hanging: hanging, narrow: narrow),
         ),
         const Positioned(top: 90, left: 0, right: 0, child: Center(child: ToastLayer())),
         Positioned(
@@ -274,9 +307,9 @@ class Hud extends StatelessWidget {
 // ---- The top bar -----------------------------------------------------------------------------------
 
 class _TopBar extends StatelessWidget {
-  const _TopBar({required this.callbacks, required this.voice, required this.hanging, required this.narrow});
+  const _TopBar({required this.controller, required this.voice, required this.hanging, required this.narrow});
 
-  final HudCallbacks callbacks;
+  final HudController controller;
   final ValueListenable<VoiceState> voice;
   final ValueListenable<bool> hanging;
   final bool narrow;
@@ -287,28 +320,35 @@ class _TopBar extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        // The project name gives way (ellipsis) before the buttons wrap under the side panel.
+        // The project name gives way (ellipsis) before the dock wraps.
         Flexible(
           child: ConstrainedBox(
             constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.4),
-            child: _ProjectPanel(onTap: callbacks.onElevator),
+            child: _ProjectPanel(key: controller.projectKey, prefs: controller.prefs, onTap: controller.floors),
           ),
         ),
         const SizedBox(width: 12),
         ConstrainedBox(
-          // The project keeps room for its name (the CSS would squeeze it to nothing).
           constraints: BoxConstraints(maxWidth: box.maxWidth - 12 - (narrow ? 60 : 130)),
-          child: _Controls(callbacks: callbacks, voice: voice, hanging: hanging, narrow: narrow),
+          child: Dock(
+            prefs: controller.prefs,
+            menuKey: controller.menuKey,
+            narrow: narrow,
+            extra: Listenable.merge([voice, hanging]),
+            onMenu: controller.toggleMenu,
+          ),
         ),
       ],
     ),
   );
 }
 
-/// The project in the corner is the floor you're on; click it for the others.
+/// The project in the corner is the floor you're on; click it for the others. Its details (branch,
+/// folder, default agent) show when you turn them on.
 class _ProjectPanel extends StatefulWidget {
-  const _ProjectPanel({required this.onTap});
+  const _ProjectPanel({super.key, required this.prefs, required this.onTap});
 
+  final HudPrefs prefs;
   final VoidCallback onTap;
 
   @override
@@ -322,15 +362,19 @@ class _ProjectPanelState extends State<_ProjectPanel> {
   Widget build(BuildContext context) {
     final store = OfficeScope.of(context).store;
     return ListenableBuilder(
-      listenable: store.topics(const [Topic.project, Topic.floors, Topic.floor]),
+      listenable: Listenable.merge([
+        widget.prefs,
+        store.topics(const [Topic.project, Topic.floors, Topic.floor, Topic.prompts]),
+      ]),
       builder: (context, _) {
         final p = store.project;
         final elsewhere = waitingElsewhere(store.floors, store.floor);
+        final details = widget.prefs.panel(HudPanel.floor);
         final meta = projectMeta(
           project: p,
           floors: store.floors,
           floor: store.floor,
-          defaultProvider: p == null ? '' : providerLabel(p.defaultProvider, p),
+          defaultProvider: p == null ? '' : choiceLabel(officeChoice(p, store.prompts.agent)),
         );
         return Tooltip(
           message: projectTooltip(elsewhere),
@@ -360,15 +404,28 @@ class _ProjectPanelState extends State<_ProjectPanel> {
                           ),
                         ),
                         if (elsewhere > 0) CountBadge(elsewhere),
+                        Padding(
+                          padding: const EdgeInsets.only(left: 6),
+                          child: Text('▾', style: heavy(14, color: Swatch.muted)),
+                        ),
                       ],
                     ),
-                    Text(
-                      meta,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      softWrap: false,
-                      style: heavy(12, color: Swatch.muted, weight: FontWeight.w400),
-                    ),
+                    if (details)
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Flexible(
+                            child: Text(
+                              meta,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              softWrap: false,
+                              style: heavy(12, color: Swatch.muted, weight: FontWeight.w400),
+                            ),
+                          ),
+                          PanelHide(prefs: widget.prefs, panel: HudPanel.floor),
+                        ],
+                      ),
                   ],
                 ),
               ),
@@ -380,241 +437,59 @@ class _ProjectPanelState extends State<_ProjectPanel> {
   }
 }
 
-class _Controls extends StatelessWidget {
-  const _Controls({required this.callbacks, required this.voice, required this.hanging, required this.narrow});
-
-  final HudCallbacks callbacks;
-  final ValueListenable<VoiceState> voice;
-  final ValueListenable<bool> hanging;
-  final bool narrow;
-
-  @override
-  Widget build(BuildContext context) {
-    final store = OfficeScope.of(context).store;
-    final cb = callbacks;
-    return Panel(
-      padding: const EdgeInsets.all(8),
-      child: ListenableBuilder(
-        listenable: Listenable.merge([
-          voice,
-          hanging,
-          store.topics(const [Topic.me, Topic.upgrade, Topic.services, Topic.queue, Topic.floors]),
-        ]),
-        builder: (context, _) {
-          final v = voice.value;
-          final noVoice = desktopApp
-              ? notInDesktopApp('Voice chat and screen sharing')
-              : 'Voice and screen sharing need HTTPS or localhost — use a TLS proxy, --self-signed, or an SSH tunnel';
-          final u = store.upgrade;
-          final services = store.services.items.length;
-          final queued = store.queue.tasks.where((t) => t.status != TaskStatus.done).length;
-          final hangingNow = hanging.value;
-          return Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            alignment: WrapAlignment.end,
-            children: [
-              _TopButton(
-                icon: '🎙️',
-                label: v.inVoice ? 'Leave voice' : 'Join voice',
-                kind: v.inVoice ? BtnKind.on : BtnKind.plain,
-                tooltip: v.available ? 'Join voice (V)' : noVoice,
-                dim: !v.available,
-                narrow: narrow,
-                onTap: cb.onVoice,
-              ),
-              if (v.inVoice)
-                _TopButton(
-                  icon: v.muted ? '🔇' : '🎙️',
-                  kind: v.muted ? BtnKind.danger : BtnKind.plain,
-                  tooltip: 'Mute (M)',
-                  onTap: cb.onMute,
-                ),
-              _TopButton(
-                icon: '🖥️',
-                label: v.sharing ? 'Stop sharing' : 'Share screen',
-                kind: v.sharing ? BtnKind.on : BtnKind.plain,
-                tooltip: v.available ? 'Share your screen' : noVoice,
-                dim: !v.available,
-                narrow: narrow,
-                onTap: cb.onShare,
-              ),
-              _TopButton(icon: '📌', label: 'Issues', tooltip: 'Issues board', onTap: cb.onIssues, narrow: narrow),
-              _TopButton(icon: '🔀', label: 'PRs', tooltip: 'Pull requests board', onTap: cb.onPulls, narrow: narrow),
-              _TopButton(
-                icon: '🌐',
-                label: 'Services',
-                count: services,
-                tooltip: 'Web servers the workers are running',
-                onTap: cb.onServices,
-                narrow: narrow,
-              ),
-              _TopButton(
-                icon: '📋',
-                label: 'Queue',
-                count: queued,
-                tooltip: 'Task queue: issues and tasks waiting for a worker',
-                onTap: cb.onQueue,
-                narrow: narrow,
-              ),
-              if (store.invites)
-                _TopButton(icon: '👥', label: 'Invite', tooltip: 'Invite teammates', onTap: cb.onTeam, narrow: narrow),
-              if (store.me.admin)
-                _TopButton(
-                  icon: '🔑',
-                  label: 'Accounts',
-                  tooltip: 'Accounts: invite people, see who has one, revoke them',
-                  onTap: cb.onAccounts,
-                  narrow: narrow,
-                ),
-              if (u.available)
-                _TopButton(
-                  icon: u.phase == UpgradePhase.building
-                      ? '🛠️ Upgrading…'
-                      : u.latest != null
-                      ? '⬆️ Update'
-                      : '⬆️',
-                  kind: u.latest != null && u.phase != UpgradePhase.building ? BtnKind.primary : BtnKind.plain,
-                  tooltip: u.latest != null ? 'New version: ${u.latest!.subject}' : 'Upgrade the office',
-                  onTap: cb.onUpgrade,
-                ),
-              _TopButton(icon: '🔎', tooltip: 'Search the chat and every terminal (/)', onTap: cb.onSearch),
-              _TopButton(icon: '📝', tooltip: 'Whiteboard: draw together, live', onTap: cb.onWhiteboard),
-              _TopButton(
-                icon: '🖼️',
-                kind: hangingNow ? BtnKind.on : BtnKind.plain,
-                tooltip: hangingNow ? 'Stop hanging the picture (Esc)' : 'Hang a picture on a wall (F)',
-                onTap: cb.onDecor,
-              ),
-              _TopButton(icon: '⚙️', tooltip: 'Settings', onTap: cb.onSettings),
-              _TopButton(icon: '❓', tooltip: 'Controls (H)', onTap: cb.onHelp),
-            ],
-          );
-        },
-      ),
-    );
-  }
-}
-
-/// A top-bar .btn: an emoji, a label that hides on a phone, and maybe a count.
-class _TopButton extends StatefulWidget {
-  const _TopButton({
-    required this.icon,
-    required this.onTap,
-    this.label,
-    this.kind = BtnKind.plain,
-    this.tooltip,
-    this.count = 0,
-    this.dim = false,
-    this.narrow = false,
-  });
-
-  final String icon;
-  final String? label;
-  final VoidCallback onTap;
-  final BtnKind kind;
-  final String? tooltip;
-  final int count;
-  final bool dim;
-  final bool narrow;
-
-  @override
-  State<_TopButton> createState() => _TopButtonState();
-}
-
-class _TopButtonState extends State<_TopButton> {
-  bool _hover = false;
-  bool _down = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final (bg, fg) = switch (widget.kind) {
-      BtnKind.primary => (Swatch.accent, Colors.white),
-      BtnKind.on => (Swatch.good, Colors.white),
-      BtnKind.danger => (Swatch.bad, Colors.white),
-      BtnKind.plain => (_hover ? Swatch.paper2 : Colors.white, Swatch.ink),
-    };
-    final style = heavy(14, color: fg);
-    final label = widget.label;
-    Widget b = MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = _down = false),
-      child: GestureDetector(
-        onTapDown: (_) => setState(() => _down = true),
-        onTapCancel: () => setState(() => _down = false),
-        onTapUp: (_) => setState(() => _down = false),
-        onTap: widget.onTap,
-        child: Opacity(
-          opacity: widget.dim ? 0.55 : 1,
-          child: Container(
-            transform: Matrix4.translationValues(0, _down ? 2 : 0, 0),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-            decoration: BoxDecoration(
-              color: bg,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Swatch.ink, width: kBorder),
-              boxShadow: [BoxShadow(color: Swatch.ink, offset: Offset(0, _down ? 1 : 3))],
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(widget.icon, style: style),
-                if (label != null && !widget.narrow) ...[const SizedBox(width: 6), Text(label, style: style)],
-                if (widget.count > 0) CountBadge(widget.count),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-    if (widget.tooltip != null) b = Tooltip(message: widget.tooltip!, child: b);
-    return b;
-  }
-}
-
 // ---- The side panels ------------------------------------------------------------------------------
 
 class _SidePanels extends StatelessWidget {
-  const _SidePanels({required this.callbacks, this.speaking});
+  const _SidePanels({required this.callbacks, required this.prefs, this.speaking});
 
   final HudCallbacks callbacks;
+  final HudPrefs prefs;
   final ValueListenable<Set<String>>? speaking;
 
   @override
   Widget build(BuildContext context) {
     final scope = OfficeScope.of(context);
     final store = scope.store;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Flexible(
-          child: _PeoplePanel(onEditProfile: callbacks.onEditProfile, onWalkTo: callbacks.onWalkTo, speaking: speaking),
-        ),
-        const SizedBox(height: 12),
-        Flexible(child: _WorkersPanel(onOpen: callbacks.onOpenWorker)),
-        ListenableBuilder(
-          listenable: store.topic(Topic.limits),
-          builder: (context, _) => store.limits.windows.isEmpty
-              ? const SizedBox.shrink()
-              : Padding(
-                  padding: const EdgeInsets.only(top: 12),
-                  child: _LimitsPanel(limits: store.limits, onTap: () => scope.net.send(const LimitsRefreshCmd())),
-                ),
-        ),
-      ],
+    return ListenableBuilder(
+      listenable: Listenable.merge([prefs, store.topics(const [Topic.limits, Topic.usage, Topic.workers])]),
+      builder: (context, _) {
+        final panels = <Widget>[
+          if (prefs.panel(HudPanel.people))
+            Flexible(
+              child: _PeoplePanel(
+                prefs: prefs,
+                onEditProfile: callbacks.onEditProfile,
+                onWalkTo: callbacks.onWalkTo,
+                speaking: speaking,
+              ),
+            ),
+          if (prefs.panel(HudPanel.workers)) Flexible(child: _WorkersPanel(prefs: prefs, onOpen: callbacks.onOpenWorker)),
+          if (prefs.panel(HudPanel.spend)) _SpendPanel(prefs: prefs),
+          if (prefs.panel(HudPanel.limits) && store.limits.windows.isNotEmpty)
+            _LimitsPanel(prefs: prefs, limits: store.limits, onTap: () => scope.net.send(const LimitsRefreshCmd())),
+        ];
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (final (i, p) in panels.indexed) ...[if (i > 0) const SizedBox(height: 12), p],
+          ],
+        );
+      },
     );
   }
 }
 
 /// A side panel's heading: "IN THE OFFICE 3".
 class _PanelHeading extends StatelessWidget {
-  const _PanelHeading(this.title, {this.count = '', this.trailing});
+  const _PanelHeading(this.title, {this.count = '', this.trailing, this.hide});
 
   final String title;
   final String count;
   final Widget? trailing;
+
+  /// Its ✕, which hides the panel until the ☰ menu turns it back on.
+  final Widget? hide;
 
   @override
   Widget build(BuildContext context) => Padding(
@@ -631,7 +506,9 @@ class _PanelHeading extends StatelessWidget {
             style: heavy(14, color: Swatch.muted, weight: FontWeight.w700).copyWith(letterSpacing: 0.56),
           ),
         ],
-        if (trailing != null) ...[const Spacer(), trailing!],
+        if (trailing != null || hide != null) const Spacer(),
+        ?trailing,
+        ?hide,
       ],
     ),
   );
@@ -658,8 +535,9 @@ class _SidePanel extends StatelessWidget {
 
 /// "In the office": you first, then everyone by name.
 class _PeoplePanel extends StatelessWidget {
-  const _PeoplePanel({required this.onEditProfile, this.onWalkTo, this.speaking});
+  const _PeoplePanel({required this.prefs, required this.onEditProfile, this.onWalkTo, this.speaking});
 
+  final HudPrefs prefs;
   final VoidCallback onEditProfile;
   final void Function(String peerId)? onWalkTo;
   final ValueListenable<Set<String>>? speaking;
@@ -683,7 +561,11 @@ class _PeoplePanel extends StatelessWidget {
           );
         final talking = speaking?.value ?? const <String>{};
         return _SidePanel(
-          heading: _PanelHeading('In the office', count: '${peers.length}'),
+          heading: _PanelHeading(
+            'In the office',
+            count: '${peers.length}',
+            hide: PanelHide(prefs: prefs, panel: HudPanel.people),
+          ),
           children: [
             for (final (i, p) in peers.indexed)
               Padding(
@@ -804,10 +686,11 @@ class _PersonRow extends StatelessWidget {
   }
 }
 
-/// "Workers": everyone at a desk, oldest first, with what they cost and the office's spend under them.
+/// "Workers": everyone at a desk, oldest first, with what they cost.
 class _WorkersPanel extends StatelessWidget {
-  const _WorkersPanel({required this.onOpen});
+  const _WorkersPanel({required this.prefs, required this.onOpen});
 
+  final HudPrefs prefs;
   final void Function(String id) onOpen;
 
   @override
@@ -818,10 +701,13 @@ class _WorkersPanel extends StatelessWidget {
       builder: (context, _) {
         final workers = store.workers.values.toList()..sort((a, b) => a.createdAt.compareTo(b.createdAt));
         final usage = summarizeUsage(store.usage, workers, store.project);
+        // The board agents at their kiosks are listed but not counted.
+        final hired = hiredCount(workers);
         return _SidePanel(
           heading: _PanelHeading(
             'Workers',
-            count: workers.isEmpty ? '' : '${workers.length}',
+            count: hired == 0 ? '' : '$hired',
+            hide: PanelHide(prefs: prefs, panel: HudPanel.workers),
             trailing: usage.headCost.isEmpty
                 ? null
                 : Tooltip(
@@ -849,7 +735,33 @@ class _WorkersPanel extends StatelessWidget {
                   style: heavy(13, color: Swatch.muted, weight: FontWeight.w600),
                 ),
               ),
-            UsagePanel(usage),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// "Spend": today, the budget and all time.
+class _SpendPanel extends StatelessWidget {
+  const _SpendPanel({required this.prefs});
+
+  final HudPrefs prefs;
+
+  @override
+  Widget build(BuildContext context) {
+    final store = OfficeScope.of(context).store;
+    return ListenableBuilder(
+      listenable: store.topics(const [Topic.workers, Topic.usage, Topic.project]),
+      builder: (context, _) {
+        final usage = summarizeUsage(store.usage, store.workers.values.toList(), store.project);
+        return _SidePanel(
+          heading: _PanelHeading('Spend', hide: PanelHide(prefs: prefs, panel: HudPanel.spend)),
+          children: [
+            if (usage.visible)
+              UsagePanel(usage)
+            else
+              Text('Nothing spent yet', style: heavy(13, color: Swatch.muted, weight: FontWeight.w600)),
           ],
         );
       },
@@ -863,6 +775,7 @@ String workerSub(WorkerInfo w, ProjectInfo? project) {
   final provider = agent ? providerLabel(w.provider, project) : null;
   final kind = agent ? resolvedProvider(w.provider, project) : null;
   final state = agent ? providerUsageState(w.provider, project, w.usage) : null;
+  final badge = agent ? modelBadge(kind, w.model, w.effort) : null;
   final note = state == ProviderUsageState.untracked
       ? ' · usage untracked'
       : state == ProviderUsageState.waiting && kind == AgentProvider.opencode
@@ -872,7 +785,7 @@ String workerSub(WorkerInfo w, ProjectInfo? project) {
       : '';
   final doing = [w.activity, w.title, w.prompt].firstWhere((s) => s != null && s.isNotEmpty, orElse: () => null);
   return [
-    if (provider != null) '⚙️ $provider$note',
+    if (provider != null) '⚙️ $provider${badge != null ? ' · $badge' : ''}$note',
     if (w.worktree != null) '🌿 ${w.worktree!.branch}',
     if (w.pr != null) '🔀 PR #${w.pr!.number}',
     ?doing,
@@ -964,8 +877,9 @@ class _WorkerRowState extends State<_WorkerRow> {
 }
 
 class _LimitsPanel extends StatelessWidget {
-  const _LimitsPanel({required this.limits, required this.onTap});
+  const _LimitsPanel({required this.prefs, required this.limits, required this.onTap});
 
+  final HudPrefs prefs;
   final PlanLimits limits;
   final VoidCallback onTap;
 
@@ -980,9 +894,14 @@ class _LimitsPanel extends StatelessWidget {
         child: Panel(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           // The reset countdowns tick down between reads.
-          child: StreamBuilder(
-            stream: Stream.periodic(const Duration(seconds: 30)),
-            builder: (context, _) => LimitsView(limits),
+          child: Stack(
+            children: [
+              StreamBuilder(
+                stream: Stream.periodic(const Duration(seconds: 30)),
+                builder: (context, _) => LimitsView(limits),
+              ),
+              Positioned(top: 0, right: 0, child: PanelHide(prefs: prefs, panel: HudPanel.limits)),
+            ],
           ),
         ),
       ),
@@ -1003,6 +922,7 @@ class _Chat extends StatefulWidget {
 
 class _ChatState extends State<_Chat> {
   final _input = TextEditingController();
+  bool _hover = false;
 
   FocusNode get _focus => widget.controller.chatFocus;
 
@@ -1031,50 +951,69 @@ class _ChatState extends State<_Chat> {
   @override
   Widget build(BuildContext context) {
     final store = OfficeScope.of(context).store;
+    final prefs = widget.controller.prefs;
     final focused = _focus.hasFocus;
     OutlineInputBorder border(Color c) => OutlineInputBorder(
       borderRadius: BorderRadius.circular(10),
       borderSide: BorderSide(color: c, width: 2),
     );
-    return Panel(
-      padding: const EdgeInsets.all(8),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          ListenableBuilder(
-            listenable: store.topic(Topic.chat),
-            builder: (context, _) => store.chat.isEmpty
-                ? const SizedBox.shrink()
-                : Padding(padding: const EdgeInsets.only(bottom: 6), child: ChatLog(List.of(store.chat))),
-          ),
-          CallbackShortcuts(
-            bindings: {const SingleActivator(LogicalKeyboardKey.escape): _focus.unfocus},
-            child: TextField(
-              controller: _input,
-              focusNode: _focus,
-              maxLength: 500,
-              autocorrect: false,
-              enableSuggestions: false,
-              style: heavy(14, weight: FontWeight.w400),
-              cursorColor: Swatch.ink,
-              decoration: InputDecoration(
-                hintText: 'Press T to chat',
-                hintStyle: heavy(14, color: Swatch.muted, weight: FontWeight.w400),
-                counterText: '',
-                isDense: true,
-                filled: true,
-                fillColor: Colors.white,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-                border: border(Swatch.ink),
-                enabledBorder: border(Swatch.ink),
-                focusedBorder: border(focused ? Swatch.accent : Swatch.ink),
+    return ListenableBuilder(
+      listenable: prefs,
+      builder: (context, _) {
+        // Turned off, it's out of sight until T opens it.
+        final shown = prefs.panel(HudPanel.chat) || focused;
+        return IgnorePointer(
+          ignoring: !shown,
+          child: Opacity(
+            opacity: shown ? 1 : 0,
+            child: MouseRegion(
+              onEnter: (_) => setState(() => _hover = true),
+              onExit: (_) => setState(() => _hover = false),
+              child: Panel(
+                padding: const EdgeInsets.all(8),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    ListenableBuilder(
+                      listenable: store.topic(Topic.chat),
+                      builder: (context, _) => store.chat.isEmpty
+                          ? const SizedBox.shrink()
+                          // Lines fade after a while; hovering the chat or typing in it brings them back.
+                          : ChatLog(List.of(store.chat), fade: !_hover && !focused, bottomGap: 6),
+                    ),
+                    CallbackShortcuts(
+                      bindings: {const SingleActivator(LogicalKeyboardKey.escape): _focus.unfocus},
+                      child: TextField(
+                        controller: _input,
+                        focusNode: _focus,
+                        maxLength: 500,
+                        autocorrect: false,
+                        enableSuggestions: false,
+                        style: heavy(14, weight: FontWeight.w400),
+                        cursorColor: Swatch.ink,
+                        decoration: InputDecoration(
+                          hintText: 'Press T to chat',
+                          hintStyle: heavy(14, color: Swatch.muted, weight: FontWeight.w400),
+                          counterText: '',
+                          isDense: true,
+                          filled: true,
+                          fillColor: Colors.white,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+                          border: border(Swatch.ink),
+                          enabledBorder: border(Swatch.ink),
+                          focusedBorder: border(focused ? Swatch.accent : Swatch.ink),
+                        ),
+                        onSubmitted: (_) => _send(),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              onSubmitted: (_) => _send(),
             ),
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 }

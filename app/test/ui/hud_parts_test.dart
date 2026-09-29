@@ -106,7 +106,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('🎮 Controls'), findsOneWidget);
     expect(find.text('W A S D'), findsOneWidget);
-    expect(find.text('Join voice / mute'), findsOneWidget);
+    expect(find.text('Tab'), findsOneWidget);
     ModalStack.instance.closeAll();
     await tester.pumpAndSettle();
     expect(find.text('🎮 Controls'), findsNothing);

@@ -30,8 +30,12 @@ class OfficeVoice {
 
   static final String _why = notInDesktopApp('Voice chat and screen sharing');
 
-  Future<void> toggleVoice() async => toast(_why);
+  Future<void> toggleVoice({bool pushToTalk = false}) async => toast(_why);
+  Future<void> joinVoice({bool pushToTalk = false}) async => toast(_why);
   void toggleMute() {}
+  void setMuted(bool muted) {}
+  void startTalking() {}
+  void stopTalking() {}
   Future<void> toggleShare() async => toast(_why);
 
   void beforeWelcome() {}

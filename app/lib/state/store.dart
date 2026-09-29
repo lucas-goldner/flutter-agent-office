@@ -20,6 +20,9 @@ export 'screen_state.dart';
 enum Topic {
   peers, workers, issues, pulls, chat, project, screens, team, upgrade, services, decor, usage, limits,
   queue, me, accounts, notify, floors, floor, repos, dog, jukebox, sky, whiteboard, drawing,
+  // The building-wide settings (⚙️ Settings): the workspace folder, the holiday theme, the office's
+  // prompts and default worker, leave-on-merge, and the machine with its worker limit.
+  projectsDir, theme, prompts, leaveOnMerge, machine,
 }
 
 
@@ -65,6 +68,19 @@ void saveProfile(Profile p) => storageSet(_profileKey, jsonEncode(p.toJson()));
 /// The floor you were last on, to come back to it after a reload.
 String? lastFloor() => storageGet(_floorKey);
 
+/// The panels you can show or hide on screen, from the ☰ menu.
+enum HudPanel { workers, people, spend, limits, chat, floor }
+
+/// Out of the way by default: only the chat shows until you turn the rest on.
+const Map<HudPanel, bool> kHudDefaults = {
+  HudPanel.workers: false,
+  HudPanel.people: false,
+  HudPanel.spend: false,
+  HudPanel.limits: false,
+  HudPanel.chat: true,
+  HudPanel.floor: false,
+};
+
 class Settings {
   ViewMode view = ViewMode.first;
 
@@ -79,10 +95,40 @@ class Settings {
   /// Desktop notifications when a worker needs you while you're in another tab.
   bool notify = true;
 
+  /// Voice chat starts muted and V is held down to talk, instead of an open mic.
+  bool pushToTalk = false;
+
+  /// Which panels show on screen (the ☰ menu's "Show on screen").
+  Map<HudPanel, bool> hud = {...kHudDefaults};
+
+  /// The ☰ menu's actions you pinned to the top bar, by id.
+  List<String> pins = [];
+
+  /// A copy to change, like the TS `{ ...settings }`.
+  Settings copy() => Settings()
+    ..view = view
+    ..volume = volume
+    ..muted = muted
+    ..music = music
+    ..musicMuted = musicMuted
+    ..notify = notify
+    ..pushToTalk = pushToTalk
+    ..hud = {...hud}
+    ..pins = [...pins];
+
   static Settings load() {
+    Object? saved;
+    try {
+      saved = jsonDecode(storageGet(_settingsKey) ?? 'null');
+    } catch (_) {
+      // storage blocked or garbage
+    }
+    return fromJson(saved);
+  }
+
+  static Settings fromJson(Object? saved) {
     final s = Settings();
     try {
-      final saved = jsonDecode(storageGet(_settingsKey) ?? 'null');
       if (saved is Map) {
         if (saved['view'] == 'third') s.view = ViewMode.third;
         double? unit(Object? v) => v is num && v.isFinite ? v.toDouble().clamp(0, 1) : null;
@@ -91,6 +137,15 @@ class Settings {
         if (saved['muted'] is bool) s.muted = saved['muted'] as bool;
         if (saved['musicMuted'] is bool) s.musicMuted = saved['musicMuted'] as bool;
         if (saved['notify'] is bool) s.notify = saved['notify'] as bool;
+        if (saved['pushToTalk'] is bool) s.pushToTalk = saved['pushToTalk'] as bool;
+        final hud = saved['hud'];
+        if (hud is Map) {
+          for (final k in HudPanel.values) {
+            if (hud[k.name] is bool) s.hud[k] = hud[k.name] as bool;
+          }
+        }
+        final pins = saved['pins'];
+        if (pins is List) s.pins = pins.whereType<String>().take(30).toList();
       }
     } catch (_) {
       // storage blocked
@@ -98,17 +153,19 @@ class Settings {
     return s;
   }
 
-  void save() => storageSet(
-    _settingsKey,
-    jsonEncode({
-      'view': view.name,
-      'volume': volume,
-      'muted': muted,
-      'music': music,
-      'musicMuted': musicMuted,
-      'notify': notify,
-    }),
-  );
+  Map<String, Object?> toJson() => {
+    'view': view.name,
+    'volume': volume,
+    'muted': muted,
+    'music': music,
+    'musicMuted': musicMuted,
+    'notify': notify,
+    'pushToTalk': pushToTalk,
+    'hud': {for (final e in hud.entries) e.key.name: e.value},
+    'pins': pins,
+  };
+
+  void save() => storageSet(_settingsKey, jsonEncode(toJson()));
 }
 
 /// The worker whose worktree branch a pull request came from, if it is still at a desk.
@@ -139,7 +196,8 @@ class Store {
   /// Every floor of the building, and the one you're on (null while there are none).
   List<FloorInfo> floors = [];
   String? floor;
-  String projectsDir = '';
+  /// Where the elevator clones new projects, and who moved it there.
+  ProjectsDirState projectsDir = const ProjectsDirState(dir: '');
   ({List<RepoChoice> list, String? error, bool loading, int at}) repos = (list: const [], error: null, loading: false, at: 0);
   GhState<GhIssue> issues = GhState(items: const [], fetchedAt: 0, loading: true);
   GhState<GhPull> pulls = GhState(items: const [], fetchedAt: 0, loading: true);
@@ -173,6 +231,20 @@ class Store {
   DogState? dog;
   double dogStart = 0;
   SkyState? sky;
+
+  // ---- The building's settings, the same on every floor (⚙️ Settings) ----
+
+  /// The holiday decorations.
+  ThemeState theme = const ThemeState();
+
+  /// The office's prompts as rewritten, and the worker everyone starts on.
+  PromptsState prompts = const PromptsState();
+
+  /// Whether workers whose pull request merged go home by themselves.
+  LeaveOnMergeState leaveOnMerge = const LeaveOnMergeState();
+
+  /// How busy the office's machine is, and its worker limit.
+  MachineState machine = MachineState.empty;
 
   final Map<Topic, _Topic> _topics = {for (final t in Topic.values) t: _Topic()};
 
@@ -267,7 +339,11 @@ class Store {
         you = m.you;
         _setPeers(m.peers);
         floors = m.floors;
-        projectsDir = m.projectsDir.dir; // custom, by, at: see ProjectsDirState
+        projectsDir = m.projectsDir;
+        theme = m.theme;
+        prompts = m.prompts;
+        leaveOnMerge = m.leaveOnMerge;
+        machine = m.machine;
         ice = m.ice;
         chat
           ..clear()
@@ -283,6 +359,9 @@ class Store {
         sky = m.sky;
         _enter(m.view);
         for (final t in [Topic.peers, Topic.chat, Topic.upgrade, Topic.usage, Topic.limits, Topic.me, Topic.notify, Topic.floors, Topic.sky]) {
+          emit(t);
+        }
+        for (final t in [Topic.projectsDir, Topic.theme, Topic.prompts, Topic.leaveOnMerge, Topic.machine]) {
           emit(t);
         }
       case FloorEnterMsg m:
@@ -392,6 +471,21 @@ class Store {
       case SkyMsg m:
         sky = m.state;
         emit(Topic.sky);
+      case ProjectsDirMsg m:
+        projectsDir = m.state;
+        emit(Topic.projectsDir);
+      case ThemeMsg m:
+        theme = m.state;
+        emit(Topic.theme);
+      case PromptsMsg m:
+        prompts = m.state;
+        emit(Topic.prompts);
+      case LeaveOnMergeMsg m:
+        leaveOnMerge = m.state;
+        emit(Topic.leaveOnMerge);
+      case MachineMsg m:
+        machine = m.state;
+        emit(Topic.machine);
       case ChatMsg m:
         chat.add(m.line);
         if (chat.length > 200) chat.removeAt(0);
