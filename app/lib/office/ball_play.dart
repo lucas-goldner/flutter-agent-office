@@ -76,8 +76,9 @@ class BallPlay {
   void news() {
     final r = c.store.rooms;
     if (r.ballFromEnter) {
-      if (holding && r.ball.holder != c.store.you)
+      if (holding && r.ball.holder != c.store.you) {
         toast('🏀 The ball stayed behind, back under the other floor’s hoop');
+      }
       _pending = 0;
     } else if (_pending > 0 && --_pending > 0) {
       return;
