@@ -339,6 +339,9 @@ class OfficeController implements OfficeActions {
     _listen(Topic.peers, _syncPeers);
     _listen(Topic.workers, _syncWorkers);
     _listen(Topic.workers, _renderWaiting);
+    // A worker's bubble shows whether it has a pull request open (green) or merged (purple: send it home).
+    _listen(Topic.pulls, _paintPrs);
+    _listen(Topic.queue, _paintPrs);
     _listen(Topic.floors, _paintFloor);
     _listen(Topic.dog, () => dog.sync(store.dog, store.dogStart));
     _listen(Topic.jukebox, _syncJukebox);
@@ -584,6 +587,13 @@ class OfficeController implements OfficeActions {
     });
   }
 
+  void _paintPrs() {
+    for (final e in _workerViews.entries) {
+      final w = store.workers[e.key];
+      if (w != null) e.value.model.setPr(workerPr(w, store.pulls.items, store.queue.tasks));
+    }
+  }
+
   // ---- Walking over to someone, and what everyone's up to ---------------------------------------
 
   /// Near enough to talk: where a walk over to someone ends.
@@ -786,6 +796,7 @@ class OfficeController implements OfficeActions {
         v.model.setStatus(w.status, waitingOnSomeone(w));
       }
       final task = w.task;
+      v.model.setPr(workerPr(w, store.pulls.items, store.queue.tasks));
       v.model.setTask(
         task != null && w.kind == WorkerKind.agent
             ? WorkerTask(name: '${providerLabel(w.provider, store.project)} · ${task.name}', summary: task.summary)

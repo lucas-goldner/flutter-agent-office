@@ -18,6 +18,7 @@ import 'package:office_shared/status.dart';
 import 'geo.dart';
 import 'label_widgets.dart';
 import 'labels.dart';
+import 'worker_pr.dart';
 import 'player.dart' show kHips;
 import 'toon.dart';
 
@@ -745,11 +746,25 @@ class Worker {
 
   bool get isLeaving => _leaving != null;
 
+  /// Its pull request, open or merged: its bubble is outlined (and labelled, while it rests) to match.
+  WorkerPr? _pr;
+
+  void setPr(WorkerPr? pr) {
+    if (pr == _pr) return;
+    _pr = pr;
+    _drawBubble();
+  }
+
   void _drawBubble() {
     if (_leaving != null) return;
     final task = _task;
     final b = workerBubble(status, bouncing);
-    final key = task != null ? '${status.wire}|$bouncing|${task.name}|${task.summary}' : b.text;
+    final pr = _pr;
+    final border = pr != null ? prInk[pr.state] : null;
+    // Not working on or waiting for something more: its pull request in place of ready / done / asleep.
+    final prText = prLabel(pr, status);
+    final text = prText ?? b.text;
+    final key = '$border|$prText|${task != null ? '${status.wire}|$bouncing|${task.name}|${task.summary}' : text}';
     if (key == _bubbleKey) return;
     _bubbleKey = key;
     _labels.remove(_bubble);
@@ -761,18 +776,19 @@ class Worker {
         offset: vm.Vector3(0, 1.74, 0),
         alignment: Alignment.bottomCenter,
         child: TaskCard(
-          chip: taskChip[status] ?? taskChip[WorkerStatus.idle],
+          chip: prText != null ? CardChip(prText.toUpperCase(), border!, '#ffffff') : taskChip[status] ?? taskChip[WorkerStatus.idle],
           title: task.name,
           body: task.summary,
           bg: isAsleep(status) ? '#e9ecef' : b.bg,
+          border: border,
         ),
       );
-    } else if (b.text.isNotEmpty) {
+    } else if (text.isNotEmpty) {
       _bubble = WorldLabel(
         anchor: root,
         offset: vm.Vector3(0, 1.95, 0),
         alignment: Alignment.center,
-        child: TagPill(b.text, bg: b.bg, size: 38),
+        child: TagPill(text, bg: b.bg, size: 38, border: border ?? '#2b2d42'),
       );
     }
     if (_bubble != null) _labels.add(_bubble!);
