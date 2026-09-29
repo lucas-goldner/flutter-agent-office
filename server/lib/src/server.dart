@@ -1053,11 +1053,15 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     if (path.startsWith('/api/gh/') && method == Method.get) {
       // What the issue and PR windows show beyond the board cards (see github.dart).
       final raw = _query(url, 'number');
-      final n = raw == null ? null : num.tryParse(raw.trim().isEmpty ? '0' : raw.trim());
-      if (n == null || !_isSafeInteger(n.toDouble()) || n <= 0) return _send(400, {'error': 'Bad number'});
+      final parsed = raw == null ? null : num.tryParse(raw.trim().isEmpty ? '0' : raw.trim());
+      // The repo's labels (for the label picker) are the one thing not about a single issue or PR.
+      final bad = parsed == null || !_isSafeInteger(parsed.toDouble()) || parsed <= 0;
+      if (path != '/api/gh/labels' && bad) return _send(400, {'error': 'Bad number'});
+      final n = bad ? 0 : parsed;
       if (floor == null) return _send(404, {'error': 'No such floor'});
       final github = floor.github;
       try {
+        if (path == '/api/gh/labels') return _send(200, [for (final l in await github.repoLabels()) l.toJson()]);
         if (path == '/api/gh/pull') return _send(200, (await github.pullDetail(n.toInt())).toJson());
         if (path == '/api/gh/issue') return _send(200, (await github.issueDetail(n.toInt())).toJson());
         if (path == '/api/gh/pull/diff') {
@@ -1661,6 +1665,30 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
                   '${dropped ? ' and took it off the queue' : ''}',
                 );
               }),
+        );
+      case 'gh.labels':
+        final floor = here();
+        final n = _num(msg['number']);
+        final kind = msg['kind'] == 'issue' || msg['kind'] == 'pull' ? GhKind.parse(msg['kind']) : null;
+        if (floor == null || !_isSafeInteger(n) || n <= 0 || kind == null) break;
+        final number = n.toInt();
+        List<String> names(Object? v) => {
+          for (final l in v is List ? v : const [])
+            if (_str(l, ghLabelMax + 1) case final s when s.isNotEmpty && s.length <= ghLabelMax) s,
+        }.take(100).toList();
+        final add = names(msg['add']);
+        final remove = names(msg['remove']).where((l) => !add.contains(l)).toList();
+        if (add.isEmpty && remove.isEmpty) {
+          sendTo(c, GhLabeledMsg(kind: kind, number: number, error: 'No labels to change'));
+          break;
+        }
+        unawaited(
+          floor.github.setLabels(kind, number, add, remove).then((r) {
+            sendTo(c, GhLabeledMsg(kind: kind, number: number, labels: r.labels, error: r.error));
+            if (r.labels == null) return;
+            final what = [for (final l in add) '+$l', for (final l in remove) '−$l'].join(' ');
+            toastFloor(floor, '🏷️ $who labeled ${kind == GhKind.pull ? 'PR' : 'issue'} #$number: $what');
+          }),
         );
       case 'queue.add':
         final floor = here();
