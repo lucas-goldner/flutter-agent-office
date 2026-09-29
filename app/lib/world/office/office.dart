@@ -95,7 +95,7 @@ class Office {
   final Map<String, Face> boardMeshes;
   final Face tvScreen;
 
-  /// The monitor on the boss's desk upstairs, where DEADFALL plays (ui/arcade.ts).
+  /// The monitor on the boss's desk upstairs, where Minesweeper plays (ui/arcade.dart).
   final Face bossScreen;
   final Elevator elevator;
 
@@ -141,6 +141,9 @@ class Office {
     return appeared;
   }
 
+  /// Another door that opens for anyone who comes up to it (the meeting room's, see meeting_room.dart).
+  void addDoor(Door d) => _doors.add(d);
+
   /// The sign over the elevator doors: which floor you're on.
   void setProjectName(String name) => elevator.setSign('🛗 $name');
 
@@ -166,7 +169,8 @@ class Office {
       d.show(d.open);
     }
     for (final d in desks.values) {
-      if (!d.vacancy.visible || !d.group.visible) continue;
+      // A board agent waiting to be asked stands still (its own idle bob is in Worker.update).
+      if (!d.vacancy.visible || !d.group.visible || d.def.station != null || d.def.room) continue;
       d.vacancy.position = vm.Vector3(0, d.vacancyY + math.sin(t * 2 + d.def.x) * 0.06, 0);
       d.vacancy.rotation = yaw(t * 1.2);
     }

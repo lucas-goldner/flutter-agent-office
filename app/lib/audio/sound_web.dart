@@ -20,6 +20,7 @@ import 'package:web/web.dart' as web;
 
 import 'package:office_shared/jukebox.dart' show jukeboxStream;
 import 'package:office_shared/layout.dart' show desks;
+import 'package:office_shared/layout.dart' as lay show Cabinet;
 import 'package:office_shared/protocol.dart' show GongWhy;
 import '../state/store.dart' show nowMs;
 import 'music.dart';
@@ -461,6 +462,83 @@ class OfficeSound implements DogSounds {
   void _blip(web.AudioNode dest, double when, double freq, double ratio, double len, double gain) {
     final ctx = _ctx!;
     final o = ctx.createOscillator();
+    o.frequency.setValueAtTime(freq, when);
+    o.frequency.exponentialRampToValueAtTime(freq * ratio, when + len);
+    final g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, when);
+    g.gain.exponentialRampToValueAtTime(gain, when + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.0001, when + len);
+    o.to(g).to(dest);
+    o.start(when);
+    o.stop(when + len + 0.02);
+  }
+
+  /// The arcade cabinet's chip bleeps: a piece landing ('land'), lines clearing ('clear', a longer run
+  /// up for more at once), the game ending ('over').
+  void arcade(String kind, [int lines = 1]) {
+    final ctx = _ctx;
+    if (ctx == null) return;
+    _count('arcade.$kind');
+    final out = _panner(const Pos(lay.Cabinet.x, 1.4, lay.Cabinet.z), 1.5, 1.2);
+    out.connect(_ambience);
+    final t0 = ctx.currentTime + 0.02;
+    if (kind == 'land') {
+      _chip(out, t0, 160, 0.55, 0.07, 0.1, 'square');
+    } else if (kind == 'clear') {
+      const notes = [523, 659, 784, 1047, 1319];
+      for (var i = 0; i < notes.length && i <= lines; i++) {
+        _chip(out, t0 + i * 0.07, notes[i].toDouble(), 1.02, 0.1, 0.09, 'square');
+      }
+    } else {
+      const notes = [392, 330, 262, 196];
+      for (var i = 0; i < notes.length; i++) {
+        _chip(out, t0 + i * 0.18, notes[i].toDouble(), 0.97, 0.17, 0.14, 'triangle');
+      }
+    }
+  }
+
+  /// The basketball: a bounce ('bounce'), the rim ringing ('rim'), the backboard ('board'), or the
+  /// swish through the net ('score'), [speed] m/s hard, at [x], [y], [z].
+  void ball(String kind, double x, double y, double z, double speed) {
+    final ctx = _ctx;
+    if (ctx == null) return;
+    _count('ball-$kind');
+    final loud = math.min(1.0, speed / 7);
+    final out = _panner(Pos(x, y, z), 2, 1.1);
+    out.connect(_ambience);
+    final t0 = ctx.currentTime + 0.005;
+    if (kind == 'bounce') {
+      // The pong of the air inside, over a slap on the floor.
+      _blip(out, t0, _rand(150, 175), 0.7, 0.16, 0.05 + 0.3 * loud);
+      _play(_pick(_buf.steps), gain: 0.15 + 0.5 * loud, rate: _rand(1.25, 1.4), dest: out);
+    } else if (kind == 'rim') {
+      // Steel ringing, a little out of tune with itself.
+      final f = _rand(520, 600);
+      for (final (ratio, amp, len) in const [(1.0, 0.1, 0.5), (2.43, 0.06, 0.35), (4.1, 0.03, 0.2)]) {
+        _blip(out, t0, f * ratio, 0.99, len, amp * (0.3 + loud));
+      }
+      _play(_pick(_buf.steps), gain: 0.2 * loud, rate: 1.9, dest: out);
+    } else if (kind == 'board') {
+      _play(_pick(_buf.steps), gain: 0.25 + 0.5 * loud, rate: 0.8, dest: out);
+      _blip(out, t0, 240, 0.8, 0.12, 0.05 + 0.1 * loud);
+    } else {
+      // Swish: a breath of noise through the net, brightening as it goes.
+      final n = _noise(_buf.white);
+      final tone = biquad(ctx, 'bandpass', 2400, 1.2);
+      tone.frequency.setValueAtTime(1800, t0);
+      tone.frequency.linearRampToValueAtTime(4200, t0 + 0.28);
+      final g = ctx.createGain();
+      envelope(g.gain, t0, const [(0.03, 0.22), (0.18, 0.14), (0.34, 0)]);
+      n.to(tone).to(g).to(out);
+      n.start(t0);
+      n.stop(t0 + 0.4);
+    }
+  }
+
+  /// A [_blip] with its oscillator's wave shape set: a chip tune's square or triangle.
+  void _chip(web.AudioNode dest, double when, double freq, double ratio, double len, double gain, String type) {
+    final ctx = _ctx!;
+    final o = ctx.createOscillator()..type = type;
     o.frequency.setValueAtTime(freq, when);
     o.frequency.exponentialRampToValueAtTime(freq * ratio, when + len);
     final g = ctx.createGain();

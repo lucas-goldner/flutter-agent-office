@@ -7,6 +7,7 @@ import 'dart:math' as math;
 import 'package:office_shared/layout.dart' as lay;
 import 'package:office_shared/layout.dart' hide Elevator, Gong, Jukebox, Whiteboard;
 import '../collider.dart';
+import 'rooms_colliders.dart';
 
 // ---------------------------------------------------------------------------------------------
 // The outside walls.
@@ -344,16 +345,7 @@ List<Collider> kitchenColliders() => [
 ];
 
 /// Plants around the room (x, z, scale).
-const List<(double, double, double)> roomPlants = [
-  (-17.2, -12.2, 1.4),
-  (17.2, -12.2, 1.5),
-  (17.2, 12.2, 1.3),
-  (-17.2, 8.5, 1.2),
-  (5.5, -12.2, 1.1),
-  (-6, 0, 1),
-  (3.5, 0, 0.9),
-  (8.5, 5, 1.1),
-];
+const List<(double, double, double)> roomPlants = plants;
 
 List<Collider> plantColliders() => [for (final (x, z, s) in roomPlants) _plant(x, z, s)];
 
@@ -445,4 +437,5 @@ List<Collider> officeColliders({List<Collider>? elevator}) => [
   ...(elevator ?? elevatorColliders()),
   ...gongColliders(),
   ...whiteboardColliders(),
+  ...roomsColliders(),
 ];

@@ -24,6 +24,9 @@ class ModalHandle {
   /// "🔀 reading PR #12".
   String? doing;
 
+  /// Reading off the bookshelf: an open book for everyone to see (see PeerInfo.reading).
+  bool reading = false;
+
   bool get closed => _closed;
 
   void close() {
@@ -54,6 +57,9 @@ class ModalStack {
   /// What the open windows say you're doing: the topmost one that says anything (a merge dialog
   /// over a PR is still "reading PR #12").
   String? get doingNow => _stack.reversed.map((m) => m.doing).nonNulls.firstOrNull;
+
+  /// Whether one of the open windows is a book you're reading (the bookshelf).
+  bool get readingNow => _stack.any((m) => m.reading);
 
   /// Where windows go: the office page's overlay. Set once by the page.
   void attach(OverlayState overlay) => _overlay = overlay;
@@ -104,7 +110,7 @@ class _Backdrop extends StatefulWidget {
 
   final Widget child;
 
-  /// Not dimmed, and the window gets the whole page to lay itself out in (DEADFALL over the monitor).
+  /// Not dimmed, and the window gets the whole page to lay itself out in (Minesweeper over the monitor).
   final bool clear;
   final VoidCallback? onTapOutside;
   final VoidCallback? onEsc;

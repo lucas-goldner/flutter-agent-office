@@ -87,6 +87,7 @@ import '../world/toon.dart';
 import 'blast.dart';
 import 'carry.dart';
 import 'hanging.dart';
+import 'rooms_hub.dart';
 
 /// How close (meters) you stop a worker jumping, and how far you go before it starts again.
 const double _holdNear = 4;
@@ -110,6 +111,12 @@ const Map<InteractKind, double> _reach = {
   InteractKind.jukebox: 4,
   InteractKind.seat: 3,
   InteractKind.whiteboard: 7,
+  InteractKind.station: 4.5,
+  InteractKind.cabinet: 4,
+  InteractKind.meeting: 7,
+  InteractKind.golf: 3.5,
+  InteractKind.ball: 3.2,
+  InteractKind.bookshelf: 4,
 };
 
 /// Keys that use what you're facing: at a desk, each does something else (see [_interact]).
@@ -235,6 +242,9 @@ class OfficeController implements OfficeActions {
   late final Gallery gallery;
   late final Hanger hanger;
   late final Arcade arcade;
+
+  /// The games and rooms: board agents, the arcade cabinet, the machine monitor…
+  late final RoomsHub rooms = RoomsHub(this);
   final SkyModel skyModel = SkyModel();
   late final SkyView skyView;
 
@@ -359,7 +369,7 @@ class OfficeController implements OfficeActions {
       },
     );
     notifier = DesktopNotifier(enabled: () => settings.notify, openWorker: openWorkerTerminal);
-    // Pictures on the walls (and the one you're hanging), and DEADFALL on the boss's monitor.
+    // Pictures on the walls (and the one you're hanging), and Minesweeper on the boss's monitor.
     gallery = Gallery();
     office.group.add(gallery.group);
     hanger = Hanger(scope: scope, player: player, office: office, gallery: gallery, camera: () => camera);
@@ -369,6 +379,7 @@ class OfficeController implements OfficeActions {
     };
     root.add(hanger.ghost.group);
     arcade = Arcade(office.bossScreen);
+    rooms.init();
     _listen(Topic.decor, () => gallery.sync(store.decor));
 
     _listen(Topic.peers, _syncPeers);
@@ -418,6 +429,7 @@ class OfficeController implements OfficeActions {
     }
     _messages?.cancel();
     voiceRoom.dispose();
+    rooms.dispose();
     hanger.dispose();
     whiteboard.dispose();
     net.close();
@@ -1150,14 +1162,17 @@ class OfficeController implements OfficeActions {
 
   /// What you last told the office you have open (see PeerInfo.doing).
   String? _doingSent;
+  bool _readingSent = false;
   double _presenceAt = 0;
 
-  /// Tells everyone what you have open now, for the line under your name tag.
+  /// Tells everyone what you have open now, for the line under your name tag, and whether you're reading.
   void _sendDoing() {
     final what = clipDoing(ModalStack.instance.doingNow);
-    if (what == _doingSent) return;
+    final reading = ModalStack.instance.readingNow;
+    if (what == _doingSent && reading == _readingSent) return;
     _doingSent = what;
-    net.send(DoingCmd(what: what));
+    _readingSent = reading;
+    net.send(DoingCmd(what: what, reading: reading ? true : null));
   }
 
   /// A few times a second: what you have open, and what people are up to (it changes as they walk
@@ -1257,6 +1272,7 @@ class OfficeController implements OfficeActions {
           final ding = Ding.fromStatus(w.status.wire);
           if (ding != null) sound.ding(ding);
           notifier.alert(w);
+          rooms.workerChanged(w);
         }
         // Finished what it was on: a little spin and a puff of confetti.
         if (w.status == WorkerStatus.done &&
@@ -1473,7 +1489,9 @@ class OfficeController implements OfficeActions {
     }
     confirmDialog(
       'Send ${w.name} home?',
-      'This stops the $session at $where for everyone and frees the desk.',
+      deskById[w.deskId]?.station != null
+          ? 'This stops its $session for everyone, and it forgets what it was asked. The next prompt at the $where starts a fresh one.'
+          : 'This stops the $session at $where for everyone and frees the desk.',
       'Send home',
       () => net.send(WorkerKillCmd(workerId)),
     );
@@ -1532,7 +1550,8 @@ class OfficeController implements OfficeActions {
     if (player.seat != null) standUp();
     if (hanger.active) hanger.cancel();
     _stopWalking();
-    final spot = deskSeat(desk, desk.beanbag ? 1.6 : 2.4);
+    // In front of a board agent's kiosk.
+    final spot = deskSeat(desk, desk.station != null ? -1.6 : (desk.beanbag ? 1.6 : 2.4));
     player.pos.setValues(spot.x, 0, spot.z);
     player.vy = 0;
     player.facing = math.atan2(desk.x - spot.x, desk.z - spot.z);
@@ -1715,6 +1734,7 @@ class OfficeController implements OfficeActions {
     if (target.kind != InteractKind.issues) note = null;
     final card = _carrying;
     if (key == DeskKey.e && card != null && _dropCard(target, card, note)) return;
+    if (rooms.interact(target, key)) return;
     if (target.kind == InteractKind.desk && target.deskId != null) {
       final deskId = target.deskId!;
       final w = store.workerAtDesk(deskId);
@@ -2102,6 +2122,13 @@ class OfficeController implements OfficeActions {
       hint.value = parts;
       return;
     }
+    final held = ModalStack.instance.open ? null : rooms.heldHint();
+    if (held != null) {
+      if (held.$1 == _hintKey) return;
+      _hintKey = held.$1;
+      hint.value = held.$2;
+      return;
+    }
     final t = _target;
     final card = _carrying;
     if ((t == null && card == null) || ModalStack.instance.open) {
@@ -2119,6 +2146,8 @@ class OfficeController implements OfficeActions {
   }
 
   (String, List<HintPart>) _hintFor(Interactable it) {
+    final room = rooms.hint(it);
+    if (room != null) return room;
     (String, List<HintPart>) board(String name) => ('', [HintTitle(name), const HintKey('E', 'Open')]);
     switch (it.kind) {
       case InteractKind.desk:
@@ -2192,7 +2221,7 @@ class OfficeController implements OfficeActions {
             [
               HintTitle(seat.label),
               const HintAside('sitting'),
-              if (seat.game) ...[const HintKey('E', 'Play DEADFALL'), const HintKey('W A S D', 'Get up')]
+              if (seat.game) ...[const HintKey('E', 'Play Minesweeper'), const HintKey('W A S D', 'Get up')]
               else const HintKey('E', 'Get up'),
             ],
           );
@@ -2202,7 +2231,7 @@ class OfficeController implements OfficeActions {
           '${seat.id}|$full',
           [
             HintTitle(seat.label),
-            if (seat.game) const HintAside('🌲 DEADFALL on the monitor'),
+            if (seat.game) const HintAside('💣 Minesweeper on the monitor'),
             full ? const HintAside('no room') : const HintKey('E', 'Sit down'),
           ],
         );
@@ -2215,6 +2244,13 @@ class OfficeController implements OfficeActions {
           '${dog.name}|$doing',
           [HintTitle('🐶 ${dog.name}'), if (doing.isNotEmpty) HintAside(doing), const HintKey('E', 'Pet')],
         );
+      case InteractKind.station ||
+          InteractKind.cabinet ||
+          InteractKind.meeting ||
+          InteractKind.golf ||
+          InteractKind.ball ||
+          InteractKind.bookshelf:
+        return ('', []);
     }
   }
 
@@ -2288,6 +2324,7 @@ class OfficeController implements OfficeActions {
       emoteWheel.release();
       return emoteWheel.isOpen;
     }
+    if (!ModalStack.instance.open && !hud.typing && rooms.key(e)) return true;
     if (e is! KeyDownEvent) return false;
     if (ModalStack.instance.open || hud.typing) return false;
     final hk = HardwareKeyboard.instance;
@@ -2326,6 +2363,7 @@ class OfficeController implements OfficeActions {
   /// A click (not a drag) on the scene, at [screen] in a view of [view] size.
   void onClick(Offset screen, Size view) {
     if (ModalStack.instance.open) return;
+    if (rooms.click()) return;
     if (hanger.active) {
       _reachOut();
       return hanger.place(screen);
@@ -2419,6 +2457,7 @@ class OfficeController implements OfficeActions {
       fovFar: 200,
     );
     camera = arcade.update(camera, dt, view);
+    camera = rooms.update(camera, dt, t, view);
     final look = (player.camTarget - player.camPos)..normalize();
     hands.root.visible = firstPerson;
     if (firstPerson) {
@@ -2500,11 +2539,14 @@ class OfficeController implements OfficeActions {
       final d = math.sqrt(math.pow(desk.x - player.pos.x, 2) + math.pow(desk.z - player.pos.z, 2));
       v.model.held = d < (v.model.held ? _holdLeave : _holdNear);
       v.model.update(dt, t);
-      v.laptop.update(
-        dt,
-        store.screens[e.key],
-        math.sqrt(math.pow(desk.x - player.camPos.x, 2) + math.pow(desk.z - player.camPos.z, 2)),
-      );
+      // A board agent's kiosk has no laptop to paint.
+      if (desk.station == null) {
+        v.laptop.update(
+          dt,
+          store.screens[e.key],
+          math.sqrt(math.pow(desk.x - player.camPos.x, 2) + math.pow(desk.z - player.camPos.z, 2)),
+        );
+      }
     }
     _presenceTick(now);
     voiceRoom.tick(now, me, {for (final e in _remotes.entries) e.key: e.value.person}, player.pos);
@@ -2528,7 +2570,7 @@ class OfficeController implements OfficeActions {
       _target = null;
     } else if (firstPerson) {
       final aim = aimedAt(Offset(view.width / 2, view.height / 2), view);
-      _target = aim != null && aim.near ? aim.it : _mySeat();
+      _target = aim != null && aim.near ? aim.it : _mySeat() ?? rooms.nearby();
       if (aim != null && aim.near) _aimedNote = _noteUnder(aim);
     } else {
       _target = _mySeat() ?? _pickTarget();
@@ -2564,6 +2606,9 @@ class OfficeController implements OfficeActions {
   /// Set by the page when closing the last window may not have given you the mouse back: the next
   /// key you press takes it instead (a key counts for the browser, where the Esc that closed it doesn't).
   bool relookOnKey = false;
+
+  /// Someone else on your floor, as you see them.
+  Person? personOf(String id) => _remotes[id]?.person;
 
   static double _yawOf(vm.Quaternion q) {
     final f = q.rotated(vm.Vector3(0, 0, 1));

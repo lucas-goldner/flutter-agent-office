@@ -13,8 +13,10 @@ import 'package:office_shared/jukebox.dart';
 import 'package:office_shared/protocol.dart';
 import 'package:office_shared/whiteboard.dart';
 import '../world/player.dart' show ViewMode;
+import 'rooms.dart';
 import 'screen_state.dart';
 
+export 'rooms.dart';
 export 'screen_state.dart';
 
 enum Topic {
@@ -246,6 +248,9 @@ class Store {
   /// How busy the office's machine is, and its worker limit.
   MachineState machine = MachineState.empty;
 
+  /// The games and rooms on your floor: the cabinet, the ball, the meeting room, the machine monitor.
+  final Rooms rooms = Rooms();
+
   final Map<Topic, _Topic> _topics = {for (final t in Topic.values) t: _Topic()};
 
   /// Listen to a topic, e.g. with ListenableBuilder.
@@ -334,6 +339,7 @@ class Store {
   }
 
   void apply(ServerMsg msg) {
+    rooms.apply(msg);
     switch (msg) {
       case WelcomeMsg m:
         you = m.you;

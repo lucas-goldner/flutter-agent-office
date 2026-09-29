@@ -12,6 +12,7 @@ import 'office_scope.dart';
 import 'ui/arcade.dart';
 import 'ui/compass.dart';
 import 'ui/emote_wheel.dart';
+import 'ui/shot_meter.dart';
 import 'ui/hud.dart';
 import 'ui/modal.dart';
 import 'world/hands.dart';
@@ -185,14 +186,13 @@ class _OfficePageState extends State<OfficePage> {
                         onPointerUp: _up,
                         onPointerSignal: _wheel,
                         onPointerHover: (e) => c.hanger.mouse = e.localPosition,
-                        // Playing DEADFALL, the office around the monitor is drawn every third frame.
                         child: FrameSkipSceneView(
                           c.scene,
-                          every: () => c.arcade.settled ? 3 : 1,
+                          every: () => 1,
                           onTick: (elapsed, dt) => c.tick(dt, _view),
                           viewsBuilder: (_) => [
                             RenderView(camera: c.camera, layerMask: kRenderLayerAll & ~Hands.layer),
-                            if (c.player.view == ViewMode.first && c.devHands && !c.arcade.zoomed)
+                            if (c.player.view == ViewMode.first && c.devHands && !c.arcade.zoomed && !c.rooms.zoomed)
                               c.hands.overlayView(),
                           ],
                         ),
@@ -223,6 +223,25 @@ class _OfficePageState extends State<OfficePage> {
                         child: const ColoredBox(color: Color(0xFF14151F)),
                       ),
                     ),
+                  ),
+                ),
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  top: 70,
+                  child: ValueListenableBuilder(
+                    valueListenable: c.rooms.golfPanel,
+                    builder: (context, g, _) => g == null ? const SizedBox.shrink() : Center(child: GolfPanelView(g)),
+                  ),
+                ),
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 120,
+                  child: ValueListenableBuilder(
+                    valueListenable: c.rooms.meter,
+                    builder: (context, m, _) =>
+                        m == null ? const SizedBox.shrink() : Center(child: ShotMeterBar(at: m.at, sweet: m.aimed)),
                   ),
                 ),
                 // A floor blown up under you: the white-hot flash.
