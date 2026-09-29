@@ -510,6 +510,13 @@ class OfficeController implements OfficeActions {
   void _devPlace() {
     final q = _query;
     if (q['view'] == 'third') player.setView(ViewMode.third);
+    // ?level=i,n stands you on floor i of a building n floors tall, for looking at the ladder and the tower.
+    final level = q['level']?.split(',').map(int.tryParse).toList();
+    if (level != null && level.length == 2 && level[0] != null && level[1] != null) {
+      final (i, n) = (level[0]!, level[1]!);
+      _devLevel = StackState(index: i, count: n, up: i < n - 1 ? 'Above' : null, down: i > 0 ? 'Below' : null);
+      _syncStack();
+    }
     final at = q['at']?.split(',').map(double.tryParse).toList();
     if (at == null || at.length < 2 || at[0] == null || at[1] == null) return;
     player.pos.setValues(at[0]!, at.length > 4 ? at[4] ?? 0 : 0, at[1]!);
@@ -657,6 +664,9 @@ class OfficeController implements OfficeActions {
     }
   }
 
+  /// Set by the ?level= dev switch: the floor you're on, whatever the building says.
+  StackState? _devLevel;
+
   /// The ladder and the pole go where there are floors to go to from this one, and the building is
   /// as tall as there are floors.
   void _syncStack() {
@@ -665,12 +675,13 @@ class OfficeController implements OfficeActions {
     // Up on the roof there's no ladder or pole to take: nothing above, nothing below.
     final up = store.floor == roof || index < 0 || index + 1 >= floors.length ? null : floors[index + 1].name;
     final down = index > 0 ? floors[index - 1].name : null;
-    final next = StackState(index: math.max(0, index), count: index < 0 ? 1 : floors.length, up: up, down: down);
+    final next =
+        _devLevel ?? StackState(index: math.max(0, index), count: index < 0 ? 1 : floors.length, up: up, down: down);
     if (next == office.stack.state) return;
     office.stack.set(next);
     // The building is as tall as there are floors, with the street as far down as this one is up.
     office.setLevel(next.index, next.count);
-    player.street = streetBelow(index);
+    player.street = streetBelow(next.index);
   }
 
   /// What the hint says while you're on the ladder or a pole.
