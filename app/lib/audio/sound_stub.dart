@@ -30,6 +30,7 @@ class OfficeSound implements DogSounds {
   void step([StepKind kind = StepKind.walk]) {}
   void stepAt(double x, double z, [double y = 0]) {}
   void coffee() {}
+  void arcade(String kind, [int lines = 1]) {}
   @override
   void bark(double x, double z, int times) {}
   @override

@@ -15,12 +15,7 @@ Color css(String s) {
   final m = RegExp(r'rgba?\(([^)]*)\)').firstMatch(s);
   if (m == null) return const Color(0xFF000000);
   final p = m.group(1)!.split(',').map((v) => double.parse(v.trim())).toList();
-  return Color.fromARGB(
-    ((p.length > 3 ? p[3] : 1) * 255).round(),
-    p[0].round(),
-    p[1].round(),
-    p[2].round(),
-  );
+  return Color.fromARGB(((p.length > 3 ? p[3] : 1) * 255).round(), p[0].round(), p[1].round(), p[2].round());
 }
 
 class Pen {
@@ -28,19 +23,25 @@ class Pen {
 
   final Canvas canvas;
 
-  TextStyle style(double size, {FontWeight weight = FontWeight.w400, Color color = const Color(0xFFFFFFFF), List<Shadow>? shadows}) =>
-      TextStyle(
-        fontFamily: kFont,
-        fontFamilyFallback: kFallback,
-        fontSize: size,
-        fontWeight: weight,
-        color: color,
-        height: 1,
-        shadows: shadows,
-      );
+  TextStyle style(
+    double size, {
+    FontWeight weight = FontWeight.w400,
+    Color color = const Color(0xFFFFFFFF),
+    List<Shadow>? shadows,
+  }) => TextStyle(
+    fontFamily: kFont,
+    fontFamilyFallback: kFallback,
+    fontSize: size,
+    fontWeight: weight,
+    color: color,
+    height: 1,
+    shadows: shadows,
+  );
 
-  TextPainter layout(String text, TextStyle style) =>
-      TextPainter(text: TextSpan(text: text, style: style), textDirection: TextDirection.ltr)..layout();
+  TextPainter layout(String text, TextStyle style) => TextPainter(
+    text: TextSpan(text: text, style: style),
+    textDirection: TextDirection.ltr,
+  )..layout();
 
   double measure(String text, TextStyle style) => layout(text, style).width;
 

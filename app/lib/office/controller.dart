@@ -73,6 +73,7 @@ import '../world/smoke.dart';
 import '../world/space.dart';
 import '../world/toon.dart';
 import 'hanging.dart';
+import 'rooms_hub.dart';
 
 /// How close (meters) you stop a worker jumping, and how far you go before it starts again.
 const double _holdNear = 4;
@@ -96,6 +97,12 @@ const Map<InteractKind, double> _reach = {
   InteractKind.jukebox: 4,
   InteractKind.seat: 3,
   InteractKind.whiteboard: 7,
+  InteractKind.station: 4.5,
+  InteractKind.cabinet: 4,
+  InteractKind.meeting: 7,
+  InteractKind.golf: 3.5,
+  InteractKind.ball: 3.2,
+  InteractKind.bookshelf: 4,
 };
 
 /// Keys that use what you're facing: at a desk, each does something else (see [_interact]).
@@ -196,6 +203,7 @@ class OfficeController implements OfficeActions {
 
   /// Voice chat and screen sharing (the TV, the thumbnails, mouths and proximity volume).
   late final OfficeVoice voiceRoom;
+
   /// The 📝 whiteboard: its window, and the drawing on the board in the office.
   late final WhiteboardHub whiteboard;
   late final PlayerController player;
@@ -210,6 +218,9 @@ class OfficeController implements OfficeActions {
   late final Gallery gallery;
   late final Hanger hanger;
   late final Arcade arcade;
+
+  /// The games and rooms: board agents, the arcade cabinet, the machine monitor…
+  late final RoomsHub rooms = RoomsHub(this);
   final SkyModel skyModel = SkyModel();
   late final SkyView skyView;
   final Caffeine caffeine = Caffeine();
@@ -328,6 +339,7 @@ class OfficeController implements OfficeActions {
     };
     root.add(hanger.ghost.group);
     arcade = Arcade(office.bossScreen);
+    rooms.init();
     _listen(Topic.decor, () => gallery.sync(store.decor));
 
     _listen(Topic.peers, _syncPeers);
@@ -371,6 +383,7 @@ class OfficeController implements OfficeActions {
     }
     _messages?.cancel();
     voiceRoom.dispose();
+    rooms.dispose();
     hanger.dispose();
     whiteboard.dispose();
     net.close();
@@ -649,6 +662,7 @@ class OfficeController implements OfficeActions {
           final ding = Ding.fromStatus(w.status.wire);
           if (ding != null) sound.ding(ding);
           notifier.alert(w);
+          rooms.workerChanged(w);
         }
         v.status = w.status;
         v.acked = w.acked;
@@ -832,7 +846,9 @@ class OfficeController implements OfficeActions {
     }
     confirmDialog(
       'Send ${w.name} home?',
-      'This stops the $session at $where for everyone and frees the desk.',
+      deskById[w.deskId]?.station != null
+          ? 'This stops its $session for everyone, and it forgets what it was asked. The next prompt at the $where starts a fresh one.'
+          : 'This stops the $session at $where for everyone and frees the desk.',
       'Send home',
       () => net.send(WorkerKillCmd(workerId)),
     );
@@ -881,8 +897,15 @@ class OfficeController implements OfficeActions {
     final desk = deskById[deskId];
     if (desk == null) return;
     ModalStack.instance.closeAll();
-    // Behind the worker, looking over their shoulder at the laptop.
-    final spot = deskSeat(desk, desk.beanbag ? 1.6 : 2.4);
+    // Behind the worker, looking over their shoulder at the laptop (or in front of a board agent's kiosk).
+    final spot = deskSeat(
+      desk,
+      desk.station != null
+          ? -1.6
+          : desk.beanbag
+          ? 1.6
+          : 2.4,
+    );
     player.pos.setValues(spot.x, 0, spot.z);
     player.vy = 0;
     player.facing = math.atan2(desk.x - spot.x, desk.z - spot.z);
@@ -993,6 +1016,7 @@ class OfficeController implements OfficeActions {
 
   void _interact(Interactable? target, DeskKey key) {
     if (target == null) return;
+    if (rooms.interact(target, key)) return;
     if (target.kind == InteractKind.desk && target.deskId != null) {
       final deskId = target.deskId!;
       final w = store.workerAtDesk(deskId);
@@ -1292,6 +1316,8 @@ class OfficeController implements OfficeActions {
   }
 
   (String, List<HintPart>) _hintFor(Interactable it) {
+    final room = rooms.hint(it);
+    if (room != null) return room;
     (String, List<HintPart>) board(String name) => ('', [HintTitle(name), const HintKey('E', 'Open')]);
     switch (it.kind) {
       case InteractKind.desk:
@@ -1381,6 +1407,13 @@ class OfficeController implements OfficeActions {
           '${dog.name}|$doing',
           [HintTitle('🐶 ${dog.name}'), if (doing.isNotEmpty) HintAside(doing), const HintKey('E', 'Pet')],
         );
+      case InteractKind.station ||
+          InteractKind.cabinet ||
+          InteractKind.meeting ||
+          InteractKind.golf ||
+          InteractKind.ball ||
+          InteractKind.bookshelf:
+        return ('', []);
     }
   }
 
@@ -1563,6 +1596,7 @@ class OfficeController implements OfficeActions {
       fovFar: 200,
     );
     camera = arcade.update(camera, dt, view);
+    camera = rooms.update(camera, dt, t, view);
     final look = (player.camTarget - player.camPos)..normalize();
     hands.root.visible = firstPerson;
     if (firstPerson) {
@@ -1643,11 +1677,14 @@ class OfficeController implements OfficeActions {
       final d = math.sqrt(math.pow(desk.x - player.pos.x, 2) + math.pow(desk.z - player.pos.z, 2));
       v.model.held = d < (v.model.held ? _holdLeave : _holdNear);
       v.model.update(dt, t);
-      v.laptop.update(
-        dt,
-        store.screens[e.key],
-        math.sqrt(math.pow(desk.x - player.camPos.x, 2) + math.pow(desk.z - player.camPos.z, 2)),
-      );
+      // A board agent's kiosk has no laptop to paint.
+      if (desk.station == null) {
+        v.laptop.update(
+          dt,
+          store.screens[e.key],
+          math.sqrt(math.pow(desk.x - player.camPos.x, 2) + math.pow(desk.z - player.camPos.z, 2)),
+        );
+      }
     }
     voiceRoom.tick(now, me, {for (final e in _remotes.entries) e.key: e.value.person}, player.pos);
     departures.update(dt, t);

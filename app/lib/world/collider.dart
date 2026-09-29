@@ -21,7 +21,11 @@ class Collider {
   String toString() => 'Collider($minX..$maxX, $minZ..$maxZ, top $top${bottom == null ? '' : ', bottom $bottom'})';
 }
 
-enum InteractKind { desk, issues, pulls, services, queue, tv, coffee, decor, smoke, elevator, gong, dog, jukebox, seat, whiteboard }
+enum InteractKind {
+  desk, issues, pulls, services, queue, tv, coffee, decor, smoke, elevator, gong, dog, jukebox, seat, whiteboard,
+  // The games and rooms (office/rooms_hub.dart).
+  station, cabinet, meeting, golf, ball, bookshelf,
+}
 
 /// Something you can use: walk up to it and press E, or click it.
 class Interactable {

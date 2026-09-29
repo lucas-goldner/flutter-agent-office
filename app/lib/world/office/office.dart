@@ -150,7 +150,8 @@ class Office {
       d.show(d.open);
     }
     for (final d in desks.values) {
-      if (!d.vacancy.visible || !d.group.visible) continue;
+      // A board agent waiting to be asked stands still (its own idle bob is in Worker.update).
+      if (!d.vacancy.visible || !d.group.visible || d.def.station != null || d.def.room) continue;
       d.vacancy.position = vm.Vector3(0, d.vacancyY + math.sin(t * 2 + d.def.x) * 0.06, 0);
       d.vacancy.rotation = yaw(t * 1.2);
     }

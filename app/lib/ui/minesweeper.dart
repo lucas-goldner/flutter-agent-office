@@ -71,8 +71,7 @@ class Minesweeper {
     return c >= 0 && c < msCols && r >= 0 && r < msRows ? r * msCols + c : -1;
   }
 
-  bool onFace(double x, double y) =>
-      math.sqrt(math.pow(x - _face.x, 2) + math.pow(y - _face.y, 2)) <= _face.r + 4;
+  bool onFace(double x, double y) => math.sqrt(math.pow(x - _face.x, 2) + math.pow(y - _face.y, 2)) <= _face.r + 4;
 
   bool isOpen(int i) => i >= 0 && i < cells.length && cells[i].open;
 
@@ -132,7 +131,10 @@ class Minesweeper {
   /// Puts the mines down, anywhere but [safe] and the cells around it.
   void _lay(int safe) {
     final keep = {safe, ...neighbors(safe)};
-    final spots = [for (var i = 0; i < cells.length; i++) if (!keep.contains(i)) i];
+    final spots = [
+      for (var i = 0; i < cells.length; i++)
+        if (!keep.contains(i)) i,
+    ];
     for (var n = 0; n < msMines; n++) {
       final k = n + _random.nextInt(spots.length - n);
       final t = spots[n];
@@ -172,7 +174,12 @@ class Minesweeper {
       g.rect(0, 150, msWidth, 230, css('rgba(11, 19, 32, 0.78)'));
       final ink = css('#f1ede4');
       g.text('MINESWEEPER', msWidth / 2, 240, g.style(92, weight: FontWeight.w900, color: ink));
-      g.text('Sit in the boss’s chair and press E to play', msWidth / 2, 318, g.style(28, weight: FontWeight.w800, color: ink));
+      g.text(
+        'Sit in the boss’s chair and press E to play',
+        msWidth / 2,
+        318,
+        g.style(28, weight: FontWeight.w800, color: ink),
+      );
     } else if (over) {
       final won = state == MineState.won;
       g.roundRect(

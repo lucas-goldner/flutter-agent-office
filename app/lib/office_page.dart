@@ -164,7 +164,7 @@ class _OfficePageState extends State<OfficePage> {
                           onTick: (elapsed, dt) => c.tick(dt, _view),
                           viewsBuilder: (_) => [
                             RenderView(camera: c.camera, layerMask: kRenderLayerAll & ~Hands.layer),
-                            if (c.player.view == ViewMode.first && c.devHands && !c.arcade.zoomed)
+                            if (c.player.view == ViewMode.first && c.devHands && !c.arcade.zoomed && !c.rooms.zoomed)
                               c.hands.overlayView(),
                           ],
                         ),

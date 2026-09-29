@@ -187,7 +187,9 @@ class _ScreenBoxState extends State<ScreenBox> {
                 top: r.top + 12,
                 left: r.left,
                 width: r.width,
-                child: Center(child: Material(type: MaterialType.transparency, child: widget.over)),
+                child: Center(
+                  child: Material(type: MaterialType.transparency, child: widget.over),
+                ),
               ),
             Positioned(
               top: r.bottom + 10,
@@ -218,7 +220,9 @@ Widget screenBar(String name, String tip, String stop, VoidCallback onStop) => C
     children: [
       Text(name, style: heavy(14)),
       const SizedBox(width: 12),
-      Flexible(child: Text(tip, style: heavy(12, color: Swatch.muted))),
+      Flexible(
+        child: Text(tip, style: heavy(12, color: Swatch.muted)),
+      ),
       const SizedBox(width: 12),
       OfficeButton(label: stop, onPressed: onStop),
     ],
@@ -324,8 +328,7 @@ class _MineBoardState extends State<_MineBoard> {
             final keys = HardwareKeyboard.instance;
             final primary = e.buttons & kPrimaryButton != 0;
             // Right-click flags, and so do Ctrl- and Shift-click for a trackpad. The middle button chords.
-            if (e.buttons & kSecondaryButton != 0 ||
-                (primary && (keys.isControlPressed || keys.isShiftPressed))) {
+            if (e.buttons & kSecondaryButton != 0 || (primary && (keys.isControlPressed || keys.isShiftPressed))) {
               game.flag(i);
             } else if (e.buttons & kMiddleMouseButton != 0) {
               game.chord(i);
@@ -360,7 +363,8 @@ class _MineBoardState extends State<_MineBoard> {
           },
           child: ValueListenableBuilder<int>(
             valueListenable: widget.arcade.version,
-            builder: (context, _, _) => CustomPaint(size: size, painter: _MinePainter(game, widget.arcade.version.value)),
+            builder: (context, _, _) =>
+                CustomPaint(size: size, painter: _MinePainter(game, widget.arcade.version.value)),
           ),
         ),
       );

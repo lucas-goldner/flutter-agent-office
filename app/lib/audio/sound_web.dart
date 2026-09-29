@@ -20,6 +20,7 @@ import 'package:web/web.dart' as web;
 
 import 'package:office_shared/jukebox.dart' show jukeboxStream;
 import 'package:office_shared/layout.dart' show desks;
+import 'package:office_shared/layout.dart' as lay show Cabinet;
 import 'package:office_shared/protocol.dart' show GongWhy;
 import '../state/store.dart' show nowMs;
 import 'music.dart';
@@ -454,6 +455,45 @@ class OfficeSound implements DogSounds {
   void _blip(web.AudioNode dest, double when, double freq, double ratio, double len, double gain) {
     final ctx = _ctx!;
     final o = ctx.createOscillator();
+    o.frequency.setValueAtTime(freq, when);
+    o.frequency.exponentialRampToValueAtTime(freq * ratio, when + len);
+    final g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, when);
+    g.gain.exponentialRampToValueAtTime(gain, when + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.0001, when + len);
+    o.to(g).to(dest);
+    o.start(when);
+    o.stop(when + len + 0.02);
+  }
+
+  /// The arcade cabinet's chip bleeps: a piece landing ('land'), lines clearing ('clear', a longer run
+  /// up for more at once), the game ending ('over').
+  void arcade(String kind, [int lines = 1]) {
+    final ctx = _ctx;
+    if (ctx == null) return;
+    _count('arcade.$kind');
+    final out = _panner(const Pos(lay.Cabinet.x, 1.4, lay.Cabinet.z), 1.5, 1.2);
+    out.connect(_ambience);
+    final t0 = ctx.currentTime + 0.02;
+    if (kind == 'land') {
+      _chip(out, t0, 160, 0.55, 0.07, 0.1, 'square');
+    } else if (kind == 'clear') {
+      const notes = [523, 659, 784, 1047, 1319];
+      for (var i = 0; i < notes.length && i <= lines; i++) {
+        _chip(out, t0 + i * 0.07, notes[i].toDouble(), 1.02, 0.1, 0.09, 'square');
+      }
+    } else {
+      const notes = [392, 330, 262, 196];
+      for (var i = 0; i < notes.length; i++) {
+        _chip(out, t0 + i * 0.18, notes[i].toDouble(), 0.97, 0.17, 0.14, 'triangle');
+      }
+    }
+  }
+
+  /// A [_blip] with its oscillator's wave shape set: a chip tune's square or triangle.
+  void _chip(web.AudioNode dest, double when, double freq, double ratio, double len, double gain, String type) {
+    final ctx = _ctx!;
+    final o = ctx.createOscillator()..type = type;
     o.frequency.setValueAtTime(freq, when);
     o.frequency.exponentialRampToValueAtTime(freq * ratio, when + len);
     final g = ctx.createGain();
