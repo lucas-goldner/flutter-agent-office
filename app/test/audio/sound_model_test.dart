@@ -19,7 +19,8 @@ void main() {
     });
 
     test('the gong and the jukebox', () {
-      expect([gongAt.x, gongAt.y, gongAt.z], [3.5, closeTo(1.09, 1e-12), -12.25]);
+      // Upstream moved the gong past the elevator (GONG.x 3.5 -> 11.8).
+      expect([gongAt.x, gongAt.y, gongAt.z], [11.8, closeTo(1.09, 1e-12), -12.25]);
       expect([jukeboxAt.x, jukeboxAt.y, jukeboxAt.z], [closeTo(17.58, 1e-12), 0.75, 5.4]);
     });
 

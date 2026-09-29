@@ -1675,7 +1675,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         you: id,
         peers: [for (final c in clients.values) c.peer.info],
         floors: floorInfos(),
-        projectsDir: _tildify(cfg.projectsDir),
+        projectsDir: ProjectsDirState(dir: _tildify(cfg.projectsDir)), // custom, by, at: phase 2
         ice: cfg.iceServers,
         chat: chat.recent(50),
         invites: team.available,

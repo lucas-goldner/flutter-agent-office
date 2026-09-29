@@ -6,10 +6,14 @@
 // undefined ones.
 
 import 'avatar.dart';
+import 'cabinet.dart';
 import 'decor.dart';
 import 'dog.dart';
+import 'emotes.dart';
+import 'hoop.dart';
 import 'json_util.dart';
 import 'jukebox.dart';
+import 'rooftop.dart';
 import 'whiteboard.dart';
 
 export 'json_util.dart' show WireEnum;
@@ -72,6 +76,127 @@ enum AgentProvider implements WireEnum {
 }
 
 bool isAgentProvider(Object? value) => AgentProvider.tryParse(value) != null;
+
+/// What a working agent's latest tool call looks like from across the room (see actions.dart):
+/// reading files, editing them, running tests or a build, on the web, or tests failing again and again.
+enum WorkerAction implements WireEnum {
+  read('read'),
+  edit('edit'),
+  test('test'),
+  web('web'),
+  failing('failing');
+
+  const WorkerAction(this.wire);
+  @override
+  final String wire;
+
+  static WorkerAction? tryParse(Object? v) => parseWireOrNull(values, v);
+}
+
+/// The Claude model aliases the hire dialog and queue can request explicitly (see server/agents.ts).
+/// A worker's `model` stays a string: it can also be an OpenCode provider/model id.
+const List<String> claudeModels = ['fable', 'opus', 'sonnet', 'haiku'];
+bool isClaudeModel(Object? value) => value is String && claudeModels.contains(value);
+
+/// Claude Code's `--effort` levels, from fastest/cheapest to most thorough.
+enum AgentEffort implements WireEnum {
+  low('low'),
+  medium('medium'),
+  high('high'),
+  xhigh('xhigh'),
+  max('max');
+
+  const AgentEffort(this.wire);
+  @override
+  final String wire;
+
+  static AgentEffort? tryParse(Object? v) => parseWireOrNull(values, v);
+}
+
+const List<AgentEffort> agentEfforts = AgentEffort.values;
+bool isAgentEffort(Object? value) => AgentEffort.tryParse(value) != null;
+
+/// Which agent a worker runs: its provider, and optionally the model and (Claude only) the reasoning effort.
+class AgentChoice {
+  const AgentChoice({required this.provider, this.model, this.effort});
+
+  factory AgentChoice.fromJson(Map<String, dynamic> j) => AgentChoice(
+    provider: AgentProvider.parse(j['provider']),
+    model: asStringOrNull(j['model']),
+    effort: AgentEffort.tryParse(j['effort']),
+  );
+
+  final AgentProvider provider;
+
+  /// An OpenCode provider/model id, or a Claude model alias; unset for the provider's own default.
+  final String? model;
+  final AgentEffort? effort;
+
+  Map<String, dynamic> toJson() => {'provider': provider.wire, 'model': ?model, 'effort': ?effort?.wire};
+}
+
+/// A prompt someone rewrote in ⚙️ Settings, and who and when.
+class PromptCustom {
+  const PromptCustom({required this.text, required this.by, required this.at});
+
+  factory PromptCustom.fromJson(Map<String, dynamic> j) =>
+      PromptCustom(text: asString(j['text']), by: asString(j['by']), at: asInt(j['at']));
+
+  final String text;
+  final String by;
+  final int at;
+
+  Map<String, dynamic> toJson() => {'text': text, 'by': by, 'at': at};
+}
+
+/// The worker everyone starts on ([AgentChoice]), as someone picked it in ⚙️ Settings.
+class PromptsAgent extends AgentChoice {
+  const PromptsAgent({required super.provider, super.model, super.effort, required this.by, required this.at});
+
+  factory PromptsAgent.fromJson(Map<String, dynamic> j) {
+    final c = AgentChoice.fromJson(j);
+    return PromptsAgent(
+      provider: c.provider,
+      model: c.model,
+      effort: c.effort,
+      by: asString(j['by']),
+      at: asInt(j['at']),
+    );
+  }
+
+  final String by;
+  final int at;
+
+  @override
+  Map<String, dynamic> toJson() => {...super.toJson(), 'by': by, 'at': at};
+}
+
+/// The prompts the office writes for workers by itself (prompts.dart) and the worker everyone
+/// starts on, as set in ⚙️ Settings: the same on every floor.
+class PromptsState implements JsonObject {
+  const PromptsState({this.custom = const {}, this.agent});
+
+  factory PromptsState.fromJson(Map<String, dynamic> j) => PromptsState(
+    custom: {
+      for (final e in asMap(j['custom']).entries)
+        if (e.value is Map) e.key: PromptCustom.fromJson(asMap(e.value)),
+    },
+    agent: _obj(j['agent'], PromptsAgent.fromJson),
+  );
+
+  /// Prompts someone rewrote, by id (a PromptId, see prompts.dart); the rest are the defaults.
+  final Map<String, PromptCustom> custom;
+
+  /// What a worker starts on unless whoever starts it picks another. Unset: the agent the office was
+  /// started with (--agent), on its own default model.
+  final PromptsAgent? agent;
+
+  @override
+  Map<String, dynamic> toJson() => {
+    'custom': {for (final e in custom.entries) e.key: e.value.toJson()},
+    'agent': ?agent?.toJson(),
+  };
+}
 
 /// What becomes of a worker's git worktree when it is sent home.
 enum WorktreeCleanup implements WireEnum {
@@ -293,7 +418,8 @@ abstract interface class JsonObject {
 class WorkerTask implements JsonObject {
   const WorkerTask({required this.name, required this.summary});
 
-  factory WorkerTask.fromJson(Map<String, dynamic> j) => WorkerTask(name: asString(j['name']), summary: asString(j['summary']));
+  factory WorkerTask.fromJson(Map<String, dynamic> j) =>
+      WorkerTask(name: asString(j['name']), summary: asString(j['summary']));
 
   final String name;
   final String summary;
@@ -307,8 +433,12 @@ class WorkerTask implements JsonObject {
 class WorkerWorktree implements JsonObject {
   const WorkerWorktree({required this.path, required this.branch, required this.base, this.from});
 
-  factory WorkerWorktree.fromJson(Map<String, dynamic> j) =>
-      WorkerWorktree(path: asString(j['path']), branch: asString(j['branch']), base: asString(j['base']), from: asStringOrNull(j['from']));
+  factory WorkerWorktree.fromJson(Map<String, dynamic> j) => WorkerWorktree(
+    path: asString(j['path']),
+    branch: asString(j['branch']),
+    base: asString(j['base']),
+    from: asStringOrNull(j['from']),
+  );
 
   final String path;
   final String branch;
@@ -351,11 +481,13 @@ class WorkerInfo implements JsonObject {
     required this.kind,
     this.provider,
     this.model,
+    this.effort,
     required this.deskId,
     required this.name,
     required this.color,
     required this.status,
     required this.acked,
+    this.waitingSince,
     required this.createdBy,
     required this.createdAt,
     this.prompt,
@@ -368,39 +500,47 @@ class WorkerInfo implements JsonObject {
     required this.cols,
     required this.rows,
     required this.viewers,
+    this.viewerIds = const [],
     this.activity,
+    this.action,
     this.task,
     this.usage,
     this.lastInput,
+    this.meeting,
   });
 
   factory WorkerInfo.fromJson(Map<String, dynamic> j) => WorkerInfo(
-        id: asString(j['id']),
-        kind: WorkerKind.parse(j['kind']),
-        provider: AgentProvider.tryParse(j['provider']),
-        model: asStringOrNull(j['model']),
-        deskId: asString(j['deskId']),
-        name: asString(j['name']),
-        color: asString(j['color'], '#888888'),
-        status: WorkerStatus.parse(j['status']),
-        acked: asBool(j['acked']),
-        createdBy: asString(j['createdBy']),
-        createdAt: asInt(j['createdAt']),
-        prompt: asStringOrNull(j['prompt']),
-        worktree: _obj(j['worktree'], WorkerWorktree.fromJson),
-        pr: _obj(j['pr'], PrRef.fromJson),
-        prOpening: asBoolOrNull(j['prOpening']),
-        title: asStringOrNull(j['title']),
-        sessionId: asStringOrNull(j['sessionId']),
-        exitCode: asIntOrNull(j['exitCode']),
-        cols: asInt(j['cols'], 80),
-        rows: asInt(j['rows'], 24),
-        viewers: asStringList(j['viewers']),
-        activity: asStringOrNull(j['activity']),
-        task: _obj(j['task'], WorkerTask.fromJson),
-        usage: _obj(j['usage'], Usage.fromJson),
-        lastInput: _obj(j['lastInput'], LastInput.fromJson),
-      );
+    id: asString(j['id']),
+    kind: WorkerKind.parse(j['kind']),
+    provider: AgentProvider.tryParse(j['provider']),
+    model: asStringOrNull(j['model']),
+    effort: AgentEffort.tryParse(j['effort']),
+    deskId: asString(j['deskId']),
+    name: asString(j['name']),
+    color: asString(j['color'], '#888888'),
+    status: WorkerStatus.parse(j['status']),
+    acked: asBool(j['acked']),
+    waitingSince: asIntOrNull(j['waitingSince']),
+    createdBy: asString(j['createdBy']),
+    createdAt: asInt(j['createdAt']),
+    prompt: asStringOrNull(j['prompt']),
+    worktree: _obj(j['worktree'], WorkerWorktree.fromJson),
+    pr: _obj(j['pr'], PrRef.fromJson),
+    prOpening: asBoolOrNull(j['prOpening']),
+    title: asStringOrNull(j['title']),
+    sessionId: asStringOrNull(j['sessionId']),
+    exitCode: asIntOrNull(j['exitCode']),
+    cols: asInt(j['cols'], 80),
+    rows: asInt(j['rows'], 24),
+    viewers: asStringList(j['viewers']),
+    viewerIds: asStringList(j['viewerIds']),
+    activity: asStringOrNull(j['activity']),
+    action: WorkerAction.tryParse(j['action']),
+    task: _obj(j['task'], WorkerTask.fromJson),
+    usage: _obj(j['usage'], Usage.fromJson),
+    lastInput: _obj(j['lastInput'], LastInput.fromJson),
+    meeting: asStringOrNull(j['meeting']),
+  );
 
   final String id;
 
@@ -408,8 +548,12 @@ class WorkerInfo implements JsonObject {
   final WorkerKind kind;
   final AgentProvider? provider;
 
-  /// Initial OpenCode model selected for this worker, when one was requested.
+  /// Model requested for this worker, instead of the office's configured default: an OpenCode
+  /// provider/model id, or a Claude model alias.
   final String? model;
+
+  /// Reasoning effort requested for this worker, when one was chosen (Claude only).
+  final AgentEffort? effort;
   final String deskId;
   final String name;
   final String color;
@@ -417,6 +561,9 @@ class WorkerInfo implements JsonObject {
 
   /// True once someone opened the terminal after the last done / needs_input.
   final bool acked;
+
+  /// When it last went to done or needs_input (ms), so N goes to whoever has waited longest first.
+  final int? waitingSince;
   final String createdBy;
   final int createdAt;
   final String? prompt;
@@ -438,8 +585,14 @@ class WorkerInfo implements JsonObject {
   /// Names of people currently viewing the terminal.
   final List<String> viewers;
 
+  /// Who is viewing it, by connection (PeerInfo.id): one per open window, so a name can be here twice.
+  final List<String> viewerIds;
+
   /// Latest line of meaningful activity (e.g. last prompt or tool).
   final String? activity;
+
+  /// What its latest tool call is, for the worker to act out while it works.
+  final WorkerAction? action;
 
   /// Written by a small model from its prompts and recent tool calls (see server/tasks.ts).
   final WorkerTask? task;
@@ -450,34 +603,42 @@ class WorkerInfo implements JsonObject {
   /// Who last typed into its terminal (or sent it a prompt), and when.
   final LastInput? lastInput;
 
+  /// The meeting it was called to, for a worker at the meeting room's table (see [Meeting]).
+  final String? meeting;
+
   @override
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'kind': kind.wire,
-        'provider': ?provider?.wire,
-        'model': ?model,
-        'deskId': deskId,
-        'name': name,
-        'color': color,
-        'status': status.wire,
-        'acked': acked,
-        'createdBy': createdBy,
-        'createdAt': createdAt,
-        'prompt': ?prompt,
-        'worktree': ?worktree?.toJson(),
-        'pr': ?pr?.toJson(),
-        'prOpening': ?prOpening,
-        'title': ?title,
-        'sessionId': ?sessionId,
-        'exitCode': ?exitCode,
-        'cols': cols,
-        'rows': rows,
-        'viewers': viewers,
-        'activity': ?activity,
-        'task': ?task?.toJson(),
-        'usage': ?usage?.toJson(),
-        'lastInput': ?lastInput?.toJson(),
-      };
+    'id': id,
+    'kind': kind.wire,
+    'provider': ?provider?.wire,
+    'model': ?model,
+    'effort': ?effort?.wire,
+    'deskId': deskId,
+    'name': name,
+    'color': color,
+    'status': status.wire,
+    'acked': acked,
+    'waitingSince': ?waitingSince,
+    'createdBy': createdBy,
+    'createdAt': createdAt,
+    'prompt': ?prompt,
+    'worktree': ?worktree?.toJson(),
+    'pr': ?pr?.toJson(),
+    'prOpening': ?prOpening,
+    'title': ?title,
+    'sessionId': ?sessionId,
+    'exitCode': ?exitCode,
+    'cols': cols,
+    'rows': rows,
+    'viewers': viewers,
+    'viewerIds': viewerIds,
+    'activity': ?activity,
+    'action': ?action?.wire,
+    'task': ?task?.toJson(),
+    'usage': ?usage?.toJson(),
+    'lastInput': ?lastInput?.toJson(),
+    'meeting': ?meeting,
+  };
 }
 
 /// Session usage. The persistent office ledger continues to cover Claude Code only.
@@ -499,18 +660,18 @@ class Usage implements JsonObject {
   static const Usage zero = Usage(input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, calls: 0);
 
   factory Usage.fromJson(Map<String, dynamic> j) => Usage(
-        input: asInt(j['input']),
-        output: asInt(j['output']),
-        reasoning: asIntOrNull(j['reasoning']),
-        costKnown: asBoolOrNull(j['costKnown']),
-        incomplete: asBoolOrNull(j['incomplete']),
-        cacheWrite: asInt(j['cacheWrite']),
-        cacheRead: asInt(j['cacheRead']),
-        cost: asDouble(j['cost']),
-        calls: asInt(j['calls']),
-        callsKnown: asBoolOrNull(j['callsKnown']),
-        totalTokens: asIntOrNull(j['totalTokens']),
-      );
+    input: asInt(j['input']),
+    output: asInt(j['output']),
+    reasoning: asIntOrNull(j['reasoning']),
+    costKnown: asBoolOrNull(j['costKnown']),
+    incomplete: asBoolOrNull(j['incomplete']),
+    cacheWrite: asInt(j['cacheWrite']),
+    cacheRead: asInt(j['cacheRead']),
+    cost: asDouble(j['cost']),
+    calls: asInt(j['calls']),
+    callsKnown: asBoolOrNull(j['callsKnown']),
+    totalTokens: asIntOrNull(j['totalTokens']),
+  );
 
   /// Input tokens that missed the prompt cache.
   final int input;
@@ -545,31 +706,62 @@ class Usage implements JsonObject {
 
   @override
   Map<String, dynamic> toJson() => {
-        'input': input,
-        'output': output,
-        'reasoning': ?reasoning,
-        'costKnown': ?costKnown,
-        'incomplete': ?incomplete,
-        'cacheWrite': cacheWrite,
-        'cacheRead': cacheRead,
-        'cost': cost,
-        'calls': calls,
-        'callsKnown': ?callsKnown,
-        'totalTokens': ?totalTokens,
-      };
+    'input': input,
+    'output': output,
+    'reasoning': ?reasoning,
+    'costKnown': ?costKnown,
+    'incomplete': ?incomplete,
+    'cacheWrite': cacheWrite,
+    'cacheRead': cacheRead,
+    'cost': cost,
+    'calls': calls,
+    'callsKnown': ?callsKnown,
+    'totalTokens': ?totalTokens,
+  };
+}
+
+/// Every token a session used, cache reads and writes included: what the office shows and budgets meetings by.
+int tokensOf(Usage u) => u.totalTokens ?? (u.input + u.output + (u.reasoning ?? 0) + u.cacheWrite + u.cacheRead);
+
+/// e.g. 950, 12k, 1.25M
+String fmtTokens(num n) {
+  if (n < 1000) return '$n';
+  if (n < 1e6) return '${(n / 1000).toStringAsFixed(n < 10000 ? 1 : 0)}k';
+  return '${(n / 1e6).toStringAsFixed(n < 10e6 ? 2 : 1)}M';
+}
+
+/// "$1,234.50": a dollar sign, then the amount the way en-US toLocaleString writes it; "<$0.01" for a
+/// sliver of a cent.
+String fmtCost(double usd) {
+  if (usd > 0 && usd < 0.005) return '<\$0.01';
+  final s = usd.abs().toStringAsFixed(2);
+  final dot = s.indexOf('.');
+  final whole = s.substring(0, dot);
+  final b = StringBuffer();
+  for (var i = 0; i < whole.length; i++) {
+    if (i > 0 && (whole.length - i) % 3 == 0) b.write(',');
+    b.write(whole[i]);
+  }
+  return '\$${usd < 0 ? '-' : ''}$b${s.substring(dot)}';
 }
 
 /// Spend across the whole office, kept on disk (see server/usage.ts).
 class UsageState implements JsonObject {
-  const UsageState({required this.total, required this.today, required this.day, this.budget, required this.pauseHiring});
+  const UsageState({
+    required this.total,
+    required this.today,
+    required this.day,
+    this.budget,
+    required this.pauseHiring,
+  });
 
   factory UsageState.fromJson(Map<String, dynamic> j) => UsageState(
-        total: _obj(j['total'], Usage.fromJson) ?? Usage.zero,
-        today: _obj(j['today'], Usage.fromJson) ?? Usage.zero,
-        day: asString(j['day']),
-        budget: asDoubleOrNull(j['budget']),
-        pauseHiring: asBool(j['pauseHiring']),
-      );
+    total: _obj(j['total'], Usage.fromJson) ?? Usage.zero,
+    today: _obj(j['today'], Usage.fromJson) ?? Usage.zero,
+    day: asString(j['day']),
+    budget: asDoubleOrNull(j['budget']),
+    pauseHiring: asBool(j['pauseHiring']),
+  );
 
   /// Every worker the office ever ran, including ones sent home.
   final Usage total;
@@ -587,14 +779,21 @@ class UsageState implements JsonObject {
   final bool pauseHiring;
 
   @override
-  Map<String, dynamic> toJson() => {'total': total.toJson(), 'today': today.toJson(), 'day': day, 'budget': ?budget, 'pauseHiring': pauseHiring};
+  Map<String, dynamic> toJson() => {
+    'total': total.toJson(),
+    'today': today.toJson(),
+    'day': day,
+    'budget': ?budget,
+    'pauseHiring': pauseHiring,
+  };
 }
 
 /// One of the Claude plan's usage windows: the 5-hour session, the week, or a model's week.
 class PlanWindow implements JsonObject {
   const PlanWindow({required this.label, required this.pct, this.resetsAt});
 
-  factory PlanWindow.fromJson(Map<String, dynamic> j) => PlanWindow(label: asString(j['label']), pct: asDouble(j['pct']), resetsAt: asIntOrNull(j['resetsAt']));
+  factory PlanWindow.fromJson(Map<String, dynamic> j) =>
+      PlanWindow(label: asString(j['label']), pct: asDouble(j['pct']), resetsAt: asIntOrNull(j['resetsAt']));
 
   /// e.g. "5h session", "Week", "Fable week".
   final String label;
@@ -614,7 +813,11 @@ class PlanWindow implements JsonObject {
 class PlanLimits implements JsonObject {
   const PlanLimits({this.plan, required this.windows, required this.at});
 
-  factory PlanLimits.fromJson(Map<String, dynamic> j) => PlanLimits(plan: asStringOrNull(j['plan']), windows: asList(j['windows'], PlanWindow.fromJson), at: asInt(j['at']));
+  factory PlanLimits.fromJson(Map<String, dynamic> j) => PlanLimits(
+    plan: asStringOrNull(j['plan']),
+    windows: asList(j['windows'], PlanWindow.fromJson),
+    at: asInt(j['at']),
+  );
 
   /// 'pro', 'max', 'team', 'enterprise'…, when known.
   final String? plan;
@@ -631,15 +834,21 @@ class PlanLimits implements JsonObject {
 
 /// What a worker's worktree holds, so whoever sends it home knows what deleting it would lose.
 class WorktreeState implements JsonObject {
-  const WorktreeState({required this.exists, required this.dirty, required this.ahead, required this.unpushed, this.error});
+  const WorktreeState({
+    required this.exists,
+    required this.dirty,
+    required this.ahead,
+    required this.unpushed,
+    this.error,
+  });
 
   factory WorktreeState.fromJson(Map<String, dynamic> j) => WorktreeState(
-        exists: asBool(j['exists']),
-        dirty: asInt(j['dirty']),
-        ahead: asInt(j['ahead']),
-        unpushed: asInt(j['unpushed']),
-        error: asStringOrNull(j['error']),
-      );
+    exists: asBool(j['exists']),
+    dirty: asInt(j['dirty']),
+    ahead: asInt(j['ahead']),
+    unpushed: asInt(j['unpushed']),
+    error: asStringOrNull(j['error']),
+  );
 
   /// The worktree folder is still there.
   final bool exists;
@@ -657,10 +866,30 @@ class WorktreeState implements JsonObject {
   final String? error;
 
   @override
-  Map<String, dynamic> toJson() => {'exists': exists, 'dirty': dirty, 'ahead': ahead, 'unpushed': unpushed, 'error': ?error};
+  Map<String, dynamic> toJson() => {
+    'exists': exists,
+    'dirty': dirty,
+    'ahead': ahead,
+    'unpushed': unpushed,
+    'error': ?error,
+  };
 }
 
 // ---- People -------------------------------------------------------------------------------------
+
+/// The issue on a card someone carries around the floor (see [PeerInfo.carrying]).
+class CarriedIssue implements JsonObject {
+  const CarriedIssue({required this.issue, required this.title});
+
+  factory CarriedIssue.fromJson(Map<String, dynamic> j) =>
+      CarriedIssue(issue: asInt(j['issue']), title: asString(j['title']));
+
+  final int issue;
+  final String title;
+
+  @override
+  Map<String, dynamic> toJson() => {'issue': issue, 'title': title};
+}
 
 class PeerInfo implements JsonObject {
   const PeerInfo({
@@ -677,29 +906,39 @@ class PeerInfo implements JsonObject {
     required this.muted,
     required this.sharing,
     this.smoking,
+    this.golfing,
     this.seat,
+    this.carrying,
+    this.drink,
     this.account,
     this.floor,
+    this.doing,
+    this.reading,
   });
 
   factory PeerInfo.fromJson(Map<String, dynamic> j) => PeerInfo(
-        id: asString(j['id']),
-        name: asString(j['name']),
-        color: asString(j['color'], '#888888'),
-        look: Look.fromJson(j['look']),
-        x: asDouble(j['x']),
-        y: asDouble(j['y']),
-        z: asDouble(j['z']),
-        rotY: asDouble(j['rotY']),
-        moving: asBool(j['moving']),
-        voice: asBool(j['voice']),
-        muted: asBool(j['muted']),
-        sharing: asBool(j['sharing']),
-        smoking: asBoolOrNull(j['smoking']),
-        seat: asStringOrNull(j['seat']),
-        account: asBoolOrNull(j['account']),
-        floor: asStringOrNull(j['floor']),
-      );
+    id: asString(j['id']),
+    name: asString(j['name']),
+    color: asString(j['color'], '#888888'),
+    look: Look.fromJson(j['look']),
+    x: asDouble(j['x']),
+    y: asDouble(j['y']),
+    z: asDouble(j['z']),
+    rotY: asDouble(j['rotY']),
+    moving: asBool(j['moving']),
+    voice: asBool(j['voice']),
+    muted: asBool(j['muted']),
+    sharing: asBool(j['sharing']),
+    smoking: asBoolOrNull(j['smoking']),
+    golfing: asBoolOrNull(j['golfing']),
+    seat: asStringOrNull(j['seat']),
+    carrying: _obj(j['carrying'], CarriedIssue.fromJson),
+    drink: DrinkId.tryParse(j['drink']),
+    account: asBoolOrNull(j['account']),
+    floor: asStringOrNull(j['floor']),
+    doing: asStringOrNull(j['doing']),
+    reading: asBoolOrNull(j['reading']),
+  );
 
   final String id;
   final String name;
@@ -719,34 +958,55 @@ class PeerInfo implements JsonObject {
   /// On a smoke break, cigarette in hand.
   final bool? smoking;
 
+  /// At the golf tee on the balcony, club in hand.
+  final bool? golfing;
+
   /// Sitting down: the place they're in (see seatAt in layout), like "couch:1".
   final String? seat;
+
+  /// An issue card they took off the issues board, on its way to a desk or the queue.
+  final CarriedIssue? carrying;
+
+  /// A drink from the rooftop bar in their hand.
+  final DrinkId? drink;
 
   /// Signed in with their own account, so `name` is theirs and nobody else can take it.
   final bool? account;
 
-  /// The floor they're on (see FloorInfo); none while the building has no floors yet.
+  /// The floor they're on (see FloorInfo); none while the building has no floors yet. `roof` ('@roof')
+  /// while they're up on the rooftop bar.
   final String? floor;
+
+  /// What they have open, in their own words: "in Pixel's terminal", "reading PR #12".
+  final String? doing;
+
+  /// Reading something off the bookshelf: an open book in their hands, its pages turning.
+  final bool? reading;
 
   @override
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'name': name,
-        'color': color,
-        'look': look.toJson(),
-        'x': x,
-        'y': y,
-        'z': z,
-        'rotY': rotY,
-        'moving': moving,
-        'voice': voice,
-        'muted': muted,
-        'sharing': sharing,
-        'smoking': ?smoking,
-        'seat': ?seat,
-        'account': ?account,
-        'floor': ?floor,
-      };
+    'id': id,
+    'name': name,
+    'color': color,
+    'look': look.toJson(),
+    'x': x,
+    'y': y,
+    'z': z,
+    'rotY': rotY,
+    'moving': moving,
+    'voice': voice,
+    'muted': muted,
+    'sharing': sharing,
+    'smoking': ?smoking,
+    'golfing': ?golfing,
+    'seat': ?seat,
+    'carrying': ?carrying?.toJson(),
+    'drink': ?drink?.wire,
+    'account': ?account,
+    'floor': ?floor,
+    'doing': ?doing,
+    'reading': ?reading,
+  };
 }
 
 // ---- Terminal screens ---------------------------------------------------------------------------
@@ -763,7 +1023,12 @@ class Run {
 
   factory Run.fromJson(Object? v) {
     if (v is! List) return const Run('', -1, -1, 0);
-    return Run(v.isNotEmpty ? asString(v[0]) : '', v.length > 1 ? asInt(v[1], -1) : -1, v.length > 2 ? asInt(v[2], -1) : -1, v.length > 3 ? asInt(v[3]) : 0);
+    return Run(
+      v.isNotEmpty ? asString(v[0]) : '',
+      v.length > 1 ? asInt(v[1], -1) : -1,
+      v.length > 2 ? asInt(v[2], -1) : -1,
+      v.length > 3 ? asInt(v[3]) : 0,
+    );
   }
 
   final String text;
@@ -782,7 +1047,8 @@ class Run {
   List<Object> toJson() => [text, fg, bg, flags];
 
   @override
-  bool operator ==(Object other) => other is Run && other.text == text && other.fg == fg && other.bg == bg && other.flags == flags;
+  bool operator ==(Object other) =>
+      other is Run && other.text == text && other.fg == fg && other.bg == bg && other.flags == flags;
 
   @override
   int get hashCode => Object.hash(text, fg, bg, flags);
@@ -790,18 +1056,23 @@ class Run {
 
 // ---- GitHub -------------------------------------------------------------------------------------
 
+/// A GitHub label.
 class GhLabel implements JsonObject {
-  const GhLabel({required this.name, required this.color});
+  const GhLabel({required this.name, required this.color, this.description});
 
-  factory GhLabel.fromJson(Map<String, dynamic> j) => GhLabel(name: asString(j['name']), color: asString(j['color']));
+  factory GhLabel.fromJson(Map<String, dynamic> j) =>
+      GhLabel(name: asString(j['name']), color: asString(j['color']), description: asStringOrNull(j['description']));
 
   final String name;
 
-  /// Hex without '#', as GitHub gives it.
+  /// Its color. (The TS says a CSS color, "#d73a4a"; the office has sent GitHub's hex without '#'.)
   final String color;
 
+  /// What it's for, in the repo's list of labels (the label picker's /api/gh/labels).
+  final String? description;
+
   @override
-  Map<String, dynamic> toJson() => {'name': name, 'color': color};
+  Map<String, dynamic> toJson() => {'name': name, 'color': color, 'description': ?description};
 }
 
 class GhIssue implements JsonObject {
@@ -820,18 +1091,18 @@ class GhIssue implements JsonObject {
   });
 
   factory GhIssue.fromJson(Map<String, dynamic> j) => GhIssue(
-        number: asInt(j['number']),
-        title: asString(j['title']),
-        state: asString(j['state']),
-        url: asString(j['url']),
-        author: asString(j['author']),
-        labels: asList(j['labels'], GhLabel.fromJson),
-        assignees: asStringList(j['assignees']),
-        createdAt: asString(j['createdAt']),
-        updatedAt: asString(j['updatedAt']),
-        body: asString(j['body']),
-        comments: asInt(j['comments']),
-      );
+    number: asInt(j['number']),
+    title: asString(j['title']),
+    state: asString(j['state']),
+    url: asString(j['url']),
+    author: asString(j['author']),
+    labels: asList(j['labels'], GhLabel.fromJson),
+    assignees: asStringList(j['assignees']),
+    createdAt: asString(j['createdAt']),
+    updatedAt: asString(j['updatedAt']),
+    body: asString(j['body']),
+    comments: asInt(j['comments']),
+  );
 
   final int number;
   final String title;
@@ -847,18 +1118,18 @@ class GhIssue implements JsonObject {
 
   @override
   Map<String, dynamic> toJson() => {
-        'number': number,
-        'title': title,
-        'state': state,
-        'url': url,
-        'author': author,
-        'labels': _list(labels),
-        'assignees': assignees,
-        'createdAt': createdAt,
-        'updatedAt': updatedAt,
-        'body': body,
-        'comments': comments,
-      };
+    'number': number,
+    'title': title,
+    'state': state,
+    'url': url,
+    'author': author,
+    'labels': _list(labels),
+    'assignees': assignees,
+    'createdAt': createdAt,
+    'updatedAt': updatedAt,
+    'body': body,
+    'comments': comments,
+  };
 }
 
 class GhPull implements JsonObject {
@@ -872,6 +1143,7 @@ class GhPull implements JsonObject {
     required this.labels,
     required this.reviewDecision,
     required this.headRefName,
+    this.headRefOid,
     required this.baseRefName,
     required this.createdAt,
     required this.updatedAt,
@@ -883,24 +1155,25 @@ class GhPull implements JsonObject {
   });
 
   factory GhPull.fromJson(Map<String, dynamic> j) => GhPull(
-        number: asInt(j['number']),
-        title: asString(j['title']),
-        state: asString(j['state']),
-        isDraft: asBool(j['isDraft']),
-        url: asString(j['url']),
-        author: asString(j['author']),
-        labels: asList(j['labels'], GhLabel.fromJson),
-        reviewDecision: asString(j['reviewDecision']),
-        headRefName: asString(j['headRefName']),
-        baseRefName: asString(j['baseRefName']),
-        createdAt: asString(j['createdAt']),
-        updatedAt: asString(j['updatedAt']),
-        additions: asInt(j['additions']),
-        deletions: asInt(j['deletions']),
-        checks: GhChecks.parse(j['checks']),
-        body: asString(j['body']),
-        closes: asIntList(j['closes']),
-      );
+    number: asInt(j['number']),
+    title: asString(j['title']),
+    state: asString(j['state']),
+    isDraft: asBool(j['isDraft']),
+    url: asString(j['url']),
+    author: asString(j['author']),
+    labels: asList(j['labels'], GhLabel.fromJson),
+    reviewDecision: asString(j['reviewDecision']),
+    headRefName: asString(j['headRefName']),
+    headRefOid: asStringOrNull(j['headRefOid']),
+    baseRefName: asString(j['baseRefName']),
+    createdAt: asString(j['createdAt']),
+    updatedAt: asString(j['updatedAt']),
+    additions: asInt(j['additions']),
+    deletions: asInt(j['deletions']),
+    checks: GhChecks.parse(j['checks']),
+    body: asString(j['body']),
+    closes: asIntList(j['closes']),
+  );
 
   final int number;
   final String title;
@@ -911,6 +1184,9 @@ class GhPull implements JsonObject {
   final List<GhLabel> labels;
   final String reviewDecision;
   final String headRefName;
+
+  /// The commit its branch is at on GitHub (for a merged PR, the last one merged).
+  final String? headRefOid;
   final String baseRefName;
   final String createdAt;
   final String updatedAt;
@@ -924,35 +1200,36 @@ class GhPull implements JsonObject {
 
   @override
   Map<String, dynamic> toJson() => {
-        'number': number,
-        'title': title,
-        'state': state,
-        'isDraft': isDraft,
-        'url': url,
-        'author': author,
-        'labels': _list(labels),
-        'reviewDecision': reviewDecision,
-        'headRefName': headRefName,
-        'baseRefName': baseRefName,
-        'createdAt': createdAt,
-        'updatedAt': updatedAt,
-        'additions': additions,
-        'deletions': deletions,
-        'checks': checks.wire,
-        'body': body,
-        'closes': closes,
-      };
+    'number': number,
+    'title': title,
+    'state': state,
+    'isDraft': isDraft,
+    'url': url,
+    'author': author,
+    'labels': _list(labels),
+    'reviewDecision': reviewDecision,
+    'headRefName': headRefName,
+    'headRefOid': ?headRefOid,
+    'baseRefName': baseRefName,
+    'createdAt': createdAt,
+    'updatedAt': updatedAt,
+    'additions': additions,
+    'deletions': deletions,
+    'checks': checks.wire,
+    'body': body,
+    'closes': closes,
+  };
 }
 
 class GhState<T extends JsonObject> implements JsonObject {
   const GhState({required this.items, this.error, required this.fetchedAt, required this.loading});
 
   factory GhState.fromJson(Map<String, dynamic> j, T Function(Map<String, dynamic>) read) => GhState(
-        items: asList(j['items'], read),
-        error: asStringOrNull(j['error']),
-        fetchedAt: asInt(j['fetchedAt']),
-        loading: asBool(j['loading']),
-      );
+    items: asList(j['items'], read),
+    error: asStringOrNull(j['error']),
+    fetchedAt: asInt(j['fetchedAt']),
+    loading: asBool(j['loading']),
+  );
 
   final List<T> items;
   final String? error;
@@ -968,29 +1245,39 @@ class GhRepoInfo implements JsonObject {
   const GhRepoInfo({required this.nameWithOwner, required this.methods});
 
   factory GhRepoInfo.fromJson(Map<String, dynamic> j) => GhRepoInfo(
-        nameWithOwner: asString(j['nameWithOwner']),
-        methods: [for (final m in asStringList(j['methods'])) ?parseWireOrNull(GhMergeMethod.values, m)],
-      );
+    nameWithOwner: asString(j['nameWithOwner']),
+    methods: [for (final m in asStringList(j['methods'])) ?parseWireOrNull(GhMergeMethod.values, m)],
+  );
 
   final String nameWithOwner;
   final List<GhMergeMethod> methods;
 
   @override
-  Map<String, dynamic> toJson() => {'nameWithOwner': nameWithOwner, 'methods': [for (final m in methods) m.wire]};
+  Map<String, dynamic> toJson() => {
+    'nameWithOwner': nameWithOwner,
+    'methods': [for (final m in methods) m.wire],
+  };
 }
 
 /// A comment on an issue or on a PR's conversation, or a submitted review.
 class GhComment implements JsonObject {
-  const GhComment({required this.id, required this.author, required this.body, required this.createdAt, this.url, this.state});
+  const GhComment({
+    required this.id,
+    required this.author,
+    required this.body,
+    required this.createdAt,
+    this.url,
+    this.state,
+  });
 
   factory GhComment.fromJson(Map<String, dynamic> j) => GhComment(
-        id: asString(j['id']),
-        author: asString(j['author']),
-        body: asString(j['body']),
-        createdAt: asString(j['createdAt']),
-        url: asStringOrNull(j['url']),
-        state: asStringOrNull(j['state']),
-      );
+    id: asString(j['id']),
+    author: asString(j['author']),
+    body: asString(j['body']),
+    createdAt: asString(j['createdAt']),
+    url: asStringOrNull(j['url']),
+    state: asStringOrNull(j['state']),
+  );
 
   final String id;
   final String author;
@@ -1002,7 +1289,14 @@ class GhComment implements JsonObject {
   final String? state;
 
   @override
-  Map<String, dynamic> toJson() => {'id': id, 'author': author, 'body': body, 'createdAt': createdAt, 'url': ?url, 'state': ?state};
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'author': author,
+    'body': body,
+    'createdAt': createdAt,
+    'url': ?url,
+    'state': ?state,
+  };
 }
 
 /// A comment on a line of a PR's diff.
@@ -1020,16 +1314,16 @@ class GhReviewComment implements JsonObject {
   });
 
   factory GhReviewComment.fromJson(Map<String, dynamic> j) => GhReviewComment(
-        id: asInt(j['id']),
-        replyTo: asIntOrNull(j['replyTo']),
-        author: asString(j['author']),
-        body: asString(j['body']),
-        createdAt: asString(j['createdAt']),
-        url: asString(j['url']),
-        path: asString(j['path']),
-        line: asIntOrNull(j['line']),
-        side: GhReviewSide.parse(j['side']),
-      );
+    id: asInt(j['id']),
+    replyTo: asIntOrNull(j['replyTo']),
+    author: asString(j['author']),
+    body: asString(j['body']),
+    createdAt: asString(j['createdAt']),
+    url: asString(j['url']),
+    path: asString(j['path']),
+    line: asIntOrNull(j['line']),
+    side: GhReviewSide.parse(j['side']),
+  );
 
   final int id;
 
@@ -1047,22 +1341,23 @@ class GhReviewComment implements JsonObject {
 
   @override
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'replyTo': ?replyTo,
-        'author': author,
-        'body': body,
-        'createdAt': createdAt,
-        'url': url,
-        'path': path,
-        'line': line,
-        'side': side.wire,
-      };
+    'id': id,
+    'replyTo': ?replyTo,
+    'author': author,
+    'body': body,
+    'createdAt': createdAt,
+    'url': url,
+    'path': path,
+    'line': line,
+    'side': side.wire,
+  };
 }
 
 class GhCheck implements JsonObject {
   const GhCheck({required this.name, required this.state, this.url});
 
-  factory GhCheck.fromJson(Map<String, dynamic> j) => GhCheck(name: asString(j['name']), state: GhCheckState.parse(j['state']), url: asStringOrNull(j['url']));
+  factory GhCheck.fromJson(Map<String, dynamic> j) =>
+      GhCheck(name: asString(j['name']), state: GhCheckState.parse(j['state']), url: asStringOrNull(j['url']));
 
   final String name;
   final GhCheckState state;
@@ -1094,23 +1389,23 @@ class GhPullDetail implements JsonObject {
   });
 
   factory GhPullDetail.fromJson(Map<String, dynamic> j) => GhPullDetail(
-        number: asInt(j['number']),
-        body: asString(j['body']),
-        state: asString(j['state']),
-        isDraft: asBool(j['isDraft']),
-        reviewDecision: asString(j['reviewDecision']),
-        headRefName: asString(j['headRefName']),
-        baseRefName: asString(j['baseRefName']),
-        mergeable: asString(j['mergeable'], 'UNKNOWN'),
-        mergeStateStatus: asString(j['mergeStateStatus'], 'UNKNOWN'),
-        commits: asInt(j['commits']),
-        comments: asList(j['comments'], GhComment.fromJson),
-        reviews: asList(j['reviews'], GhComment.fromJson),
-        reviewComments: asList(j['reviewComments'], GhReviewComment.fromJson),
-        checks: asList(j['checks'], GhCheck.fromJson),
-        repo: GhRepoInfo.fromJson(asMap(j['repo'])),
-        viewer: asString(j['viewer']),
-      );
+    number: asInt(j['number']),
+    body: asString(j['body']),
+    state: asString(j['state']),
+    isDraft: asBool(j['isDraft']),
+    reviewDecision: asString(j['reviewDecision']),
+    headRefName: asString(j['headRefName']),
+    baseRefName: asString(j['baseRefName']),
+    mergeable: asString(j['mergeable'], 'UNKNOWN'),
+    mergeStateStatus: asString(j['mergeStateStatus'], 'UNKNOWN'),
+    commits: asInt(j['commits']),
+    comments: asList(j['comments'], GhComment.fromJson),
+    reviews: asList(j['reviews'], GhComment.fromJson),
+    reviewComments: asList(j['reviewComments'], GhReviewComment.fromJson),
+    checks: asList(j['checks'], GhCheck.fromJson),
+    repo: GhRepoInfo.fromJson(asMap(j['repo'])),
+    viewer: asString(j['viewer']),
+  );
 
   final int number;
   final String body;
@@ -1137,36 +1432,42 @@ class GhPullDetail implements JsonObject {
 
   @override
   Map<String, dynamic> toJson() => {
-        'number': number,
-        'body': body,
-        'state': state,
-        'isDraft': isDraft,
-        'reviewDecision': reviewDecision,
-        'headRefName': headRefName,
-        'baseRefName': baseRefName,
-        'mergeable': mergeable,
-        'mergeStateStatus': mergeStateStatus,
-        'commits': commits,
-        'comments': _list(comments),
-        'reviews': _list(reviews),
-        'reviewComments': _list(reviewComments),
-        'checks': _list(checks),
-        'repo': repo.toJson(),
-        'viewer': viewer,
-      };
+    'number': number,
+    'body': body,
+    'state': state,
+    'isDraft': isDraft,
+    'reviewDecision': reviewDecision,
+    'headRefName': headRefName,
+    'baseRefName': baseRefName,
+    'mergeable': mergeable,
+    'mergeStateStatus': mergeStateStatus,
+    'commits': commits,
+    'comments': _list(comments),
+    'reviews': _list(reviews),
+    'reviewComments': _list(reviewComments),
+    'checks': _list(checks),
+    'repo': repo.toJson(),
+    'viewer': viewer,
+  };
 }
 
 /// GET /api/gh/issue?number=N
 class GhIssueDetail implements JsonObject {
-  const GhIssueDetail({required this.number, required this.state, required this.body, required this.comments, required this.viewer});
+  const GhIssueDetail({
+    required this.number,
+    required this.state,
+    required this.body,
+    required this.comments,
+    required this.viewer,
+  });
 
   factory GhIssueDetail.fromJson(Map<String, dynamic> j) => GhIssueDetail(
-        number: asInt(j['number']),
-        state: asString(j['state']),
-        body: asString(j['body']),
-        comments: asList(j['comments'], GhComment.fromJson),
-        viewer: asString(j['viewer']),
-      );
+    number: asInt(j['number']),
+    state: asString(j['state']),
+    body: asString(j['body']),
+    comments: asList(j['comments'], GhComment.fromJson),
+    viewer: asString(j['viewer']),
+  );
 
   final int number;
 
@@ -1179,11 +1480,20 @@ class GhIssueDetail implements JsonObject {
   final String viewer;
 
   @override
-  Map<String, dynamic> toJson() => {'number': number, 'state': state, 'body': body, 'comments': _list(comments), 'viewer': viewer};
+  Map<String, dynamic> toJson() => {
+    'number': number,
+    'state': state,
+    'body': body,
+    'comments': _list(comments),
+    'viewer': viewer,
+  };
 }
 
 /// GitHub turns away comments longer than this.
 const int ghCommentMax = 65536;
+
+/// Longer than any label name: GitHub stops at 50 characters, and JS counts an emoji as two.
+const int ghLabelMax = 100;
 
 // ---- The task queue -----------------------------------------------------------------------------
 
@@ -1191,8 +1501,12 @@ const int ghCommentMax = 65536;
 class QueueTaskPr implements JsonObject {
   const QueueTaskPr({required this.number, required this.url, required this.state, required this.title});
 
-  factory QueueTaskPr.fromJson(Map<String, dynamic> j) =>
-      QueueTaskPr(number: asInt(j['number']), url: asString(j['url']), state: asString(j['state']), title: asString(j['title']));
+  factory QueueTaskPr.fromJson(Map<String, dynamic> j) => QueueTaskPr(
+    number: asInt(j['number']),
+    url: asString(j['url']),
+    state: asString(j['state']),
+    title: asString(j['title']),
+  );
 
   final int number;
   final String url;
@@ -1209,6 +1523,7 @@ class QueueTask implements JsonObject {
     required this.id,
     this.provider,
     this.model,
+    this.effort,
     this.issue,
     required this.title,
     required this.prompt,
@@ -1226,30 +1541,35 @@ class QueueTask implements JsonObject {
   });
 
   factory QueueTask.fromJson(Map<String, dynamic> j) => QueueTask(
-        id: asString(j['id']),
-        provider: AgentProvider.tryParse(j['provider']),
-        model: asStringOrNull(j['model']),
-        issue: asIntOrNull(j['issue']),
-        title: asString(j['title']),
-        prompt: asString(j['prompt']),
-        addedBy: asString(j['addedBy']),
-        addedAt: asInt(j['addedAt']),
-        status: TaskStatus.parse(j['status']),
-        workerId: asStringOrNull(j['workerId']),
-        workerName: asStringOrNull(j['workerName']),
-        branch: asStringOrNull(j['branch']),
-        startedAt: asIntOrNull(j['startedAt']),
-        finishedAt: asIntOrNull(j['finishedAt']),
-        outcome: TaskOutcome.tryParse(j['outcome']),
-        error: asStringOrNull(j['error']),
-        pr: _obj(j['pr'], QueueTaskPr.fromJson),
-      );
+    id: asString(j['id']),
+    provider: AgentProvider.tryParse(j['provider']),
+    model: asStringOrNull(j['model']),
+    effort: AgentEffort.tryParse(j['effort']),
+    issue: asIntOrNull(j['issue']),
+    title: asString(j['title']),
+    prompt: asString(j['prompt']),
+    addedBy: asString(j['addedBy']),
+    addedAt: asInt(j['addedAt']),
+    status: TaskStatus.parse(j['status']),
+    workerId: asStringOrNull(j['workerId']),
+    workerName: asStringOrNull(j['workerName']),
+    branch: asStringOrNull(j['branch']),
+    startedAt: asIntOrNull(j['startedAt']),
+    finishedAt: asIntOrNull(j['finishedAt']),
+    outcome: TaskOutcome.tryParse(j['outcome']),
+    error: asStringOrNull(j['error']),
+    pr: _obj(j['pr'], QueueTaskPr.fromJson),
+  );
 
   final String id;
   final AgentProvider? provider;
 
-  /// Initial OpenCode model selected for this task, when one was requested.
+  /// Model requested for this task, instead of the office's configured default: an OpenCode
+  /// provider/model id, or a Claude model alias.
   final String? model;
+
+  /// Reasoning effort requested for this task, when one was chosen (Claude only).
+  final AgentEffort? effort;
 
   /// The GitHub issue it came from, when it did.
   final int? issue;
@@ -1277,30 +1597,32 @@ class QueueTask implements JsonObject {
 
   @override
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'provider': ?provider?.wire,
-        'model': ?model,
-        'issue': ?issue,
-        'title': title,
-        'prompt': prompt,
-        'addedBy': addedBy,
-        'addedAt': addedAt,
-        'status': status.wire,
-        'workerId': ?workerId,
-        'workerName': ?workerName,
-        'branch': ?branch,
-        'startedAt': ?startedAt,
-        'finishedAt': ?finishedAt,
-        'outcome': ?outcome?.wire,
-        'error': ?error,
-        'pr': ?pr?.toJson(),
-      };
+    'id': id,
+    'provider': ?provider?.wire,
+    'model': ?model,
+    'effort': ?effort?.wire,
+    'issue': ?issue,
+    'title': title,
+    'prompt': prompt,
+    'addedBy': addedBy,
+    'addedAt': addedAt,
+    'status': status.wire,
+    'workerId': ?workerId,
+    'workerName': ?workerName,
+    'branch': ?branch,
+    'startedAt': ?startedAt,
+    'finishedAt': ?finishedAt,
+    'outcome': ?outcome?.wire,
+    'error': ?error,
+    'pr': ?pr?.toJson(),
+  };
 }
 
 class QueueState implements JsonObject {
   const QueueState({required this.tasks, required this.maxWorkers});
 
-  factory QueueState.fromJson(Map<String, dynamic> j) => QueueState(tasks: asList(j['tasks'], QueueTask.fromJson), maxWorkers: asInt(j['maxWorkers']));
+  factory QueueState.fromJson(Map<String, dynamic> j) =>
+      QueueState(tasks: asList(j['tasks'], QueueTask.fromJson), maxWorkers: asInt(j['maxWorkers']));
 
   final List<QueueTask> tasks;
 
@@ -1311,14 +1633,479 @@ class QueueState implements JsonObject {
   Map<String, dynamic> toJson() => {'tasks': _list(tasks), 'maxWorkers': maxWorkers};
 }
 
+// ---- Meetings -----------------------------------------------------------------------------------
+
+/// How the workers at the meeting table work together (see meetings.dart).
+enum MeetingPattern implements WireEnum {
+  debate('debate'),
+  lead('lead'),
+  mapreduce('mapreduce'),
+  redblue('redblue'),
+  review('review');
+
+  const MeetingPattern(this.wire);
+  @override
+  final String wire;
+
+  static MeetingPattern parse(Object? v) => parseWire(values, v, MeetingPattern.debate);
+  static MeetingPattern? tryParse(Object? v) => parseWireOrNull(values, v);
+}
+
+/// A worker's place at a meeting.
+class MeetingSeat implements JsonObject {
+  const MeetingSeat({required this.role, required this.deskId, this.workerId, this.workerName, this.tokens, this.cost});
+
+  factory MeetingSeat.fromJson(Map<String, dynamic> j) => MeetingSeat(
+    role: asString(j['role']),
+    deskId: asString(j['deskId']),
+    workerId: asStringOrNull(j['workerId']),
+    workerName: asStringOrNull(j['workerName']),
+    tokens: asIntOrNull(j['tokens']),
+    cost: asDoubleOrNull(j['cost']),
+  );
+
+  /// Its part in the meeting, e.g. "Skeptic", "Red team" or "Security".
+  final String role;
+
+  /// Its chair (see meetingSeats in layout).
+  final String deskId;
+  final String? workerId;
+  final String? workerName;
+
+  /// What its worker has used, kept after it goes home. `cost` is missing when its provider doesn't say.
+  final int? tokens;
+  final double? cost;
+
+  @override
+  Map<String, dynamic> toJson() => {
+    'role': role,
+    'deskId': deskId,
+    'workerId': ?workerId,
+    'workerName': ?workerName,
+    'tokens': ?tokens,
+    'cost': ?cost,
+  };
+}
+
+/// waiting: not handed over yet; sent: handed over, not started on; working: on it; done: its file is written.
+enum MeetingTurnState implements WireEnum {
+  waiting('waiting'),
+  sent('sent'),
+  working('working'),
+  done('done');
+
+  const MeetingTurnState(this.wire);
+  @override
+  final String wire;
+
+  static MeetingTurnState parse(Object? v) => parseWire(values, v, MeetingTurnState.waiting);
+}
+
+/// One worker's part in a round: what it's doing, and the file that says it has done it.
+class MeetingTurn implements JsonObject {
+  const MeetingTurn({
+    required this.seat,
+    required this.doing,
+    required this.file,
+    required this.state,
+    this.sentAt,
+    this.retried,
+  });
+
+  factory MeetingTurn.fromJson(Map<String, dynamic> j) => MeetingTurn(
+    seat: asInt(j['seat']),
+    doing: asString(j['doing']),
+    file: asString(j['file']),
+    state: MeetingTurnState.parse(j['state']),
+    sentAt: asIntOrNull(j['sentAt']),
+    retried: asBoolOrNull(j['retried']),
+  );
+
+  /// Which of the meeting's seats.
+  final int seat;
+
+  /// e.g. "proposing", "critiquing", "writing the decision".
+  final String doing;
+
+  /// Relative to the meeting's checkout.
+  final String file;
+  final MeetingTurnState state;
+  final int? sentAt;
+
+  /// It was reminded once already: it ended its turn without writing the file, or never started.
+  final bool? retried;
+
+  @override
+  Map<String, dynamic> toJson() => {
+    'seat': seat,
+    'doing': doing,
+    'file': file,
+    'state': state.wire,
+    'sentAt': ?sentAt,
+    'retried': ?retried,
+  };
+}
+
+enum MeetingStatus implements WireEnum {
+  running('running'),
+  done('done'),
+  stopped('stopped');
+
+  const MeetingStatus(this.wire);
+  @override
+  final String wire;
+
+  static MeetingStatus parse(Object? v) => parseWire(values, v, MeetingStatus.running);
+}
+
+/// Review panel: the review the office posted on the pull request, or why it couldn't.
+class MeetingReview implements JsonObject {
+  const MeetingReview({this.url, this.error});
+
+  factory MeetingReview.fromJson(Map<String, dynamic> j) =>
+      MeetingReview(url: asStringOrNull(j['url']), error: asStringOrNull(j['error']));
+
+  final String? url;
+  final String? error;
+
+  @override
+  Map<String, dynamic> toJson() => {'url': ?url, 'error': ?error};
+}
+
+/// A meeting in the meeting room: 2–5 workers on one question or task, in rounds, following a pattern.
+/// It ends when its output file is written, or stops at its round limit or token budget and says why.
+class Meeting implements JsonObject {
+  const Meeting({
+    required this.id,
+    required this.pattern,
+    required this.title,
+    required this.prompt,
+    required this.output,
+    required this.seats,
+    this.parts,
+    this.pr,
+    this.issue,
+    this.provider,
+    this.model,
+    this.effort,
+    required this.rounds,
+    required this.round,
+    required this.step,
+    this.lastRound,
+    required this.turns,
+    required this.budget,
+    required this.tokens,
+    required this.cost,
+    required this.costKnown,
+    required this.status,
+    this.reason,
+    required this.calledBy,
+    required this.startedAt,
+    this.finishedAt,
+    this.worktree,
+    required this.notes,
+    this.commit,
+    this.review,
+    this.preview,
+    this.cleared,
+  });
+
+  factory Meeting.fromJson(Map<String, dynamic> j) => Meeting(
+    id: asString(j['id']),
+    pattern: MeetingPattern.parse(j['pattern']),
+    title: asString(j['title']),
+    prompt: asString(j['prompt']),
+    output: asString(j['output']),
+    seats: asList(j['seats'], MeetingSeat.fromJson),
+    parts: asStringListOrNull(j['parts']),
+    pr: asIntOrNull(j['pr']),
+    issue: asIntOrNull(j['issue']),
+    provider: AgentProvider.tryParse(j['provider']),
+    model: asStringOrNull(j['model']),
+    effort: AgentEffort.tryParse(j['effort']),
+    rounds: asInt(j['rounds']),
+    round: asInt(j['round']),
+    step: asInt(j['step']),
+    lastRound: asIntOrNull(j['lastRound']),
+    turns: asList(j['turns'], MeetingTurn.fromJson),
+    budget: asInt(j['budget']),
+    tokens: asInt(j['tokens']),
+    cost: asDouble(j['cost']),
+    costKnown: asBool(j['costKnown']),
+    status: MeetingStatus.parse(j['status']),
+    reason: asStringOrNull(j['reason']),
+    calledBy: asString(j['calledBy']),
+    startedAt: asInt(j['startedAt']),
+    finishedAt: asIntOrNull(j['finishedAt']),
+    worktree: _obj(j['worktree'], WorkerWorktree.fromJson),
+    notes: asString(j['notes']),
+    commit: asStringOrNull(j['commit']),
+    review: _obj(j['review'], MeetingReview.fromJson),
+    preview: asStringOrNull(j['preview']),
+    cleared: asBoolOrNull(j['cleared']),
+  );
+
+  final String id;
+  final MeetingPattern pattern;
+  final String title;
+
+  /// The question or task, as whoever called the meeting put it.
+  final String prompt;
+
+  /// The file the meeting writes, relative to its checkout, declared up front.
+  final String output;
+
+  /// The head of the table first.
+  final List<MeetingSeat> seats;
+
+  /// Map-reduce: what the task runs over, a part per line.
+  final List<String>? parts;
+
+  /// Review panel: the pull request under review.
+  final int? pr;
+
+  /// The GitHub issue it's about, when it was called from one.
+  final int? issue;
+  final AgentProvider? provider;
+  final String? model;
+  final AgentEffort? effort;
+
+  /// The round limit.
+  final int rounds;
+
+  /// The round it's on (from 1), and the step within it (red / blue take turns inside a round).
+  final int round;
+  final int step;
+
+  /// Red / blue: the red team found nothing more in this round, so it's the last.
+  final int? lastRound;
+
+  /// The current step's parts.
+  final List<MeetingTurn> turns;
+
+  /// Tokens every worker in the meeting may use between them, and how many they have.
+  final int budget;
+  final int tokens;
+
+  /// USD, where the providers report it.
+  final double cost;
+
+  /// False when a worker's provider reports no cost, so `cost` leaves it out.
+  final bool costKnown;
+  final MeetingStatus status;
+
+  /// Why it stopped short.
+  final String? reason;
+  final String calledBy;
+  final int startedAt;
+  final int? finishedAt;
+
+  /// The meeting's own git worktree, relative to the project, which everyone at the table shares.
+  final WorkerWorktree? worktree;
+
+  /// Where the round notes go, relative to the checkout.
+  final String notes;
+
+  /// The commit on the meeting's branch that holds the output.
+  final String? commit;
+
+  /// Review panel: the review the office posted on the pull request, or why it couldn't.
+  final MeetingReview? review;
+
+  /// The start of the output file as it gets written, for the board in the room.
+  final String? preview;
+
+  /// Its workers have gone home and its worktree was tidied away.
+  final bool? cleared;
+
+  @override
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'pattern': pattern.wire,
+    'title': title,
+    'prompt': prompt,
+    'output': output,
+    'seats': _list(seats),
+    'parts': ?parts,
+    'pr': ?pr,
+    'issue': ?issue,
+    'provider': ?provider?.wire,
+    'model': ?model,
+    'effort': ?effort?.wire,
+    'rounds': rounds,
+    'round': round,
+    'step': step,
+    'lastRound': ?lastRound,
+    'turns': _list(turns),
+    'budget': budget,
+    'tokens': tokens,
+    'cost': cost,
+    'costKnown': costKnown,
+    'status': status.wire,
+    'reason': ?reason,
+    'calledBy': calledBy,
+    'startedAt': startedAt,
+    'finishedAt': ?finishedAt,
+    'worktree': ?worktree?.toJson(),
+    'notes': notes,
+    'commit': ?commit,
+    'review': ?review?.toJson(),
+    'preview': ?preview,
+    'cleared': ?cleared,
+  };
+}
+
+/// A meeting that's over, in a line.
+class MeetingRecord implements JsonObject {
+  const MeetingRecord({
+    required this.id,
+    required this.pattern,
+    required this.title,
+    required this.status,
+    required this.summary,
+    required this.calledBy,
+    required this.finishedAt,
+    this.branch,
+    required this.output,
+  });
+
+  factory MeetingRecord.fromJson(Map<String, dynamic> j) => MeetingRecord(
+    id: asString(j['id']),
+    pattern: MeetingPattern.parse(j['pattern']),
+    title: asString(j['title']),
+    status: MeetingStatus.parse(j['status']),
+    summary: asString(j['summary']),
+    calledBy: asString(j['calledBy']),
+    finishedAt: asInt(j['finishedAt']),
+    branch: asStringOrNull(j['branch']),
+    output: asString(j['output']),
+  );
+
+  final String id;
+  final MeetingPattern pattern;
+  final String title;
+  final MeetingStatus status;
+
+  /// The line on the room's door: pattern, rounds, tokens, cost, and the output (or why it stopped).
+  final String summary;
+  final String calledBy;
+  final int finishedAt;
+  final String? branch;
+  final String output;
+
+  @override
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'pattern': pattern.wire,
+    'title': title,
+    'status': status.wire,
+    'summary': summary,
+    'calledBy': calledBy,
+    'finishedAt': finishedAt,
+    'branch': ?branch,
+    'output': output,
+  };
+}
+
+class MeetingState implements JsonObject {
+  const MeetingState({this.current, this.past = const []});
+
+  factory MeetingState.fromJson(Map<String, dynamic> j) =>
+      MeetingState(current: _obj(j['current'], Meeting.fromJson), past: asList(j['past'], MeetingRecord.fromJson));
+
+  /// The meeting in the room: the one running, or the last one until the room is cleared or the next is called.
+  final Meeting? current;
+
+  /// Earlier meetings on the floor, newest first.
+  final List<MeetingRecord> past;
+
+  /// `current` is always sent, as null when the room is empty.
+  @override
+  Map<String, dynamic> toJson() => {'current': current?.toJson(), 'past': _list(past)};
+}
+
+/// What calling a meeting asks for (see meetings.dart for each pattern's defaults and limits).
+class MeetingRequest implements JsonObject {
+  const MeetingRequest({
+    required this.pattern,
+    required this.prompt,
+    this.title,
+    this.output,
+    required this.roles,
+    this.parts,
+    this.pr,
+    this.issue,
+    this.rounds,
+    this.budget,
+    this.provider,
+    this.model,
+    this.effort,
+  });
+
+  factory MeetingRequest.fromJson(Map<String, dynamic> j) => MeetingRequest(
+    pattern: MeetingPattern.parse(j['pattern']),
+    prompt: asString(j['prompt']),
+    title: asStringOrNull(j['title']),
+    output: asStringOrNull(j['output']),
+    roles: asStringList(j['roles']),
+    parts: asStringListOrNull(j['parts']),
+    pr: asIntOrNull(j['pr']),
+    issue: asIntOrNull(j['issue']),
+    rounds: asIntOrNull(j['rounds']),
+    budget: asIntOrNull(j['budget']),
+    provider: AgentProvider.tryParse(j['provider']),
+    model: asStringOrNull(j['model']),
+    effort: AgentEffort.tryParse(j['effort']),
+  );
+
+  final MeetingPattern pattern;
+  final String prompt;
+  final String? title;
+
+  /// The output file, relative to the checkout; the pattern's default when missing.
+  final String? output;
+
+  /// A role per worker, the head of the table first.
+  final List<String> roles;
+  final List<String>? parts;
+  final int? pr;
+  final int? issue;
+  final int? rounds;
+  final int? budget;
+  final AgentProvider? provider;
+  final String? model;
+  final AgentEffort? effort;
+
+  @override
+  Map<String, dynamic> toJson() => {
+    'pattern': pattern.wire,
+    'prompt': prompt,
+    'title': ?title,
+    'output': ?output,
+    'roles': roles,
+    'parts': ?parts,
+    'pr': ?pr,
+    'issue': ?issue,
+    'rounds': ?rounds,
+    'budget': ?budget,
+    'provider': ?provider?.wire,
+    'model': ?model,
+    'effort': ?effort?.wire,
+  };
+}
+
 // ---- Notifications ------------------------------------------------------------------------------
 
 /// Never the webhook URL itself (it lets anyone post to the channel): just where it goes.
 class NotifyWebhook implements JsonObject {
   const NotifyWebhook({required this.kind, required this.hint, required this.by, required this.at});
 
-  factory NotifyWebhook.fromJson(Map<String, dynamic> j) =>
-      NotifyWebhook(kind: WebhookKind.parse(j['kind']), hint: asString(j['hint']), by: asString(j['by']), at: asInt(j['at']));
+  factory NotifyWebhook.fromJson(Map<String, dynamic> j) => NotifyWebhook(
+    kind: WebhookKind.parse(j['kind']),
+    hint: asString(j['hint']),
+    by: asString(j['by']),
+    at: asInt(j['at']),
+  );
 
   final WebhookKind kind;
   final String hint;
@@ -1333,8 +2120,11 @@ class NotifyWebhook implements JsonObject {
 class NotifyState implements JsonObject {
   const NotifyState({this.webhook, this.error, this.lastSentAt});
 
-  factory NotifyState.fromJson(Map<String, dynamic> j) =>
-      NotifyState(webhook: _obj(j['webhook'], NotifyWebhook.fromJson), error: asStringOrNull(j['error']), lastSentAt: asIntOrNull(j['lastSentAt']));
+  factory NotifyState.fromJson(Map<String, dynamic> j) => NotifyState(
+    webhook: _obj(j['webhook'], NotifyWebhook.fromJson),
+    error: asStringOrNull(j['error']),
+    lastSentAt: asIntOrNull(j['lastSentAt']),
+  );
 
   final NotifyWebhook? webhook;
 
@@ -1346,20 +2136,123 @@ class NotifyState implements JsonObject {
   Map<String, dynamic> toJson() => {'webhook': ?webhook?.toJson(), 'error': ?error, 'lastSentAt': ?lastSentAt};
 }
 
+// ---- The office's machine -----------------------------------------------------------------------
+
+/// The worker limit someone set in ⚙️ Settings.
+class MachineLimitSet implements JsonObject {
+  const MachineLimitSet({required this.limit, required this.by, required this.at});
+
+  factory MachineLimitSet.fromJson(Map<String, dynamic> j) =>
+      MachineLimitSet(limit: asInt(j['limit']), by: asString(j['by']), at: asInt(j['at']));
+
+  final int limit;
+  final String by;
+  final int at;
+
+  @override
+  Map<String, dynamic> toJson() => {'limit': limit, 'by': by, 'at': at};
+}
+
+/// The office's machine (see server/machine.ts): how busy it is, for the wall monitor and a warning
+/// before hiring, and the most workers the office runs at once, across every floor.
+class MachineState implements JsonObject {
+  const MachineState({
+    required this.cpu,
+    required this.cores,
+    required this.memUsed,
+    required this.memTotal,
+    this.history = const [],
+    this.pressure,
+    required this.workers,
+    this.limit,
+    this.ceiling,
+    this.set,
+  });
+
+  static const MachineState empty = MachineState(cpu: 0, cores: 0, memUsed: 0, memTotal: 0, workers: 0);
+
+  factory MachineState.fromJson(Map<String, dynamic> j) => MachineState(
+    cpu: asDouble(j['cpu']),
+    cores: asInt(j['cores']),
+    memUsed: asInt(j['memUsed']),
+    memTotal: asInt(j['memTotal']),
+    history: [
+      if (j['history'] is List)
+        for (final h in j['history'] as List)
+          if (h is List && h.length >= 2) (asDouble(h[0]), asDouble(h[1])),
+    ],
+    pressure: asStringOrNull(j['pressure']),
+    workers: asInt(j['workers']),
+    limit: asIntOrNull(j['limit']),
+    ceiling: asIntOrNull(j['ceiling']),
+    set: _obj(j['set'], MachineLimitSet.fromJson),
+  );
+
+  /// Percent of every core busy, 0-100, over the last few seconds.
+  final double cpu;
+  final int cores;
+
+  /// Memory in use and in all, bytes.
+  final int memUsed;
+  final int memTotal;
+
+  /// The last few minutes, oldest first: (cpu %, memory %) a few seconds apart.
+  final List<(double, double)> history;
+
+  /// What makes another worker a strain right now, e.g. "memory is 93% used"; missing when nothing does.
+  final String? pressure;
+
+  /// Workers in the office now: every floor's, shells and board agents too.
+  final int workers;
+
+  /// The most workers the office takes; missing when there's no limit.
+  final int? limit;
+
+  /// --max-workers: the limit can't be set any higher from the office.
+  final int? ceiling;
+
+  /// The limit someone set in ⚙️ Settings, when there is one.
+  final MachineLimitSet? set;
+
+  @override
+  Map<String, dynamic> toJson() => {
+    'cpu': cpu,
+    'cores': cores,
+    'memUsed': memUsed,
+    'memTotal': memTotal,
+    'history': [
+      for (final (c, m) in history) [c, m],
+    ],
+    'pressure': ?pressure,
+    'workers': workers,
+    'limit': ?limit,
+    'ceiling': ?ceiling,
+    'set': ?set?.toJson(),
+  };
+}
+
 // ---- Floors -------------------------------------------------------------------------------------
 
 class ProjectInfo implements JsonObject {
-  const ProjectInfo({required this.name, required this.dir, this.branch, this.remote, required this.agentCmd, required this.defaultProvider, required this.agentProviders});
+  const ProjectInfo({
+    required this.name,
+    required this.dir,
+    this.branch,
+    this.remote,
+    required this.agentCmd,
+    required this.defaultProvider,
+    required this.agentProviders,
+  });
 
   factory ProjectInfo.fromJson(Map<String, dynamic> j) => ProjectInfo(
-        name: asString(j['name']),
-        dir: asString(j['dir']),
-        branch: asStringOrNull(j['branch']),
-        remote: asStringOrNull(j['remote']),
-        agentCmd: asString(j['agentCmd']),
-        defaultProvider: AgentProvider.parse(j['defaultProvider']),
-        agentProviders: [for (final p in asStringList(j['agentProviders'])) ?AgentProvider.tryParse(p)],
-      );
+    name: asString(j['name']),
+    dir: asString(j['dir']),
+    branch: asStringOrNull(j['branch']),
+    remote: asStringOrNull(j['remote']),
+    agentCmd: asString(j['agentCmd']),
+    defaultProvider: AgentProvider.parse(j['defaultProvider']),
+    agentProviders: [for (final p in asStringList(j['agentProviders'])) ?AgentProvider.tryParse(p)],
+  );
 
   final String name;
   final String dir;
@@ -1371,14 +2264,14 @@ class ProjectInfo implements JsonObject {
 
   @override
   Map<String, dynamic> toJson() => {
-        'name': name,
-        'dir': dir,
-        'branch': ?branch,
-        'remote': ?remote,
-        'agentCmd': agentCmd,
-        'defaultProvider': defaultProvider.wire,
-        'agentProviders': [for (final p in agentProviders) p.wire],
-      };
+    'name': name,
+    'dir': dir,
+    'branch': ?branch,
+    'remote': ?remote,
+    'agentCmd': agentCmd,
+    'defaultProvider': defaultProvider.wire,
+    'agentProviders': [for (final p in agentProviders) p.wire],
+  };
 }
 
 /// One floor of the building: a project in its own checkout, with its own desks, workers, boards
@@ -1391,6 +2284,7 @@ class FloorInfo implements JsonObject {
     required this.dir,
     required this.palette,
     this.cloning,
+    this.local,
     required this.addedBy,
     required this.addedAt,
     required this.workers,
@@ -1400,19 +2294,20 @@ class FloorInfo implements JsonObject {
   });
 
   factory FloorInfo.fromJson(Map<String, dynamic> j) => FloorInfo(
-        id: asString(j['id']),
-        name: asString(j['name']),
-        repo: asStringOrNull(j['repo']),
-        dir: asString(j['dir']),
-        palette: asInt(j['palette']),
-        cloning: asBoolOrNull(j['cloning']),
-        addedBy: asString(j['addedBy']),
-        addedAt: asInt(j['addedAt']),
-        workers: asInt(j['workers']),
-        busy: asInt(j['busy']),
-        waiting: asInt(j['waiting']),
-        people: asInt(j['people']),
-      );
+    id: asString(j['id']),
+    name: asString(j['name']),
+    repo: asStringOrNull(j['repo']),
+    dir: asString(j['dir']),
+    palette: asInt(j['palette']),
+    cloning: asBoolOrNull(j['cloning']),
+    local: asBoolOrNull(j['local']),
+    addedBy: asString(j['addedBy']),
+    addedAt: asInt(j['addedAt']),
+    workers: asInt(j['workers']),
+    busy: asInt(j['busy']),
+    waiting: asInt(j['waiting']),
+    people: asInt(j['people']),
+  );
 
   final String id;
 
@@ -1430,10 +2325,14 @@ class FloorInfo implements JsonObject {
 
   /// Being cloned: on the elevator panel, but nobody can go there yet.
   final bool? cloning;
+
+  /// The project the office was started in (`agent-office <dir>`): the office keeps its own data in its checkout.
+  final bool? local;
   final String addedBy;
   final int addedAt;
 
-  /// For the elevator panel: who's there and what they're up to.
+  /// For the elevator panel: who's there and what they're up to. `workers` counts the ones hired onto
+  /// desks, bean bags and the meeting room's table, not the board agents at their kiosks.
   final int workers;
   final int busy;
 
@@ -1443,27 +2342,55 @@ class FloorInfo implements JsonObject {
 
   @override
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'name': name,
-        'repo': ?repo,
-        'dir': dir,
-        'palette': palette,
-        'cloning': ?cloning,
-        'addedBy': addedBy,
-        'addedAt': addedAt,
-        'workers': workers,
-        'busy': busy,
-        'waiting': waiting,
-        'people': people,
-      };
+    'id': id,
+    'name': name,
+    'repo': ?repo,
+    'dir': dir,
+    'palette': palette,
+    'cloning': ?cloning,
+    'local': ?local,
+    'addedBy': addedBy,
+    'addedAt': addedAt,
+    'workers': workers,
+    'busy': busy,
+    'waiting': waiting,
+    'people': people,
+  };
+}
+
+/// Where the elevator's "add a project" clones to: <dir>/<owner>/<repo> on the office's machine.
+class ProjectsDirState implements JsonObject {
+  const ProjectsDirState({required this.dir, this.custom = false, this.by, this.at});
+
+  factory ProjectsDirState.fromJson(Map<String, dynamic> j) => ProjectsDirState(
+    dir: asString(j['dir']),
+    custom: asBool(j['custom']),
+    by: asStringOrNull(j['by']),
+    at: asIntOrNull(j['at']),
+  );
+
+  /// For showing people: under the home folder it's ~/….
+  final String dir;
+
+  /// Set from ⚙️ Settings or --projects, rather than the office's default.
+  final bool custom;
+  final String? by;
+  final int? at;
+
+  @override
+  Map<String, dynamic> toJson() => {'dir': dir, 'custom': custom, 'by': ?by, 'at': ?at};
 }
 
 /// A repository the office's `gh` login can clone, for the elevator's "add a project".
 class RepoChoice implements JsonObject {
   const RepoChoice({required this.name, this.description, required this.private, this.pushedAt});
 
-  factory RepoChoice.fromJson(Map<String, dynamic> j) =>
-      RepoChoice(name: asString(j['name']), description: asStringOrNull(j['description']), private: asBool(j['private']), pushedAt: asStringOrNull(j['pushedAt']));
+  factory RepoChoice.fromJson(Map<String, dynamic> j) => RepoChoice(
+    name: asString(j['name']),
+    description: asStringOrNull(j['description']),
+    private: asBool(j['private']),
+    pushedAt: asStringOrNull(j['pushedAt']),
+  );
 
   /// owner/name
   final String name;
@@ -1474,7 +2401,12 @@ class RepoChoice implements JsonObject {
   final String? pushedAt;
 
   @override
-  Map<String, dynamic> toJson() => {'name': name, 'description': ?description, 'private': private, 'pushedAt': ?pushedAt};
+  Map<String, dynamic> toJson() => {
+    'name': name,
+    'description': ?description,
+    'private': private,
+    'pushedAt': ?pushedAt,
+  };
 }
 
 /// Everything that belongs to the floor you're on: sent when you walk in, and when you change floors.
@@ -1490,22 +2422,28 @@ class FloorView implements JsonObject {
     required this.services,
     required this.dog,
     required this.jukebox,
+    this.cabinet = const CabinetView(),
     required this.whiteboard,
+    this.meeting = const MeetingState(),
+    this.ball = const BallState(),
   });
 
   factory FloorView.fromJson(Map<String, dynamic> j) => FloorView(
-        floor: asStringOrNull(j['floor']),
-        project: _obj(j['project'], ProjectInfo.fromJson),
-        workers: asList(j['workers'], WorkerInfo.fromJson),
-        issues: GhState.fromJson(asMap(j['issues']), GhIssue.fromJson),
-        pulls: GhState.fromJson(asMap(j['pulls']), GhPull.fromJson),
-        queue: QueueState.fromJson(asMap(j['queue'])),
-        decor: asList(j['decor'], Decoration.fromJson),
-        services: ServicesState.fromJson(asMap(j['services'])),
-        dog: _obj(j['dog'], DogState.fromJson),
-        jukebox: JukeboxState.fromJson(asMap(j['jukebox'])),
-        whiteboard: WhiteboardView.fromJson(asMap(j['whiteboard'])),
-      );
+    floor: asStringOrNull(j['floor']),
+    project: _obj(j['project'], ProjectInfo.fromJson),
+    workers: asList(j['workers'], WorkerInfo.fromJson),
+    issues: GhState.fromJson(asMap(j['issues']), GhIssue.fromJson),
+    pulls: GhState.fromJson(asMap(j['pulls']), GhPull.fromJson),
+    queue: QueueState.fromJson(asMap(j['queue'])),
+    decor: asList(j['decor'], Decoration.fromJson),
+    services: ServicesState.fromJson(asMap(j['services'])),
+    dog: _obj(j['dog'], DogState.fromJson),
+    jukebox: JukeboxState.fromJson(asMap(j['jukebox'])),
+    cabinet: CabinetView.fromJson(asMap(j['cabinet'])),
+    whiteboard: WhiteboardView.fromJson(asMap(j['whiteboard'])),
+    meeting: MeetingState.fromJson(asMap(j['meeting'])),
+    ball: BallState.fromJson(asMap(j['ball'])),
+  );
 
   /// The floor you're on; null while the building has none.
   final String? floor;
@@ -1525,24 +2463,36 @@ class FloorView implements JsonObject {
   /// What the lounge jukebox is playing.
   final JukeboxState jukebox;
 
+  /// Who's at the arcade cabinet, what's on its screen, and the building's high scores.
+  final CabinetView cabinet;
+
   /// What's drawn on this floor's whiteboard, and who's drawing.
   final WhiteboardView whiteboard;
+
+  /// The meeting room: who's meeting about what, and the meetings before.
+  final MeetingState meeting;
+
+  /// The basketball by the hoop: who has it, or how it was last thrown.
+  final BallState ball;
 
   /// `floor`, `project` and `dog` are always sent, as null when there's none.
   @override
   Map<String, dynamic> toJson() => {
-        'floor': floor,
-        'project': project?.toJson(),
-        'workers': _list(workers),
-        'issues': issues.toJson(),
-        'pulls': pulls.toJson(),
-        'queue': queue.toJson(),
-        'decor': [for (final d in decor) d.toJson()],
-        'services': services.toJson(),
-        'dog': dog?.toJson(),
-        'jukebox': jukebox.toJson(),
-        'whiteboard': whiteboard.toJson(),
-      };
+    'floor': floor,
+    'project': project?.toJson(),
+    'workers': _list(workers),
+    'issues': issues.toJson(),
+    'pulls': pulls.toJson(),
+    'queue': queue.toJson(),
+    'decor': [for (final d in decor) d.toJson()],
+    'services': services.toJson(),
+    'dog': dog?.toJson(),
+    'jukebox': jukebox.toJson(),
+    'cabinet': cabinet.toJson(),
+    'whiteboard': whiteboard.toJson(),
+    'meeting': meeting.toJson(),
+    'ball': ball.toJson(),
+  };
 }
 
 // ---- Accounts and the team ----------------------------------------------------------------------
@@ -1551,7 +2501,8 @@ class FloorView implements JsonObject {
 class MeAccount implements JsonObject {
   const MeAccount({required this.name, required this.role});
 
-  factory MeAccount.fromJson(Map<String, dynamic> j) => MeAccount(name: asString(j['name']), role: AccountRole.parse(j['role']));
+  factory MeAccount.fromJson(Map<String, dynamic> j) =>
+      MeAccount(name: asString(j['name']), role: AccountRole.parse(j['role']));
 
   final String name;
   final AccountRole role;
@@ -1564,7 +2515,8 @@ class MeAccount implements JsonObject {
 class Me implements JsonObject {
   const Me({this.account, required this.admin});
 
-  factory Me.fromJson(Map<String, dynamic> j) => Me(account: _obj(j['account'], MeAccount.fromJson), admin: asBool(j['admin']));
+  factory Me.fromJson(Map<String, dynamic> j) =>
+      Me(account: _obj(j['account'], MeAccount.fromJson), admin: asBool(j['admin']));
 
   /// Your own account; missing when you came in with the shared office password.
   final MeAccount? account;
@@ -1577,17 +2529,25 @@ class Me implements JsonObject {
 }
 
 class AccountInfo implements JsonObject {
-  const AccountInfo({required this.id, required this.name, required this.role, required this.createdAt, required this.createdBy, this.lastSeenAt, required this.online});
+  const AccountInfo({
+    required this.id,
+    required this.name,
+    required this.role,
+    required this.createdAt,
+    required this.createdBy,
+    this.lastSeenAt,
+    required this.online,
+  });
 
   factory AccountInfo.fromJson(Map<String, dynamic> j) => AccountInfo(
-        id: asString(j['id']),
-        name: asString(j['name']),
-        role: AccountRole.parse(j['role']),
-        createdAt: asInt(j['createdAt']),
-        createdBy: asString(j['createdBy']),
-        lastSeenAt: asIntOrNull(j['lastSeenAt']),
-        online: asBool(j['online']),
-      );
+    id: asString(j['id']),
+    name: asString(j['name']),
+    role: AccountRole.parse(j['role']),
+    createdAt: asInt(j['createdAt']),
+    createdBy: asString(j['createdBy']),
+    lastSeenAt: asIntOrNull(j['lastSeenAt']),
+    online: asBool(j['online']),
+  );
 
   final String id;
   final String name;
@@ -1601,29 +2561,37 @@ class AccountInfo implements JsonObject {
 
   @override
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'name': name,
-        'role': role.wire,
-        'createdAt': createdAt,
-        'createdBy': createdBy,
-        'lastSeenAt': ?lastSeenAt,
-        'online': online,
-      };
+    'id': id,
+    'name': name,
+    'role': role.wire,
+    'createdAt': createdAt,
+    'createdBy': createdBy,
+    'lastSeenAt': ?lastSeenAt,
+    'online': online,
+  };
 }
 
 /// A single-use link that makes a named account: `/join#<token>`.
 class AccountInvite implements JsonObject {
-  const AccountInvite({required this.id, required this.token, this.name, required this.role, required this.createdBy, required this.createdAt, required this.expiresAt});
+  const AccountInvite({
+    required this.id,
+    required this.token,
+    this.name,
+    required this.role,
+    required this.createdBy,
+    required this.createdAt,
+    required this.expiresAt,
+  });
 
   factory AccountInvite.fromJson(Map<String, dynamic> j) => AccountInvite(
-        id: asString(j['id']),
-        token: asString(j['token']),
-        name: asStringOrNull(j['name']),
-        role: AccountRole.parse(j['role']),
-        createdBy: asString(j['createdBy']),
-        createdAt: asInt(j['createdAt']),
-        expiresAt: asInt(j['expiresAt']),
-      );
+    id: asString(j['id']),
+    token: asString(j['token']),
+    name: asStringOrNull(j['name']),
+    role: AccountRole.parse(j['role']),
+    createdBy: asString(j['createdBy']),
+    createdAt: asInt(j['createdAt']),
+    expiresAt: asInt(j['expiresAt']),
+  );
 
   final String id;
   final String token;
@@ -1637,14 +2605,14 @@ class AccountInvite implements JsonObject {
 
   @override
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'token': token,
-        'name': ?name,
-        'role': role.wire,
-        'createdBy': createdBy,
-        'createdAt': createdAt,
-        'expiresAt': expiresAt,
-      };
+    'id': id,
+    'token': token,
+    'name': ?name,
+    'role': role.wire,
+    'createdBy': createdBy,
+    'createdAt': createdAt,
+    'expiresAt': expiresAt,
+  };
 }
 
 /// Per-person accounts, for admins (see server/accounts.ts).
@@ -1652,10 +2620,10 @@ class AccountsState implements JsonObject {
   const AccountsState({required this.accounts, required this.invites, required this.sharedPassword});
 
   factory AccountsState.fromJson(Map<String, dynamic> j) => AccountsState(
-        accounts: asList(j['accounts'], AccountInfo.fromJson),
-        invites: asList(j['invites'], AccountInvite.fromJson),
-        sharedPassword: asBool(j['sharedPassword']),
-      );
+    accounts: asList(j['accounts'], AccountInfo.fromJson),
+    invites: asList(j['invites'], AccountInvite.fromJson),
+    sharedPassword: asBool(j['sharedPassword']),
+  );
 
   final List<AccountInfo> accounts;
   final List<AccountInvite> invites;
@@ -1664,7 +2632,11 @@ class AccountsState implements JsonObject {
   final bool sharedPassword;
 
   @override
-  Map<String, dynamic> toJson() => {'accounts': _list(accounts), 'invites': _list(invites), 'sharedPassword': sharedPassword};
+  Map<String, dynamic> toJson() => {
+    'accounts': _list(accounts),
+    'invites': _list(invites),
+    'sharedPassword': sharedPassword,
+  };
 }
 
 class TeamMember implements JsonObject {
@@ -1682,16 +2654,23 @@ class TeamMember implements JsonObject {
 
 /// Who may SSH-tunnel into the office. Only offices deployed with deploy/aws.sh manage this.
 class TeamState implements JsonObject {
-  const TeamState({this.unavailable, this.error, this.ssh, required this.port, this.fingerprint, required this.members});
+  const TeamState({
+    this.unavailable,
+    this.error,
+    this.ssh,
+    required this.port,
+    this.fingerprint,
+    required this.members,
+  });
 
   factory TeamState.fromJson(Map<String, dynamic> j) => TeamState(
-        unavailable: asStringOrNull(j['unavailable']),
-        error: asStringOrNull(j['error']),
-        ssh: asStringOrNull(j['ssh']),
-        port: asInt(j['port']),
-        fingerprint: asStringOrNull(j['fingerprint']),
-        members: asList(j['members'], TeamMember.fromJson),
-      );
+    unavailable: asStringOrNull(j['unavailable']),
+    error: asStringOrNull(j['error']),
+    ssh: asStringOrNull(j['ssh']),
+    port: asInt(j['port']),
+    fingerprint: asStringOrNull(j['fingerprint']),
+    members: asList(j['members'], TeamMember.fromJson),
+  );
 
   /// Why invites can't be managed from the office, when they can't.
   final String? unavailable;
@@ -1709,31 +2688,40 @@ class TeamState implements JsonObject {
 
   @override
   Map<String, dynamic> toJson() => {
-        'unavailable': ?unavailable,
-        'error': ?error,
-        'ssh': ?ssh,
-        'port': port,
-        'fingerprint': ?fingerprint,
-        'members': _list(members),
-      };
+    'unavailable': ?unavailable,
+    'error': ?error,
+    'ssh': ?ssh,
+    'port': port,
+    'fingerprint': ?fingerprint,
+    'members': _list(members),
+  };
 }
 
 // ---- Services -----------------------------------------------------------------------------------
 
 /// A web server a worker started (a dev server, a preview), found by the ports it listens on.
 class ServiceInfo implements JsonObject {
-  const ServiceInfo({required this.port, required this.host, required this.pid, required this.command, required this.workerId, this.cwd, this.title, required this.since});
+  const ServiceInfo({
+    required this.port,
+    required this.host,
+    required this.pid,
+    required this.command,
+    required this.workerId,
+    this.cwd,
+    this.title,
+    required this.since,
+  });
 
   factory ServiceInfo.fromJson(Map<String, dynamic> j) => ServiceInfo(
-        port: asInt(j['port']),
-        host: asString(j['host']),
-        pid: asInt(j['pid']),
-        command: asString(j['command']),
-        workerId: asString(j['workerId']),
-        cwd: asStringOrNull(j['cwd']),
-        title: asStringOrNull(j['title']),
-        since: asInt(j['since']),
-      );
+    port: asInt(j['port']),
+    host: asString(j['host']),
+    pid: asInt(j['pid']),
+    command: asString(j['command']),
+    workerId: asString(j['workerId']),
+    cwd: asStringOrNull(j['cwd']),
+    title: asStringOrNull(j['title']),
+    since: asInt(j['since']),
+  );
 
   final int port;
 
@@ -1756,21 +2744,25 @@ class ServiceInfo implements JsonObject {
 
   @override
   Map<String, dynamic> toJson() => {
-        'port': port,
-        'host': host,
-        'pid': pid,
-        'command': command,
-        'workerId': workerId,
-        'cwd': ?cwd,
-        'title': ?title,
-        'since': since,
-      };
+    'port': port,
+    'host': host,
+    'pid': pid,
+    'command': command,
+    'workerId': workerId,
+    'cwd': ?cwd,
+    'title': ?title,
+    'since': since,
+  };
 }
 
 class ServicesState implements JsonObject {
   const ServicesState({required this.items, required this.port, this.ssh});
 
-  factory ServicesState.fromJson(Map<String, dynamic> j) => ServicesState(items: asList(j['items'], ServiceInfo.fromJson), port: asInt(j['port']), ssh: asStringOrNull(j['ssh']));
+  factory ServicesState.fromJson(Map<String, dynamic> j) => ServicesState(
+    items: asList(j['items'], ServiceInfo.fromJson),
+    port: asInt(j['port']),
+    ssh: asStringOrNull(j['ssh']),
+  );
 
   final List<ServiceInfo> items;
 
@@ -1800,15 +2792,15 @@ class ChangedFile implements JsonObject {
   });
 
   factory ChangedFile.fromJson(Map<String, dynamic> j) => ChangedFile(
-        path: asString(j['path']),
-        from: asStringOrNull(j['from']),
-        status: ChangeStatus.parse(j['status']),
-        additions: asInt(j['additions']),
-        deletions: asInt(j['deletions']),
-        binary: asBool(j['binary']),
-        uncommitted: asBool(j['uncommitted']),
-        sig: asString(j['sig']),
-      );
+    path: asString(j['path']),
+    from: asStringOrNull(j['from']),
+    status: ChangeStatus.parse(j['status']),
+    additions: asInt(j['additions']),
+    deletions: asInt(j['deletions']),
+    binary: asBool(j['binary']),
+    uncommitted: asBool(j['uncommitted']),
+    sig: asString(j['sig']),
+  );
 
   final String path;
 
@@ -1829,18 +2821,39 @@ class ChangedFile implements JsonObject {
 
   @override
   Map<String, dynamic> toJson() => {
-        'path': path,
-        'from': ?from,
-        'status': status.wire,
-        'additions': additions,
-        'deletions': deletions,
-        'binary': binary,
-        'uncommitted': uncommitted,
-        'sig': sig,
-      };
+    'path': path,
+    'from': ?from,
+    'status': status.wire,
+    'additions': additions,
+    'deletions': deletions,
+    'binary': binary,
+    'uncommitted': uncommitted,
+    'sig': sig,
+  };
 }
 
 /// What a worker changed in its checkout, against the branch the office was opened on.
+/// Changed files the Changes window can show as a picture (GET /api/changes/file), by extension.
+const Map<String, String> _changedImageTypes = {
+  'png': 'image/png',
+  'jpg': 'image/jpeg',
+  'jpeg': 'image/jpeg',
+  'gif': 'image/gif',
+  'webp': 'image/webp',
+  'avif': 'image/avif',
+  'bmp': 'image/bmp',
+  'ico': 'image/x-icon',
+  'svg': 'image/svg+xml',
+};
+
+/// The content type of a changed picture, or null when the file isn't one.
+String? changedImageType(String filePath) {
+  final name = filePath.substring(filePath.lastIndexOf('/') + 1);
+  final dot = name.lastIndexOf('.');
+  if (dot <= 0) return null;
+  return _changedImageTypes[name.substring(dot + 1).toLowerCase()];
+}
+
 class ChangesState implements JsonObject {
   const ChangesState({
     required this.workerId,
@@ -1859,20 +2872,20 @@ class ChangesState implements JsonObject {
   });
 
   factory ChangesState.fromJson(Map<String, dynamic> j) => ChangesState(
-        workerId: asString(j['workerId']),
-        dir: asString(j['dir']),
-        branch: asStringOrNull(j['branch']),
-        base: asString(j['base']),
-        ahead: asInt(j['ahead']),
-        subject: asStringOrNull(j['subject']),
-        files: asList(j['files'], ChangedFile.fromJson),
-        more: asInt(j['more']),
-        prBase: asStringOrNull(j['prBase']),
-        pr: _obj(j['pr'], PrRef.fromJson),
-        busy: asStringOrNull(j['busy']),
-        error: asStringOrNull(j['error']),
-        at: asInt(j['at']),
-      );
+    workerId: asString(j['workerId']),
+    dir: asString(j['dir']),
+    branch: asStringOrNull(j['branch']),
+    base: asString(j['base']),
+    ahead: asInt(j['ahead']),
+    subject: asStringOrNull(j['subject']),
+    files: asList(j['files'], ChangedFile.fromJson),
+    more: asInt(j['more']),
+    prBase: asStringOrNull(j['prBase']),
+    pr: _obj(j['pr'], PrRef.fromJson),
+    busy: asStringOrNull(j['busy']),
+    error: asStringOrNull(j['error']),
+    at: asInt(j['at']),
+  );
 
   final String workerId;
 
@@ -1908,20 +2921,20 @@ class ChangesState implements JsonObject {
 
   @override
   Map<String, dynamic> toJson() => {
-        'workerId': workerId,
-        'dir': dir,
-        'branch': ?branch,
-        'base': base,
-        'ahead': ahead,
-        'subject': ?subject,
-        'files': _list(files),
-        'more': more,
-        'prBase': ?prBase,
-        'pr': ?pr?.toJson(),
-        'busy': ?busy,
-        'error': ?error,
-        'at': at,
-      };
+    'workerId': workerId,
+    'dir': dir,
+    'branch': ?branch,
+    'base': base,
+    'ahead': ahead,
+    'subject': ?subject,
+    'files': _list(files),
+    'more': more,
+    'prBase': ?prBase,
+    'pr': ?pr?.toJson(),
+    'busy': ?busy,
+    'error': ?error,
+    'at': at,
+  };
 }
 
 // ---- Upgrades -----------------------------------------------------------------------------------
@@ -1929,7 +2942,8 @@ class ChangesState implements JsonObject {
 class VersionInfo implements JsonObject {
   const VersionInfo({required this.sha, required this.subject, required this.date});
 
-  factory VersionInfo.fromJson(Map<String, dynamic> j) => VersionInfo(sha: asString(j['sha']), subject: asString(j['subject']), date: asString(j['date']));
+  factory VersionInfo.fromJson(Map<String, dynamic> j) =>
+      VersionInfo(sha: asString(j['sha']), subject: asString(j['subject']), date: asString(j['date']));
 
   final String sha;
   final String subject;
@@ -1945,7 +2959,8 @@ class VersionInfo implements JsonObject {
 class UpgradeChange implements JsonObject {
   const UpgradeChange({required this.sha, required this.subject});
 
-  factory UpgradeChange.fromJson(Map<String, dynamic> j) => UpgradeChange(sha: asString(j['sha']), subject: asString(j['subject']));
+  factory UpgradeChange.fromJson(Map<String, dynamic> j) =>
+      UpgradeChange(sha: asString(j['sha']), subject: asString(j['subject']));
 
   final String sha;
   final String subject;
@@ -1970,17 +2985,17 @@ class UpgradeState implements JsonObject {
   });
 
   factory UpgradeState.fromJson(Map<String, dynamic> j) => UpgradeState(
-        available: asBool(j['available']),
-        current: _obj(j['current'], VersionInfo.fromJson),
-        latest: _obj(j['latest'], VersionInfo.fromJson),
-        changes: j['changes'] is List ? asList(j['changes'], UpgradeChange.fromJson) : null,
-        behind: asIntOrNull(j['behind']),
-        checking: asBoolOrNull(j['checking']),
-        checkedAt: asIntOrNull(j['checkedAt']),
-        phase: UpgradePhase.parse(j['phase']),
-        by: asStringOrNull(j['by']),
-        error: asStringOrNull(j['error']),
-      );
+    available: asBool(j['available']),
+    current: _obj(j['current'], VersionInfo.fromJson),
+    latest: _obj(j['latest'], VersionInfo.fromJson),
+    changes: j['changes'] is List ? asList(j['changes'], UpgradeChange.fromJson) : null,
+    behind: asIntOrNull(j['behind']),
+    checking: asBoolOrNull(j['checking']),
+    checkedAt: asIntOrNull(j['checkedAt']),
+    phase: UpgradePhase.parse(j['phase']),
+    by: asStringOrNull(j['by']),
+    error: asStringOrNull(j['error']),
+  );
 
   /// False when the office can't upgrade itself (not installed by deploy/aws.sh).
   final bool available;
@@ -2004,34 +3019,42 @@ class UpgradeState implements JsonObject {
 
   @override
   Map<String, dynamic> toJson() => {
-        'available': available,
-        'current': ?current?.toJson(),
-        'latest': ?latest?.toJson(),
-        'changes': ?(changes == null ? null : _list(changes!)),
-        'behind': ?behind,
-        'checking': ?checking,
-        'checkedAt': ?checkedAt,
-        'phase': phase.wire,
-        'by': ?by,
-        'error': ?error,
-      };
+    'available': available,
+    'current': ?current?.toJson(),
+    'latest': ?latest?.toJson(),
+    'changes': ?(changes == null ? null : _list(changes!)),
+    'behind': ?behind,
+    'checking': ?checking,
+    'checkedAt': ?checkedAt,
+    'phase': phase.wire,
+    'by': ?by,
+    'error': ?error,
+  };
 }
 
 // ---- The sky, chat and search -------------------------------------------------------------------
 
 /// What it's like outside the windows. The server decides it, so everyone sees the same sky.
 class SkyState implements JsonObject {
-  const SkyState({required this.lat, required this.lon, required this.utcOffset, required this.weather, required this.intensity, this.city, this.temp});
+  const SkyState({
+    required this.lat,
+    required this.lon,
+    required this.utcOffset,
+    required this.weather,
+    required this.intensity,
+    this.city,
+    this.temp,
+  });
 
   factory SkyState.fromJson(Map<String, dynamic> j) => SkyState(
-        lat: asDouble(j['lat']),
-        lon: asDouble(j['lon']),
-        utcOffset: asInt(j['utcOffset']),
-        weather: Weather.parse(j['weather']),
-        intensity: asDouble(j['intensity']),
-        city: asStringOrNull(j['city']),
-        temp: asDoubleOrNull(j['temp']),
-      );
+    lat: asDouble(j['lat']),
+    lon: asDouble(j['lon']),
+    utcOffset: asInt(j['utcOffset']),
+    weather: Weather.parse(j['weather']),
+    intensity: asDouble(j['intensity']),
+    city: asStringOrNull(j['city']),
+    temp: asDoubleOrNull(j['temp']),
+  );
 
   /// Where the office is, for the sun: a configured city, or a guess from the host's time zone.
   final double lat;
@@ -2052,27 +3075,104 @@ class SkyState implements JsonObject {
 
   @override
   Map<String, dynamic> toJson() => {
-        'lat': lat,
-        'lon': lon,
-        'utcOffset': utcOffset,
-        'weather': weather.wire,
-        'intensity': intensity,
-        'city': ?city,
-        'temp': ?temp,
-      };
+    'lat': lat,
+    'lon': lon,
+    'utcOffset': utcOffset,
+    'weather': weather.wire,
+    'intensity': intensity,
+    'city': ?city,
+    'temp': ?temp,
+  };
+}
+
+/// A holiday the whole building dresses up for (see theme.dart). `Theme` in the TS, which would
+/// clash with Flutter's.
+enum HolidayTheme implements WireEnum {
+  halloween('halloween'),
+  christmas('christmas');
+
+  const HolidayTheme(this.wire);
+  @override
+  final String wire;
+
+  static HolidayTheme? tryParse(Object? v) => parseWireOrNull(values, v);
+}
+
+/// What someone picked in ⚙️ Settings: a holiday, none, or whichever the calendar says.
+enum ThemePick implements WireEnum {
+  auto('auto'),
+  halloween('halloween'),
+  christmas('christmas'),
+  off('off');
+
+  const ThemePick(this.wire);
+  @override
+  final String wire;
+
+  static ThemePick parse(Object? v) => parseWire(values, v, ThemePick.auto);
+  static ThemePick? tryParse(Object? v) => parseWireOrNull(values, v);
+}
+
+/// The building's holiday theme: the same on every floor, for everyone.
+class ThemeState implements JsonObject {
+  const ThemeState({this.pick = ThemePick.auto, this.active, this.by, this.at});
+
+  factory ThemeState.fromJson(Map<String, dynamic> j) => ThemeState(
+    pick: ThemePick.parse(j['pick']),
+    active: HolidayTheme.tryParse(j['active']),
+    by: asStringOrNull(j['by']),
+    at: asIntOrNull(j['at']),
+  );
+
+  final ThemePick pick;
+
+  /// What's up right now: the pick, or for 'auto' the holiday it is at the office. Null for none (always sent).
+  final HolidayTheme? active;
+
+  /// Who picked it, and when. Unset for the default (auto).
+  final String? by;
+  final int? at;
+
+  @override
+  Map<String, dynamic> toJson() => {'pick': pick.wire, 'active': active?.wire, 'by': ?by, 'at': ?at};
+}
+
+/// Whether a worker whose pull request merged goes home by itself (⚙️ Settings), for every floor:
+/// once it's at rest and nobody has its terminal open, it leaves and its worktree and branch are deleted.
+class LeaveOnMergeState implements JsonObject {
+  const LeaveOnMergeState({this.on = false, this.by, this.at});
+
+  factory LeaveOnMergeState.fromJson(Map<String, dynamic> j) =>
+      LeaveOnMergeState(on: asBool(j['on']), by: asStringOrNull(j['by']), at: asIntOrNull(j['at']));
+
+  final bool on;
+
+  /// Who set it, and when. Unset for the default (off).
+  final String? by;
+  final int? at;
+
+  @override
+  Map<String, dynamic> toJson() => {'on': on, 'by': ?by, 'at': ?at};
 }
 
 class ChatLine implements JsonObject {
-  const ChatLine({required this.from, required this.name, required this.color, required this.text, required this.at, this.account});
+  const ChatLine({
+    required this.from,
+    required this.name,
+    required this.color,
+    required this.text,
+    required this.at,
+    this.account,
+  });
 
   factory ChatLine.fromJson(Map<String, dynamic> j) => ChatLine(
-        from: asString(j['from']),
-        name: asString(j['name']),
-        color: asString(j['color'], '#888888'),
-        text: asString(j['text']),
-        at: asInt(j['at']),
-        account: asBoolOrNull(j['account']),
-      );
+    from: asString(j['from']),
+    name: asString(j['name']),
+    color: asString(j['color'], '#888888'),
+    text: asString(j['text']),
+    at: asInt(j['at']),
+    account: asBoolOrNull(j['account']),
+  );
 
   final String from;
   final String name;
@@ -2084,14 +3184,26 @@ class ChatLine implements JsonObject {
   final bool? account;
 
   @override
-  Map<String, dynamic> toJson() => {'from': from, 'name': name, 'color': color, 'text': text, 'at': at, 'account': ?account};
+  Map<String, dynamic> toJson() => {
+    'from': from,
+    'name': name,
+    'color': color,
+    'text': text,
+    'at': at,
+    'account': ?account,
+  };
 }
 
 /// A line of a worker's terminal that matched a search.
 class TerminalHit implements JsonObject {
   const TerminalHit({required this.workerId, required this.text, required this.row, required this.rows});
 
-  factory TerminalHit.fromJson(Map<String, dynamic> j) => TerminalHit(workerId: asString(j['workerId']), text: asString(j['text']), row: asInt(j['row']), rows: asInt(j['rows']));
+  factory TerminalHit.fromJson(Map<String, dynamic> j) => TerminalHit(
+    workerId: asString(j['workerId']),
+    text: asString(j['text']),
+    row: asInt(j['row']),
+    rows: asInt(j['rows']),
+  );
 
   final String workerId;
 
@@ -2110,8 +3222,12 @@ class TerminalHit implements JsonObject {
 class SearchResults implements JsonObject {
   const SearchResults({required this.q, required this.chat, required this.terminals, required this.more});
 
-  factory SearchResults.fromJson(Map<String, dynamic> j) =>
-      SearchResults(q: asString(j['q']), chat: asList(j['chat'], ChatLine.fromJson), terminals: asList(j['terminals'], TerminalHit.fromJson), more: asBool(j['more']));
+  factory SearchResults.fromJson(Map<String, dynamic> j) => SearchResults(
+    q: asString(j['q']),
+    chat: asList(j['chat'], ChatLine.fromJson),
+    terminals: asList(j['terminals'], TerminalHit.fromJson),
+    more: asBool(j['more']),
+  );
 
   final String q;
   final List<ChatLine> chat;
@@ -2147,10 +3263,10 @@ class IceServer implements JsonObject {
 
   @override
   Map<String, dynamic> toJson() => {
-        'urls': urlsIsList || urls.length != 1 ? urls : urls.first,
-        'username': ?username,
-        'credential': ?credential,
-      };
+    'urls': urlsIsList || urls.length != 1 ? urls : urls.first,
+    'username': ?username,
+    'credential': ?credential,
+  };
 }
 
 // ---- Client → server ----------------------------------------------------------------------------
@@ -2166,6 +3282,190 @@ sealed class ClientMsg {
   Map<String, dynamic> get fields => const {};
 
   Map<String, dynamic> toJson() => {'t': t, ...fields};
+
+  /// Reads any frame a browser sends, as tolerantly as [ServerMsg.parse]; an unknown `t` gives
+  /// [UnknownCmd]. Tolerant is not validated: the server still checks what's in it.
+  static ClientMsg parse(Map<String, dynamic> j) {
+    try {
+      return _parseClient(j);
+    } catch (_) {
+      return UnknownCmd(j);
+    }
+  }
+}
+
+/// Where you arrive on another floor by `floor.go`, instead of in the elevator car.
+typedef FloorArrival = ({double x, double y, double z, double rotY});
+
+ClientMsg _parseClient(Map<String, dynamic> j) {
+  String s(String k) => asString(j[k]);
+  String? so(String k) => asStringOrNull(j[k]);
+  final workerId = s('workerId');
+  return switch (j['t']) {
+    'move' => MoveCmd(
+      x: asDouble(j['x']),
+      y: asDouble(j['y']),
+      z: asDouble(j['z']),
+      rotY: asDouble(j['rotY']),
+      moving: asBool(j['moving']),
+    ),
+    'act' => ActCmd(
+      smoke: asBoolOrNull(j['smoke']),
+      golf: asBoolOrNull(j['golf']),
+      drink: DrinkId.tryParse(j['drink']),
+      drinkSet: j.containsKey('drink'),
+    ),
+    'golf' => GolfCmd(yaw: asDouble(j['yaw']), loft: asDouble(j['loft']), power: asDouble(j['power'])),
+    'sit' => SitCmd(seat: so('seat')),
+    'carry' => CarryCmd(issue: asIntOrNull(j['issue']), title: so('title')),
+    'emote' => EmoteCmd(Emote.tryParse(j['emote']) ?? Emote.wave),
+    'profile' => ProfileCmd(name: s('name'), color: s('color'), look: Look.fromJson(j['look'])),
+    'worker.spawn' => WorkerSpawnCmd(
+      deskId: s('deskId'),
+      prompt: so('prompt'),
+      worktree: asBoolOrNull(j['worktree']),
+      kind: WorkerKind.tryParse(j['kind']),
+      provider: AgentProvider.tryParse(j['provider']),
+      model: so('model'),
+      effort: AgentEffort.tryParse(j['effort']),
+      issue: asIntOrNull(j['issue']),
+    ),
+    'worker.resume' => WorkerResumeCmd(workerId),
+    'worker.kill' => WorkerKillCmd(
+      workerId,
+      cleanup: j['cleanup'] == null ? null : WorktreeCleanup.parse(j['cleanup']),
+    ),
+    'worker.worktree' => WorkerWorktreeCmd(workerId),
+    'worker.attach' => WorkerAttachCmd(workerId),
+    'worker.detach' => WorkerDetachCmd(workerId),
+    'worker.prompt' => WorkerPromptCmd(workerId, s('prompt'), issue: asIntOrNull(j['issue'])),
+    'station.prompt' => StationPromptCmd(deskId: s('deskId'), prompt: s('prompt')),
+    'worker.pr' => WorkerPrCmd(workerId),
+    'term.input' => TermInputCmd(workerId, s('data')),
+    'term.typing' => TermTypingCmd(workerId),
+    'term.resize' => TermResizeCmd(workerId, cols: asInt(j['cols'], 80), rows: asInt(j['rows'], 24)),
+    'doing' => DoingCmd(what: so('what'), reading: asBoolOrNull(j['reading'])),
+    'gh.refresh' => const GhRefreshCmd(),
+    'gh.merge' => GhMergeCmd(
+      number: asInt(j['number']),
+      method: GhMergeMethod.parse(j['method']),
+      deleteBranch: asBool(j['deleteBranch']),
+      auto: asBoolOrNull(j['auto']),
+    ),
+    'gh.comment' => GhCommentCmd(kind: GhKind.parse(j['kind']), number: asInt(j['number']), body: s('body')),
+    'gong' => const GongCmd(),
+    'horn' => const HornCmd(),
+    'gh.close' => GhCloseCmd(
+      kind: GhKind.parse(j['kind']),
+      number: asInt(j['number']),
+      comment: so('comment'),
+      reason: j['reason'] == null ? null : GhCloseReason.parse(j['reason']),
+      deleteBranch: asBoolOrNull(j['deleteBranch']),
+    ),
+    'gh.labels' => GhLabelsCmd(
+      kind: GhKind.parse(j['kind']),
+      number: asInt(j['number']),
+      add: asStringList(j['add']),
+      remove: asStringList(j['remove']),
+    ),
+    'queue.add' => QueueAddCmd(
+      prompt: s('prompt'),
+      title: so('title'),
+      issue: asIntOrNull(j['issue']),
+      provider: AgentProvider.tryParse(j['provider']),
+      model: so('model'),
+      effort: AgentEffort.tryParse(j['effort']),
+    ),
+    'queue.remove' => QueueRemoveCmd(s('taskId')),
+    'queue.move' => QueueMoveCmd(s('taskId'), asInt(j['delta'])),
+    'queue.retry' => QueueRetryCmd(s('taskId')),
+    'queue.clear' => const QueueClearCmd(),
+    'queue.limit' => QueueLimitCmd(asInt(j['maxWorkers'])),
+    'meeting.start' => MeetingStartCmd(MeetingRequest.fromJson(j)),
+    'meeting.stop' => const MeetingStopCmd(),
+    'meeting.clear' => const MeetingClearCmd(),
+    'notify.webhook' => NotifyWebhookCmd(s('url')),
+    'notify.test' => const NotifyTestCmd(),
+    'machine.limit' => MachineLimitCmd(asIntOrNull(j['limit'])),
+    'voice' => VoiceCmd(voice: asBool(j['voice']), muted: asBool(j['muted']), sharing: asBool(j['sharing'])),
+    'rtc' => RtcCmd(s('to'), j['data']),
+    'chat' => ChatCmd(s('text')),
+    'team.get' => const TeamGetCmd(),
+    'team.invite' => TeamInviteCmd(s('github')),
+    'team.remove' => TeamRemoveCmd(s('name')),
+    'accounts.get' => const AccountsGetCmd(),
+    'accounts.invite' => AccountsInviteCmd(name: so('name'), role: AccountRole.parse(j['role'])),
+    'accounts.cancel' => AccountsCancelCmd(s('inviteId')),
+    'accounts.revoke' => AccountsRevokeCmd(s('accountId')),
+    'accounts.role' => AccountsRoleCmd(s('accountId'), AccountRole.parse(j['role'])),
+    'accounts.shared' => AccountsSharedCmd(asBool(j['on'])),
+    'changes.watch' => ChangesWatchCmd(workerId),
+    'changes.unwatch' => ChangesUnwatchCmd(workerId),
+    'changes.diff' => ChangesDiffCmd(workerId, s('path')),
+    'changes.commit' => ChangesCommitCmd(workerId, s('message')),
+    'changes.discard' => ChangesDiscardCmd(workerId, path: so('path')),
+    'changes.pr' => ChangesPrCmd(workerId, title: s('title'), body: s('body')),
+    'upgrade.check' => const UpgradeCheckCmd(),
+    'upgrade.start' => const UpgradeStartCmd(),
+    'limits.refresh' => const LimitsRefreshCmd(),
+    'decor.add' => DecorAddCmd(DecorPlacement.fromJson(asMap(j['decor']))),
+    'decor.update' => DecorUpdateCmd(s('id'), DecorPatch.fromJson(asMap(j['decor']))),
+    'decor.remove' => DecorRemoveCmd(s('id')),
+    'jukebox.play' => JukeboxPlayCmd(track: so('track'), url: so('url')),
+    'jukebox.skip' => const JukeboxSkipCmd(),
+    'jukebox.stop' => const JukeboxStopCmd(),
+    'cabinet.play' => CabinetPlayCmd(game: so('game')),
+    'cabinet.leave' => const CabinetLeaveCmd(),
+    'cabinet.frame' => CabinetFrameCmd(CabinetFrame.fromJson(asMap(j['frame']))),
+    'wb.open' => const WbOpenCmd(),
+    'wb.close' => const WbCloseCmd(),
+    'wb.update' => WbUpdateCmd(asList(j['elements'], WbElement.fromJson)),
+    'wb.pointer' => WbPointerCmd(WbPointer.fromJson(j), selected: asStringListOrNull(j['selected'])),
+    'floor.go' => FloorGoCmd(
+      s('floor'),
+      at: j['at'] is Map
+          ? (
+              x: asDouble(j['at']['x']),
+              y: asDouble(j['at']['y']),
+              z: asDouble(j['at']['z']),
+              rotY: asDouble(j['at']['rotY']),
+            )
+          : null,
+    ),
+    'floor.repos' => FloorReposCmd(refresh: asBoolOrNull(j['refresh'])),
+    'floor.add' => FloorAddCmd(s('repo')),
+    'floor.remove' => FloorRemoveCmd(s('floor')),
+    'theme.set' => ThemeSetCmd(ThemePick.parse(j['pick'])),
+    'leaveOnMerge.set' => LeaveOnMergeSetCmd(asBool(j['on'])),
+    'floor.projectsDir' => FloorProjectsDirCmd(s('dir')),
+    'prompts.set' => PromptsSetCmd(s('id'), so('text')),
+    'prompts.agent' => PromptsAgentCmd(_obj(j['choice'], AgentChoice.fromJson)),
+    'ball.take' => const BallTakeCmd(),
+    'ball.throw' => BallThrowCmd(
+      x: asDouble(j['x']),
+      y: asDouble(j['y']),
+      z: asDouble(j['z']),
+      vx: asDouble(j['vx']),
+      vy: asDouble(j['vy']),
+      vz: asDouble(j['vz']),
+    ),
+    'dog.pet' => const DogPetCmd(),
+    'dog.name' => DogNameCmd(s('name')),
+    'ping' => PingCmd(asDouble(j['at'])),
+    _ => UnknownCmd(j),
+  };
+}
+
+/// A frame whose `t` isn't one this side knows, kept as it came.
+class UnknownCmd extends ClientMsg {
+  const UnknownCmd(this.raw);
+  final Map<String, dynamic> raw;
+  @override
+  String get t => asString(raw['t']);
+  @override
+  Map<String, dynamic> get fields => {...raw}..remove('t');
+  @override
+  Map<String, dynamic> toJson() => raw;
 }
 
 class MoveCmd extends ClientMsg {
@@ -2179,14 +3479,32 @@ class MoveCmd extends ClientMsg {
 }
 
 /// You reached out to use something; everyone else sees your character's arm do it. With `smoke`,
-/// you lit a cigarette (or put it out) on the balcony instead.
+/// you lit a cigarette (or put it out) on the balcony instead; with `golf`, you took a club out at
+/// the tee (or put it back); with `drink`, you took a drink from the rooftop bar (or finished it:
+/// [drinkSet] with no [drink] sends `drink: null`).
 class ActCmd extends ClientMsg {
-  const ActCmd({this.smoke});
+  const ActCmd({this.smoke, this.golf, this.drink, bool? drinkSet}) : drinkSet = drinkSet ?? drink != null;
   final bool? smoke;
+  final bool? golf;
+  final DrinkId? drink;
+
+  /// Whether `drink` is on the wire at all; with [drink] null, it's sent as null (finished it).
+  final bool drinkSet;
   @override
   String get t => 'act';
   @override
-  Map<String, dynamic> get fields => {'smoke': ?smoke};
+  Map<String, dynamic> get fields => {'smoke': ?smoke, 'golf': ?golf, if (drinkSet) 'drink': drink?.wire};
+}
+
+/// You hit a golf ball off the tee: its heading (0 is south, toward +x from there), loft (radians)
+/// and power (0–1). Everyone on your floor works out where it goes the same way (world/golf.ts fly).
+class GolfCmd extends ClientMsg {
+  const GolfCmd({required this.yaw, required this.loft, required this.power});
+  final double yaw, loft, power;
+  @override
+  String get t => 'golf';
+  @override
+  Map<String, dynamic> get fields => {'yaw': yaw, 'loft': loft, 'power': power};
 }
 
 /// You sat down in a place on a couch, a beanbag, a chair or the bench (see seatAt in layout), or got up again (no seat).
@@ -2197,6 +3515,27 @@ class SitCmd extends ClientMsg {
   String get t => 'sit';
   @override
   Map<String, dynamic> get fields => {'seat': ?seat};
+}
+
+/// You picked an issue card up off the board (or put it down again, no issue): everyone sees it in your hands.
+class CarryCmd extends ClientMsg {
+  const CarryCmd({this.issue, this.title});
+  final int? issue;
+  final String? title;
+  @override
+  String get t => 'carry';
+  @override
+  Map<String, dynamic> get fields => {'issue': ?issue, 'title': ?title};
+}
+
+/// An emote (hold G, or 1–6): everyone else on your floor sees your character do it. Rate limited, see EmoteBucket.
+class EmoteCmd extends ClientMsg {
+  const EmoteCmd(this.emote);
+  final Emote emote;
+  @override
+  String get t => 'emote';
+  @override
+  Map<String, dynamic> get fields => {'emote': emote.wire};
 }
 
 class ProfileCmd extends ClientMsg {
@@ -2210,25 +3549,40 @@ class ProfileCmd extends ClientMsg {
   Map<String, dynamic> get fields => {'name': name, 'color': color, 'look': look.toJson()};
 }
 
+/// With `issue`, the worker is there for that GitHub issue: it's assigned on GitHub (so it moves to In
+/// progress) and taken off the queue.
 class WorkerSpawnCmd extends ClientMsg {
-  const WorkerSpawnCmd({required this.deskId, this.prompt, this.worktree, this.kind, this.provider, this.model});
+  const WorkerSpawnCmd({
+    required this.deskId,
+    this.prompt,
+    this.worktree,
+    this.kind,
+    this.provider,
+    this.model,
+    this.effort,
+    this.issue,
+  });
   final String deskId;
   final String? prompt;
   final bool? worktree;
   final WorkerKind? kind;
   final AgentProvider? provider;
   final String? model;
+  final AgentEffort? effort;
+  final int? issue;
   @override
   String get t => 'worker.spawn';
   @override
   Map<String, dynamic> get fields => {
-        'deskId': deskId,
-        'prompt': ?prompt,
-        'worktree': ?worktree,
-        'kind': ?kind?.wire,
-        'provider': ?provider?.wire,
-        'model': ?model,
-      };
+    'deskId': deskId,
+    'prompt': ?prompt,
+    'worktree': ?worktree,
+    'kind': ?kind?.wire,
+    'provider': ?provider?.wire,
+    'model': ?model,
+    'effort': ?effort?.wire,
+    'issue': ?issue,
+  };
 }
 
 /// Base for the messages that only name a worker.
@@ -2274,14 +3628,28 @@ class WorkerDetachCmd extends _WorkerCmd {
   String get t => 'worker.detach';
 }
 
+/// With `issue`, the prompt hands the worker that GitHub issue, which is taken as for worker.spawn.
 class WorkerPromptCmd extends ClientMsg {
-  const WorkerPromptCmd(this.workerId, this.prompt);
+  const WorkerPromptCmd(this.workerId, this.prompt, {this.issue});
   final String workerId;
   final String prompt;
+  final int? issue;
   @override
   String get t => 'worker.prompt';
   @override
-  Map<String, dynamic> get fields => {'workerId': workerId, 'prompt': prompt};
+  Map<String, dynamic> get fields => {'workerId': workerId, 'prompt': prompt, 'issue': ?issue};
+}
+
+/// A prompt for the agent standing by a board (`deskId` is its kiosk, see stations in layout). It's
+/// typed into its session, which is woken up first if it's asleep, or hired there when nobody is.
+class StationPromptCmd extends ClientMsg {
+  const StationPromptCmd({required this.deskId, required this.prompt});
+  final String deskId;
+  final String prompt;
+  @override
+  String get t => 'station.prompt';
+  @override
+  Map<String, dynamic> get fields => {'deskId': deskId, 'prompt': prompt};
 }
 
 /// Push a worktree worker's branch and open a pull request for it, drafted from its task.
@@ -2301,6 +3669,13 @@ class TermInputCmd extends ClientMsg {
   Map<String, dynamic> get fields => {'workerId': workerId, 'data': data};
 }
 
+/// You're typing into that terminal (a keystroke or a paste, not the terminal answering itself); sent about once a second.
+class TermTypingCmd extends _WorkerCmd {
+  const TermTypingCmd(super.workerId);
+  @override
+  String get t => 'term.typing';
+}
+
 class TermResizeCmd extends ClientMsg {
   const TermResizeCmd(this.workerId, {required this.cols, required this.rows});
   final String workerId;
@@ -2310,6 +3685,17 @@ class TermResizeCmd extends ClientMsg {
   String get t => 'term.resize';
   @override
   Map<String, dynamic> get fields => {'workerId': workerId, 'cols': cols, 'rows': rows};
+}
+
+/// What you have open now (see PeerInfo.doing and PeerInfo.reading); none when you're back in the office.
+class DoingCmd extends ClientMsg {
+  const DoingCmd({this.what, this.reading});
+  final String? what;
+  final bool? reading;
+  @override
+  String get t => 'doing';
+  @override
+  Map<String, dynamic> get fields => {'what': ?what, 'reading': ?reading};
 }
 
 class GhRefreshCmd extends ClientMsg {
@@ -2328,7 +3714,12 @@ class GhMergeCmd extends ClientMsg {
   @override
   String get t => 'gh.merge';
   @override
-  Map<String, dynamic> get fields => {'number': number, 'method': method.wire, 'deleteBranch': deleteBranch, 'auto': ?auto};
+  Map<String, dynamic> get fields => {
+    'number': number,
+    'method': method.wire,
+    'deleteBranch': deleteBranch,
+    'auto': ?auto,
+  };
 }
 
 /// Comment on an issue or a PR's conversation, as the server's gh account; answered with gh.commented.
@@ -2350,6 +3741,13 @@ class GongCmd extends ClientMsg {
   String get t => 'gong';
 }
 
+/// Blow the DJ's air horn on the roof; everyone up there hears it.
+class HornCmd extends ClientMsg {
+  const HornCmd();
+  @override
+  String get t => 'horn';
+}
+
 /// Close an issue, or a pull request without merging it; the answer comes back as gh.closed.
 class GhCloseCmd extends ClientMsg {
   const GhCloseCmd({required this.kind, required this.number, this.comment, this.reason, this.deleteBranch});
@@ -2362,25 +3760,46 @@ class GhCloseCmd extends ClientMsg {
   String get t => 'gh.close';
   @override
   Map<String, dynamic> get fields => {
-        'kind': kind.wire,
-        'number': number,
-        'comment': ?comment,
-        'reason': ?reason?.wire,
-        'deleteBranch': ?deleteBranch,
-      };
+    'kind': kind.wire,
+    'number': number,
+    'comment': ?comment,
+    'reason': ?reason?.wire,
+    'deleteBranch': ?deleteBranch,
+  };
+}
+
+/// Put labels on an issue or PR and take others off, as the server's gh account; answered with gh.labeled.
+class GhLabelsCmd extends ClientMsg {
+  const GhLabelsCmd({required this.kind, required this.number, this.add = const [], this.remove = const []});
+  final GhKind kind;
+  final int number;
+  final List<String> add;
+  final List<String> remove;
+  @override
+  String get t => 'gh.labels';
+  @override
+  Map<String, dynamic> get fields => {'kind': kind.wire, 'number': number, 'add': add, 'remove': remove};
 }
 
 class QueueAddCmd extends ClientMsg {
-  const QueueAddCmd({required this.prompt, this.title, this.issue, this.provider, this.model});
+  const QueueAddCmd({required this.prompt, this.title, this.issue, this.provider, this.model, this.effort});
   final String prompt;
   final String? title;
   final int? issue;
   final AgentProvider? provider;
   final String? model;
+  final AgentEffort? effort;
   @override
   String get t => 'queue.add';
   @override
-  Map<String, dynamic> get fields => {'prompt': prompt, 'title': ?title, 'issue': ?issue, 'provider': ?provider?.wire, 'model': ?model};
+  Map<String, dynamic> get fields => {
+    'prompt': prompt,
+    'title': ?title,
+    'issue': ?issue,
+    'provider': ?provider?.wire,
+    'model': ?model,
+    'effort': ?effort?.wire,
+  };
 }
 
 class QueueRemoveCmd extends ClientMsg {
@@ -2429,6 +3848,31 @@ class QueueLimitCmd extends ClientMsg {
   Map<String, dynamic> get fields => {'maxWorkers': maxWorkers};
 }
 
+/// Call a meeting: workers sit down round the meeting room's table and work through it in rounds.
+/// The request's fields go flat beside `t`.
+class MeetingStartCmd extends ClientMsg {
+  const MeetingStartCmd(this.request);
+  final MeetingRequest request;
+  @override
+  String get t => 'meeting.start';
+  @override
+  Map<String, dynamic> get fields => request.toJson();
+}
+
+/// Stop the meeting that's running; its workers stay at the table.
+class MeetingStopCmd extends ClientMsg {
+  const MeetingStopCmd();
+  @override
+  String get t => 'meeting.stop';
+}
+
+/// Send the last meeting's workers home and clear the table.
+class MeetingClearCmd extends ClientMsg {
+  const MeetingClearCmd();
+  @override
+  String get t => 'meeting.clear';
+}
+
 /// Set the office's Slack / Discord webhook; '' removes it.
 class NotifyWebhookCmd extends ClientMsg {
   const NotifyWebhookCmd(this.url);
@@ -2444,6 +3888,18 @@ class NotifyTestCmd extends ClientMsg {
   const NotifyTestCmd();
   @override
   String get t => 'notify.test';
+}
+
+/// Admins: the most workers the office runs at once, across every floor; null takes the limit off.
+class MachineLimitCmd extends ClientMsg {
+  const MachineLimitCmd(this.limit);
+  final int? limit;
+  @override
+  String get t => 'machine.limit';
+
+  /// `limit` is always sent, as null to take the limit off.
+  @override
+  Map<String, dynamic> get fields => {'limit': limit};
 }
 
 class VoiceCmd extends ClientMsg {
@@ -2685,6 +4141,35 @@ class JukeboxStopCmd extends ClientMsg {
   String get t => 'jukebox.stop';
 }
 
+/// Step up to the arcade cabinet on your floor to carry on with `game` (one the office started for
+/// you), or to start a new game, even while you're at it; the office answers with `cabinet`, naming
+/// who got it and their game.
+class CabinetPlayCmd extends ClientMsg {
+  const CabinetPlayCmd({this.game});
+  final String? game;
+  @override
+  String get t => 'cabinet.play';
+  @override
+  Map<String, dynamic> get fields => {'game': ?game};
+}
+
+class CabinetLeaveCmd extends ClientMsg {
+  const CabinetLeaveCmd();
+  @override
+  String get t => 'cabinet.leave';
+}
+
+/// Your game as it looks now, for everyone else on the floor to watch over your shoulder. It's also
+/// how your score gets on the high-score table: the office follows the game frame by frame.
+class CabinetFrameCmd extends ClientMsg {
+  const CabinetFrameCmd(this.frame);
+  final CabinetFrame frame;
+  @override
+  String get t => 'cabinet.frame';
+  @override
+  Map<String, dynamic> get fields => {'frame': frame.toJson()};
+}
+
 /// You opened the whiteboard (or closed it): everyone on the floor sees who's drawing.
 class WbOpenCmd extends ClientMsg {
   const WbOpenCmd();
@@ -2705,7 +4190,9 @@ class WbUpdateCmd extends ClientMsg {
   @override
   String get t => 'wb.update';
   @override
-  Map<String, dynamic> get fields => {'elements': [for (final e in elements) e.toJson()]};
+  Map<String, dynamic> get fields => {
+    'elements': [for (final e in elements) e.toJson()],
+  };
 }
 
 /// Where your mouse is on the whiteboard, and what you have selected there.
@@ -2719,14 +4206,20 @@ class WbPointerCmd extends ClientMsg {
   Map<String, dynamic> get fields => {...pointer.toJson(), 'selected': ?selected};
 }
 
-/// Ride the elevator to another floor; the server answers with `floor.enter`.
+/// Go to another floor (or `roof`, the rooftop bar); the server answers with `floor.enter`. By
+/// elevator you arrive in the car; `at` is where you arrive instead: the same spot on the other floor
+/// (switching floors from the floor list), or the ladder or fire pole you came by.
 class FloorGoCmd extends ClientMsg {
-  const FloorGoCmd(this.floor);
+  const FloorGoCmd(this.floor, {this.at});
   final String floor;
+  final FloorArrival? at;
   @override
   String get t => 'floor.go';
   @override
-  Map<String, dynamic> get fields => {'floor': floor};
+  Map<String, dynamic> get fields => {
+    'floor': floor,
+    if (at case final a?) 'at': {'x': a.x, 'y': a.y, 'z': a.z, 'rotY': a.rotY},
+  };
 }
 
 /// The repositories that could become a floor; answered with `floor.repos`.
@@ -2747,6 +4240,99 @@ class FloorAddCmd extends ClientMsg {
   String get t => 'floor.add';
   @override
   Map<String, dynamic> get fields => {'repo': repo};
+}
+
+/// Take a floor off the building (admins only). Its checkout stays on disk; everyone on it rides to another floor.
+class FloorRemoveCmd extends ClientMsg {
+  const FloorRemoveCmd(this.floor);
+  final String floor;
+  @override
+  String get t => 'floor.remove';
+  @override
+  Map<String, dynamic> get fields => {'floor': floor};
+}
+
+/// Dress the building up for a holiday, take the decorations down ('off'), or follow the calendar ('auto').
+class ThemeSetCmd extends ClientMsg {
+  const ThemeSetCmd(this.pick);
+  final ThemePick pick;
+  @override
+  String get t => 'theme.set';
+  @override
+  Map<String, dynamic> get fields => {'pick': pick.wire};
+}
+
+/// Workers whose pull request merged go home by themselves (true), or wait to be sent home.
+class LeaveOnMergeSetCmd extends ClientMsg {
+  const LeaveOnMergeSetCmd(this.on);
+  final bool on;
+  @override
+  String get t => 'leaveOnMerge.set';
+  @override
+  Map<String, dynamic> get fields => {'on': on};
+}
+
+/// Where new floors are cloned from now on (admins only); '' goes back to the default.
+class FloorProjectsDirCmd extends ClientMsg {
+  const FloorProjectsDirCmd(this.dir);
+  final String dir;
+  @override
+  String get t => 'floor.projectsDir';
+  @override
+  Map<String, dynamic> get fields => {'dir': dir};
+}
+
+/// Rewrite one of the office's prompts (admins only); null puts the default back.
+class PromptsSetCmd extends ClientMsg {
+  const PromptsSetCmd(this.id, this.text);
+
+  /// A PromptId (see prompts.dart).
+  final String id;
+  final String? text;
+  @override
+  String get t => 'prompts.set';
+
+  /// `text` is always sent, as null to put the default back.
+  @override
+  Map<String, dynamic> get fields => {'id': id, 'text': text};
+}
+
+/// Pick the worker everyone starts on (admins only); null goes back to the office's --agent.
+class PromptsAgentCmd extends ClientMsg {
+  const PromptsAgentCmd(this.choice);
+  final AgentChoice? choice;
+  @override
+  String get t => 'prompts.agent';
+
+  /// `choice` is always sent, as null to go back to --agent.
+  @override
+  Map<String, dynamic> get fields => {'choice': choice?.toJson()};
+}
+
+/// Pick up the floor's basketball (or catch it): yours if nobody else has it.
+class BallTakeCmd extends ClientMsg {
+  const BallTakeCmd();
+  @override
+  String get t => 'ball.take';
+}
+
+/// Throw the basketball in your hands from (x, y, z) at (vx, vy, vz) m/s, or drop it; everyone on the floor sees it fly.
+class BallThrowCmd extends ClientMsg {
+  const BallThrowCmd({
+    required this.x,
+    required this.y,
+    required this.z,
+    required this.vx,
+    required this.vy,
+    required this.vz,
+  });
+  final double x, y, z, vx, vy, vz;
+
+  BallThrow get throwAt => (x: x, y: y, z: z, vx: vx, vy: vy, vz: vz);
+  @override
+  String get t => 'ball.throw';
+  @override
+  Map<String, dynamic> get fields => {'x': x, 'y': y, 'z': z, 'vx': vx, 'vy': vy, 'vz': vz};
 }
 
 /// Give the dog on your floor a pat; it has to be within reach.
@@ -2806,35 +4392,61 @@ sealed class ServerMsg {
       'floors' => FloorsMsg(asList(j['floors'], FloorInfo.fromJson)),
       'floor.repos' => FloorReposMsg(asList(j['repos'], RepoChoice.fromJson), error: asStringOrNull(j['error'])),
       'floor.added' => FloorAddedMsg(s('repo'), floor: asStringOrNull(j['floor']), error: asStringOrNull(j['error'])),
+      'projectsDir' => ProjectsDirMsg(ProjectsDirState.fromJson(asMap(j['state']))),
       'peer.join' => PeerJoinMsg(PeerInfo.fromJson(asMap(j['peer']))),
       'peer.update' => PeerUpdateMsg(PeerInfo.fromJson(asMap(j['peer']))),
       'peer.move' => PeerMoveMsg(
-          id: s('id'),
-          x: asDouble(j['x']),
-          y: asDouble(j['y']),
-          z: asDouble(j['z']),
-          rotY: asDouble(j['rotY']),
-          moving: asBool(j['moving']),
-        ),
+        id: s('id'),
+        x: asDouble(j['x']),
+        y: asDouble(j['y']),
+        z: asDouble(j['z']),
+        rotY: asDouble(j['rotY']),
+        moving: asBool(j['moving']),
+      ),
       'peer.leave' => PeerLeaveMsg(s('id')),
-      'peer.act' => PeerActMsg(s('id'), smoke: asBoolOrNull(j['smoke'])),
+      'peer.act' => PeerActMsg(
+        s('id'),
+        smoke: asBoolOrNull(j['smoke']),
+        golf: asBoolOrNull(j['golf']),
+        drink: DrinkId.tryParse(j['drink']),
+        drinkSet: j.containsKey('drink'),
+      ),
+      'golf' => GolfMsg(id: s('id'), yaw: asDouble(j['yaw']), loft: asDouble(j['loft']), power: asDouble(j['power'])),
+      'peer.emote' => PeerEmoteMsg(s('id'), Emote.tryParse(j['emote']) ?? Emote.wave),
       'worker.update' => WorkerUpdateMsg(WorkerInfo.fromJson(asMap(j['worker']))),
       'worker.remove' => WorkerRemoveMsg(s('workerId')),
       'worker.worktree' => WorkerWorktreeMsg(s('workerId'), WorktreeState.fromJson(asMap(j['state']))),
       'screen' => ScreenMsg.fromJson(j),
-      'term.snapshot' => TermSnapshotMsg(workerId: s('workerId'), data: s('data'), cols: asInt(j['cols'], 80), rows: asInt(j['rows'], 24)),
+      'term.snapshot' => TermSnapshotMsg(
+        workerId: s('workerId'),
+        data: s('data'),
+        cols: asInt(j['cols'], 80),
+        rows: asInt(j['rows'], 24),
+      ),
       'term.data' => TermDataMsg(s('workerId'), s('data')),
+      'term.typing' => TermTypingMsg(s('workerId'), s('id')),
       'gh.issues' => GhIssuesMsg(GhState.fromJson(asMap(j['state']), GhIssue.fromJson)),
       'gh.pulls' => GhPullsMsg(GhState.fromJson(asMap(j['state']), GhPull.fromJson)),
       'gh.merged' => GhMergedMsg(asInt(j['number']), error: asStringOrNull(j['error'])),
       'gh.commented' => GhCommentedMsg(
-          kind: GhKind.parse(j['kind']),
-          number: asInt(j['number']),
-          comment: _obj(j['comment'], GhComment.fromJson),
-          error: asStringOrNull(j['error']),
-        ),
+        kind: GhKind.parse(j['kind']),
+        number: asInt(j['number']),
+        comment: _obj(j['comment'], GhComment.fromJson),
+        error: asStringOrNull(j['error']),
+      ),
       'gong' => GongMsg(GongWhy.parse(j['why']), by: asStringOrNull(j['by']), pr: asIntOrNull(j['pr'])),
-      'gh.closed' => GhClosedMsg(kind: GhKind.parse(j['kind']), number: asInt(j['number']), error: asStringOrNull(j['error'])),
+      'horn' => HornMsg(s('by')),
+      'gh.closed' => GhClosedMsg(
+        kind: GhKind.parse(j['kind']),
+        number: asInt(j['number']),
+        error: asStringOrNull(j['error']),
+      ),
+      'gh.labeled' => GhLabeledMsg(
+        kind: GhKind.parse(j['kind']),
+        number: asInt(j['number']),
+        labels: j['labels'] is List ? asList(j['labels'], GhLabel.fromJson) : null,
+        error: asStringOrNull(j['error']),
+      ),
       'rtc' => RtcMsg(s('from'), j['data']),
       'chat' => ChatMsg(ChatLine.fromJson(j)),
       'toast' => ToastMsg(s('text'), ToastLevel.parse(j['level'])),
@@ -2843,26 +4455,42 @@ sealed class ServerMsg {
       'services' => ServicesMsg(ServicesState.fromJson(asMap(j['state']))),
       'decor' => DecorMsg(asList(j['items'], Decoration.fromJson)),
       'dog' => DogMsg(DogState.fromJson(asMap(j['dog']))),
+      'ball' => BallMsg(BallState.fromJson(asMap(j['ball']))),
       'jukebox' => JukeboxMsg(JukeboxState.fromJson(asMap(j['state']))),
+      'cabinet' => CabinetMsg(CabinetState.fromJson(asMap(j['state']))),
+      'cabinet.frame' => CabinetFrameMsg(CabinetFrame.fromJson(asMap(j['frame']))),
       'wb.update' => WbUpdateMsg(asList(j['elements'], WbElement.fromJson)),
       'wb.people' => WbPeopleMsg(asStringList(j['people'])),
       'wb.pointer' => WbPointerMsg(s('id'), WbPointer.fromJson(j), selected: asStringListOrNull(j['selected'])),
       'usage' => UsageMsg(UsageState.fromJson(asMap(j['state']))),
       'limits' => LimitsMsg(PlanLimits.fromJson(asMap(j['state']))),
       'queue' => QueueMsg(QueueState.fromJson(asMap(j['state']))),
+      'meeting' => MeetingMsg(MeetingState.fromJson(asMap(j['state']))),
       'notify' => NotifyMsg(NotifyState.fromJson(asMap(j['state']))),
+      'machine' => MachineMsg(MachineState.fromJson(asMap(j['state']))),
       'sky' => SkyMsg(SkyState.fromJson(asMap(j['state']))),
+      'theme' => ThemeMsg(ThemeState.fromJson(asMap(j['state']))),
+      'prompts' => PromptsMsg(PromptsState.fromJson(asMap(j['state']))),
+      'leaveOnMerge' => LeaveOnMergeMsg(LeaveOnMergeState.fromJson(asMap(j['state']))),
       'changes' => ChangesMsg(ChangesState.fromJson(asMap(j['state']))),
       'changes.diff' => ChangesDiffMsg(
-          workerId: s('workerId'),
-          path: s('path'),
-          diff: s('diff'),
-          truncated: asBool(j['truncated']),
-          error: asStringOrNull(j['error']),
-        ),
-      'team.invited' => TeamInvitedMsg(s('github'), name: asStringOrNull(j['name']), keys: asIntOrNull(j['keys']), error: asStringOrNull(j['error'])),
+        workerId: s('workerId'),
+        path: s('path'),
+        diff: s('diff'),
+        truncated: asBool(j['truncated']),
+        error: asStringOrNull(j['error']),
+      ),
+      'team.invited' => TeamInvitedMsg(
+        s('github'),
+        name: asStringOrNull(j['name']),
+        keys: asIntOrNull(j['keys']),
+        error: asStringOrNull(j['error']),
+      ),
       'accounts' => AccountsMsg(AccountsState.fromJson(asMap(j['state']))),
-      'accounts.invited' => AccountsInvitedMsg(invite: _obj(j['invite'], AccountInvite.fromJson), error: asStringOrNull(j['error'])),
+      'accounts.invited' => AccountsInvitedMsg(
+        invite: _obj(j['invite'], AccountInvite.fromJson),
+        error: asStringOrNull(j['error']),
+      ),
       'me' => MeMsg(Me.fromJson(asMap(j['me']))),
       'pong' => PongMsg(at: asDouble(j['at']), now: asDouble(j['now'])),
       _ => UnknownMsg(j),
@@ -2898,27 +4526,37 @@ class WelcomeMsg extends ServerMsg {
     required this.limits,
     required this.me,
     required this.notify,
+    this.machine = MachineState.empty,
     required this.sky,
+    this.theme = const ThemeState(),
+    this.prompts = const PromptsState(),
+    this.leaveOnMerge = const LeaveOnMergeState(),
     required this.view,
   });
 
   factory WelcomeMsg.fromJson(Map<String, dynamic> j) => WelcomeMsg(
-        you: asString(j['you']),
-        peers: asList(j['peers'], PeerInfo.fromJson),
-        floors: asList(j['floors'], FloorInfo.fromJson),
-        projectsDir: asString(j['projectsDir']),
-        ice: asList(j['ice'], IceServer.fromJson),
-        chat: asList(j['chat'], ChatLine.fromJson),
-        invites: asBool(j['invites']),
-        version: asString(j['version']),
-        upgrade: UpgradeState.fromJson(asMap(j['upgrade'])),
-        usage: UsageState.fromJson(asMap(j['usage'])),
-        limits: PlanLimits.fromJson(asMap(j['limits'])),
-        me: Me.fromJson(asMap(j['me'])),
-        notify: NotifyState.fromJson(asMap(j['notify'])),
-        sky: SkyState.fromJson(asMap(j['sky'])),
-        view: FloorView.fromJson(j),
-      );
+    you: asString(j['you']),
+    peers: asList(j['peers'], PeerInfo.fromJson),
+    floors: asList(j['floors'], FloorInfo.fromJson),
+    projectsDir: j['projectsDir'] is String
+        ? ProjectsDirState(dir: j['projectsDir'] as String) // an older server's
+        : ProjectsDirState.fromJson(asMap(j['projectsDir'])),
+    ice: asList(j['ice'], IceServer.fromJson),
+    chat: asList(j['chat'], ChatLine.fromJson),
+    invites: asBool(j['invites']),
+    version: asString(j['version']),
+    upgrade: UpgradeState.fromJson(asMap(j['upgrade'])),
+    usage: UsageState.fromJson(asMap(j['usage'])),
+    limits: PlanLimits.fromJson(asMap(j['limits'])),
+    me: Me.fromJson(asMap(j['me'])),
+    notify: NotifyState.fromJson(asMap(j['notify'])),
+    machine: MachineState.fromJson(asMap(j['machine'])),
+    sky: SkyState.fromJson(asMap(j['sky'])),
+    theme: ThemeState.fromJson(asMap(j['theme'])),
+    prompts: PromptsState.fromJson(asMap(j['prompts'])),
+    leaveOnMerge: LeaveOnMergeState.fromJson(asMap(j['leaveOnMerge'])),
+    view: FloorView.fromJson(j),
+  );
 
   final String you;
   final List<PeerInfo> peers;
@@ -2927,7 +4565,7 @@ class WelcomeMsg extends ServerMsg {
   final List<FloorInfo> floors;
 
   /// Where new projects are cloned to, on the office's machine.
-  final String projectsDir;
+  final ProjectsDirState projectsDir;
   final List<IceServer> ice;
   final List<ChatLine> chat;
 
@@ -2942,8 +4580,18 @@ class WelcomeMsg extends ServerMsg {
   final Me me;
   final NotifyState notify;
 
+  /// How busy the office's machine is, and its worker limit.
+  final MachineState machine;
+
   /// Outside the windows: the same on every floor.
   final SkyState sky;
+
+  /// Halloween or Christmas decorations, all over the building, or none.
+  final ThemeState theme;
+
+  /// The office's prompts and the worker everyone starts on.
+  final PromptsState prompts;
+  final LeaveOnMergeState leaveOnMerge;
 
   /// The floor you're on (the welcome carries a [FloorView]'s fields flat).
   final FloorView view;
@@ -2952,22 +4600,26 @@ class WelcomeMsg extends ServerMsg {
   String get t => 'welcome';
   @override
   Map<String, dynamic> get fields => {
-        'you': you,
-        'peers': _list(peers),
-        'floors': _list(floors),
-        'projectsDir': projectsDir,
-        'ice': _list(ice),
-        'chat': _list(chat),
-        'invites': invites,
-        'version': version,
-        'upgrade': upgrade.toJson(),
-        'usage': usage.toJson(),
-        'limits': limits.toJson(),
-        'me': me.toJson(),
-        'notify': notify.toJson(),
-        'sky': sky.toJson(),
-        ...view.toJson(),
-      };
+    'you': you,
+    'peers': _list(peers),
+    'floors': _list(floors),
+    'projectsDir': projectsDir.toJson(),
+    'ice': _list(ice),
+    'chat': _list(chat),
+    'invites': invites,
+    'version': version,
+    'upgrade': upgrade.toJson(),
+    'usage': usage.toJson(),
+    'limits': limits.toJson(),
+    'me': me.toJson(),
+    'notify': notify.toJson(),
+    'machine': machine.toJson(),
+    'sky': sky.toJson(),
+    'theme': theme.toJson(),
+    'prompts': prompts.toJson(),
+    'leaveOnMerge': leaveOnMerge.toJson(),
+    ...view.toJson(),
+  };
 }
 
 /// You arrived on another floor: everything on it, replacing the last one's, and where everyone is now.
@@ -3013,6 +4665,16 @@ class FloorAddedMsg extends ServerMsg {
   Map<String, dynamic> get fields => {'repo': repo, 'floor': ?floor, 'error': ?error};
 }
 
+/// The projects folder moved (see floor.projectsDir).
+class ProjectsDirMsg extends ServerMsg {
+  const ProjectsDirMsg(this.state);
+  final ProjectsDirState state;
+  @override
+  String get t => 'projectsDir';
+  @override
+  Map<String, dynamic> get fields => {'state': state.toJson()};
+}
+
 class PeerJoinMsg extends ServerMsg {
   const PeerJoinMsg(this.peer);
   final PeerInfo peer;
@@ -3032,7 +4694,14 @@ class PeerUpdateMsg extends ServerMsg {
 }
 
 class PeerMoveMsg extends ServerMsg {
-  const PeerMoveMsg({required this.id, required this.x, required this.y, required this.z, required this.rotY, required this.moving});
+  const PeerMoveMsg({
+    required this.id,
+    required this.x,
+    required this.y,
+    required this.z,
+    required this.rotY,
+    required this.moving,
+  });
   final String id;
   final double x, y, z, rotY;
   final bool moving;
@@ -3051,14 +4720,39 @@ class PeerLeaveMsg extends ServerMsg {
   Map<String, dynamic> get fields => {'id': id};
 }
 
+/// See [ActCmd]: [drinkSet] with no [drink] is `drink: null` on the wire (they finished it).
 class PeerActMsg extends ServerMsg {
-  const PeerActMsg(this.id, {this.smoke});
+  const PeerActMsg(this.id, {this.smoke, this.golf, this.drink, bool? drinkSet}) : drinkSet = drinkSet ?? drink != null;
   final String id;
   final bool? smoke;
+  final bool? golf;
+  final DrinkId? drink;
+  final bool drinkSet;
   @override
   String get t => 'peer.act';
   @override
-  Map<String, dynamic> get fields => {'id': id, 'smoke': ?smoke};
+  Map<String, dynamic> get fields => {'id': id, 'smoke': ?smoke, 'golf': ?golf, if (drinkSet) 'drink': drink?.wire};
+}
+
+/// Someone on your floor hit a golf ball off the tee (see [GolfCmd]).
+class GolfMsg extends ServerMsg {
+  const GolfMsg({required this.id, required this.yaw, required this.loft, required this.power});
+  final String id;
+  final double yaw, loft, power;
+  @override
+  String get t => 'golf';
+  @override
+  Map<String, dynamic> get fields => {'id': id, 'yaw': yaw, 'loft': loft, 'power': power};
+}
+
+class PeerEmoteMsg extends ServerMsg {
+  const PeerEmoteMsg(this.id, this.emote);
+  final String id;
+  final Emote emote;
+  @override
+  String get t => 'peer.emote';
+  @override
+  Map<String, dynamic> get fields => {'id': id, 'emote': emote.wire};
 }
 
 class WorkerUpdateMsg extends ServerMsg {
@@ -3091,7 +4785,14 @@ class WorkerWorktreeMsg extends ServerMsg {
 
 /// Rows of a worker's terminal, as styled runs: every row when `full`, else just the rows that changed.
 class ScreenMsg extends ServerMsg {
-  const ScreenMsg({required this.workerId, required this.cols, required this.rows, required this.lines, required this.full, required this.cursor});
+  const ScreenMsg({
+    required this.workerId,
+    required this.cols,
+    required this.rows,
+    required this.lines,
+    required this.full,
+    required this.cursor,
+  });
 
   factory ScreenMsg.fromJson(Map<String, dynamic> j) {
     final lines = <int, List<Run>>{};
@@ -3104,7 +4805,14 @@ class ScreenMsg extends ServerMsg {
     }
     final c = j['cursor'];
     final cursor = c is List && c.length >= 2 ? (asInt(c[0]), asInt(c[1])) : (0, 0);
-    return ScreenMsg(workerId: asString(j['workerId']), cols: asInt(j['cols'], 80), rows: asInt(j['rows'], 24), lines: lines, full: asBool(j['full']), cursor: cursor);
+    return ScreenMsg(
+      workerId: asString(j['workerId']),
+      cols: asInt(j['cols'], 80),
+      rows: asInt(j['rows'], 24),
+      lines: lines,
+      full: asBool(j['full']),
+      cursor: cursor,
+    );
   }
 
   final String workerId;
@@ -3122,13 +4830,15 @@ class ScreenMsg extends ServerMsg {
   String get t => 'screen';
   @override
   Map<String, dynamic> get fields => {
-        'workerId': workerId,
-        'cols': cols,
-        'rows': rows,
-        'lines': {for (final e in lines.entries) '${e.key}': [for (final r in e.value) r.toJson()]},
-        'full': full,
-        'cursor': [cursor.$1, cursor.$2],
-      };
+    'workerId': workerId,
+    'cols': cols,
+    'rows': rows,
+    'lines': {
+      for (final e in lines.entries) '${e.key}': [for (final r in e.value) r.toJson()],
+    },
+    'full': full,
+    'cursor': [cursor.$1, cursor.$2],
+  };
 }
 
 class TermSnapshotMsg extends ServerMsg {
@@ -3151,6 +4861,17 @@ class TermDataMsg extends ServerMsg {
   String get t => 'term.data';
   @override
   Map<String, dynamic> get fields => {'workerId': workerId, 'data': data};
+}
+
+/// Someone else in that terminal (`id`, a PeerInfo id) is typing; only its other viewers get these.
+class TermTypingMsg extends ServerMsg {
+  const TermTypingMsg(this.workerId, this.id);
+  final String workerId;
+  final String id;
+  @override
+  String get t => 'term.typing';
+  @override
+  Map<String, dynamic> get fields => {'workerId': workerId, 'id': id};
 }
 
 class GhIssuesMsg extends ServerMsg {
@@ -3192,7 +4913,12 @@ class GhCommentedMsg extends ServerMsg {
   @override
   String get t => 'gh.commented';
   @override
-  Map<String, dynamic> get fields => {'kind': kind.wire, 'number': number, 'comment': ?comment?.toJson(), 'error': ?error};
+  Map<String, dynamic> get fields => {
+    'kind': kind.wire,
+    'number': number,
+    'comment': ?comment?.toJson(),
+    'error': ?error,
+  };
 }
 
 /// The gong rings, for everyone on the floor: someone hit it, pull request `pr` merged (confetti
@@ -3218,6 +4944,109 @@ class GhClosedMsg extends ServerMsg {
   String get t => 'gh.closed';
   @override
   Map<String, dynamic> get fields => {'kind': kind.wire, 'number': number, 'error': ?error};
+}
+
+/// Someone on the roof blew the DJ's air horn (sent to everyone up there, them too).
+class HornMsg extends ServerMsg {
+  const HornMsg(this.by);
+  final String by;
+  @override
+  String get t => 'horn';
+  @override
+  Map<String, dynamic> get fields => {'by': by};
+}
+
+/// Sent to whoever changed them: the labels it has now, or why they didn't change.
+class GhLabeledMsg extends ServerMsg {
+  const GhLabeledMsg({required this.kind, required this.number, this.labels, this.error});
+  final GhKind kind;
+  final int number;
+  final List<GhLabel>? labels;
+  final String? error;
+  @override
+  String get t => 'gh.labeled';
+  @override
+  Map<String, dynamic> get fields => {
+    'kind': kind.wire,
+    'number': number,
+    'labels': ?(labels == null ? null : _list(labels!)),
+    'error': ?error,
+  };
+}
+
+/// The basketball on your floor was picked up, thrown, or put back under the hoop.
+class BallMsg extends ServerMsg {
+  const BallMsg(this.ball);
+  final BallState ball;
+  @override
+  String get t => 'ball';
+  @override
+  Map<String, dynamic> get fields => {'ball': ball.toJson()};
+}
+
+/// Who's at the arcade cabinet on your floor now, and the building's high scores.
+class CabinetMsg extends ServerMsg {
+  const CabinetMsg(this.state);
+  final CabinetState state;
+  @override
+  String get t => 'cabinet';
+  @override
+  Map<String, dynamic> get fields => {'state': state.toJson()};
+}
+
+/// The game on your floor's cabinet, as its player sees it (sent to everyone else on the floor).
+class CabinetFrameMsg extends ServerMsg {
+  const CabinetFrameMsg(this.frame);
+  final CabinetFrame frame;
+  @override
+  String get t => 'cabinet.frame';
+  @override
+  Map<String, dynamic> get fields => {'frame': frame.toJson()};
+}
+
+class MeetingMsg extends ServerMsg {
+  const MeetingMsg(this.state);
+  final MeetingState state;
+  @override
+  String get t => 'meeting';
+  @override
+  Map<String, dynamic> get fields => {'state': state.toJson()};
+}
+
+class MachineMsg extends ServerMsg {
+  const MachineMsg(this.state);
+  final MachineState state;
+  @override
+  String get t => 'machine';
+  @override
+  Map<String, dynamic> get fields => {'state': state.toJson()};
+}
+
+class ThemeMsg extends ServerMsg {
+  const ThemeMsg(this.state);
+  final ThemeState state;
+  @override
+  String get t => 'theme';
+  @override
+  Map<String, dynamic> get fields => {'state': state.toJson()};
+}
+
+class PromptsMsg extends ServerMsg {
+  const PromptsMsg(this.state);
+  final PromptsState state;
+  @override
+  String get t => 'prompts';
+  @override
+  Map<String, dynamic> get fields => {'state': state.toJson()};
+}
+
+class LeaveOnMergeMsg extends ServerMsg {
+  const LeaveOnMergeMsg(this.state);
+  final LeaveOnMergeState state;
+  @override
+  String get t => 'leaveOnMerge';
+  @override
+  Map<String, dynamic> get fields => {'state': state.toJson()};
 }
 
 class RtcMsg extends ServerMsg {
@@ -3285,7 +5114,9 @@ class DecorMsg extends ServerMsg {
   @override
   String get t => 'decor';
   @override
-  Map<String, dynamic> get fields => {'items': [for (final d in items) d.toJson()]};
+  Map<String, dynamic> get fields => {
+    'items': [for (final d in items) d.toJson()],
+  };
 }
 
 /// What the dog on your floor is up to now: sent at the start of each leg of its day.
@@ -3314,7 +5145,9 @@ class WbUpdateMsg extends ServerMsg {
   @override
   String get t => 'wb.update';
   @override
-  Map<String, dynamic> get fields => {'elements': [for (final e in elements) e.toJson()]};
+  Map<String, dynamic> get fields => {
+    'elements': [for (final e in elements) e.toJson()],
+  };
 }
 
 /// Who has the floor's whiteboard open now.
@@ -3395,7 +5228,13 @@ class ChangesMsg extends ServerMsg {
 }
 
 class ChangesDiffMsg extends ServerMsg {
-  const ChangesDiffMsg({required this.workerId, required this.path, required this.diff, required this.truncated, this.error});
+  const ChangesDiffMsg({
+    required this.workerId,
+    required this.path,
+    required this.diff,
+    required this.truncated,
+    this.error,
+  });
   final String workerId;
   final String path;
   final String diff;
@@ -3404,7 +5243,13 @@ class ChangesDiffMsg extends ServerMsg {
   @override
   String get t => 'changes.diff';
   @override
-  Map<String, dynamic> get fields => {'workerId': workerId, 'path': path, 'diff': diff, 'truncated': truncated, 'error': ?error};
+  Map<String, dynamic> get fields => {
+    'workerId': workerId,
+    'path': path,
+    'diff': diff,
+    'truncated': truncated,
+    'error': ?error,
+  };
 }
 
 /// Sent to whoever asked for the invite.

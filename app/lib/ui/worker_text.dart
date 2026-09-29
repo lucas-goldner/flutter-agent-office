@@ -7,6 +7,9 @@ import 'package:office_shared/protocol.dart';
 import 'provider.dart';
 import 'theme.dart';
 
+// tokensOf, fmtTokens and fmtCost are shared now (office_shared/protocol.dart, from protocol.ts).
+export 'package:office_shared/protocol.dart' show fmtCost, fmtTokens, tokensOf;
+
 const Map<WorkerStatus, String> kStatusLabel = {
   WorkerStatus.starting: 'starting',
   WorkerStatus.idle: 'ready',
@@ -84,22 +87,6 @@ class _StatusPillState extends State<StatusPill> with SingleTickerProviderStateM
 }
 
 // ---- Usage (from usage.ts) --------------------------------------------------------------------
-
-int tokensOf(Usage u) => u.totalTokens ?? (u.input + u.output + (u.reasoning ?? 0) + u.cacheWrite + u.cacheRead);
-
-String fmtTokens(int n) {
-  if (n < 1000) return '$n';
-  if (n < 1e6) return '${(n / 1000).toStringAsFixed(n < 10000 ? 1 : 0)}k';
-  return '${(n / 1e6).toStringAsFixed(n < 10e6 ? 2 : 1)}M';
-}
-
-String fmtCost(double usd) {
-  if (usd > 0 && usd < 0.005) return r'<$0.01';
-  final fixed = usd.toStringAsFixed(2);
-  final dot = fixed.indexOf('.');
-  final whole = fixed.substring(0, dot).replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (_) => ',');
-  return '\$$whole${fixed.substring(dot)}';
-}
 
 /// e.g. "$0.42 · 38k tokens"; OpenCode's amount is explicitly an estimate.
 String usageLabel(Usage u, [AgentProvider provider = AgentProvider.claude]) {

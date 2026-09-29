@@ -7,30 +7,8 @@ import 'package:office_shared/protocol.dart';
 import 'provider.dart';
 import 'theme.dart';
 
-int tokensOf(Usage u) => u.totalTokens ?? (u.input + u.output + (u.reasoning ?? 0) + u.cacheWrite + u.cacheRead);
-
-/// JS `toFixed`, near enough for display.
-String _fixed(double v, int digits) => v.toStringAsFixed(digits);
-
-String fmtTokens(int n) {
-  if (n < 1000) return '$n';
-  if (n < 1e6) return '${_fixed(n / 1000, n < 10000 ? 1 : 0)}k';
-  return '${_fixed(n / 1e6, n < 10e6 ? 2 : 1)}M';
-}
-
-/// "$1,234.50", the way en-US toLocaleString writes dollars.
-String fmtCost(double usd) {
-  if (usd > 0 && usd < 0.005) return '<\$0.01';
-  final s = usd.abs().toStringAsFixed(2);
-  final dot = s.indexOf('.');
-  final whole = s.substring(0, dot);
-  final b = StringBuffer();
-  for (var i = 0; i < whole.length; i++) {
-    if (i > 0 && (whole.length - i) % 3 == 0) b.write(',');
-    b.write(whole[i]);
-  }
-  return '${usd < 0 ? '-' : ''}\$$b${s.substring(dot)}';
-}
+// tokensOf, fmtTokens and fmtCost are shared now (office_shared/protocol.dart, from protocol.ts).
+export 'package:office_shared/protocol.dart' show fmtCost, fmtTokens, tokensOf;
 
 String _displayedCost(Usage u) => u.costKnown == false ? 'cost unavailable' : fmtCost(u.cost);
 

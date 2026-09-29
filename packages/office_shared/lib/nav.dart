@@ -20,10 +20,8 @@ typedef _Rect = (double, double, double, double); // minX, maxX, minZ, maxZ
 typedef _Circle = (double, double, double); // x, z, radius
 
 /// The desk's own frame: `t` along its width, `s` out toward the side the worker sits on.
-Pt deskPoint(DeskDef d, double t, double s) => (
-      d.x + math.cos(d.rotY) * t + math.sin(d.rotY) * s,
-      d.z - math.sin(d.rotY) * t + math.cos(d.rotY) * s,
-    );
+Pt deskPoint(DeskDef d, double t, double s) =>
+    (d.x + math.cos(d.rotY) * t + math.sin(d.rotY) * s, d.z - math.sin(d.rotY) * t + math.cos(d.rotY) * s);
 
 /// What's in the way on the floor. The lounge, kitchen and plants are where office.ts puts them.
 ({List<_Rect> rects, List<_Circle> circles}) _obstacles() {
@@ -41,16 +39,7 @@ Pt deskPoint(DeskDef d, double t, double s) => (
   rects.add((12.2, 13.8, -0.8, 0.8)); // coffee table
   circles.addAll([(12.5, 3.5, 0.5), (14.5, -3.4, 0.5)]); // beanbags
   rects.add((-17, -10.75, 11.7, 12.7)); // kitchen counter and fridge
-  for (final (x, z, s) in const [
-    (-17.2, -12.2, 1.4),
-    (17.2, -12.2, 1.5),
-    (17.2, 12.2, 1.3),
-    (-17.2, 8.5, 1.2),
-    (5.5, -12.2, 1.1),
-    (-6.0, 0.0, 1.0),
-    (3.5, 0.0, 0.9),
-    (8.5, 5.0, 1.1),
-  ]) {
+  for (final (x, z, s) in plants) {
     circles.add((x, z, 0.3 * s));
   }
   // The loft's posts, the stairs up to it, and the elevator shaft.
@@ -62,16 +51,71 @@ Pt deskPoint(DeskDef d, double t, double s) => (
   // The gong's frame, as office.ts puts it.
   rects.add((Gong.x - Gong.width / 2 - 0.12, Gong.x + Gong.width / 2 + 0.3, Gong.z - 0.3, Gong.z + 0.3));
   // The whiteboard on its wheels, as world/whiteboard.ts puts it.
-  rects.add((Whiteboard.x - Whiteboard.width / 2 - 0.2, Whiteboard.x + Whiteboard.width / 2 + 0.2, Whiteboard.z - 0.48, Whiteboard.z + 0.48));
+  rects.add((
+    Whiteboard.x - Whiteboard.width / 2 - 0.2,
+    Whiteboard.x + Whiteboard.width / 2 + 0.2,
+    Whiteboard.z - 0.48,
+    Whiteboard.z + 0.48,
+  ));
   // The jukebox, against the east wall.
-  rects.add((Jukebox.x - Jukebox.depth / 2 - 0.05, Floor.maxX, Jukebox.z - Jukebox.width / 2 - 0.05, Jukebox.z + Jukebox.width / 2 + 0.05));
+  rects.add((
+    Jukebox.x - Jukebox.depth / 2 - 0.05,
+    Floor.maxX,
+    Jukebox.z - Jukebox.width / 2 - 0.05,
+    Jukebox.z + Jukebox.width / 2 + 0.05,
+  ));
+  // The arcade cabinet next to it, as world/cabinet.ts puts it (its control panel sticks out a little).
+  rects.add((Cabinet.x - 0.45, Floor.maxX, Cabinet.z - Cabinet.width / 2 - 0.02, Cabinet.z + Cabinet.width / 2 + 0.02));
+  // The bookshelf against the south wall, as world/bookshelf.ts puts it.
+  rects.add((
+    Bookshelf.x - Bookshelf.width / 2 - 0.04,
+    Bookshelf.x + Bookshelf.width / 2 + 0.04,
+    Bookshelf.z - Bookshelf.depth / 2 - 0.03,
+    Floor.maxZ,
+  ));
+  // The ladder up the west wall, and the fire poles: a hole with a railing round it, or a landing mat.
+  // Which spot has which changes floor by floor, so the dog keeps off both.
+  rects.add((Floor.minX, Floor.minX + 0.3, Ladder.z - Ladder.width / 2 - 0.05, Ladder.z + Ladder.width / 2 + 0.05));
+  for (final p in poles) {
+    rects.add((p.x - Pole.rail - 0.05, p.x + Pole.rail + 0.05, p.z - Pole.rail - 0.05, p.z + Pole.rail + 0.05));
+  }
   // The overflow bean bags and their lap desks. They're only out while every desk is taken, but they
   // always come out in the same spots, so the dog keeps off those.
   for (final b in beanbags) {
-    final corners = [deskPoint(b, -0.62, -1.1), deskPoint(b, 0.62, -1.1), deskPoint(b, -0.62, 0.64), deskPoint(b, 0.62, 0.64)];
+    final corners = [
+      deskPoint(b, -0.62, -1.1),
+      deskPoint(b, 0.62, -1.1),
+      deskPoint(b, -0.62, 0.64),
+      deskPoint(b, 0.62, 0.64),
+    ];
     final xs = corners.map((p) => p.$1);
     final zs = corners.map((p) => p.$2);
     rects.add((xs.reduce(math.min), xs.reduce(math.max), zs.reduce(math.min), zs.reduce(math.max)));
+  }
+  // The board agents' kiosks, and the agent standing behind each one.
+  for (final k in stations) {
+    final corners = [
+      deskPoint(k, -Kiosk.width / 2, -Kiosk.depth / 2),
+      deskPoint(k, Kiosk.width / 2, -Kiosk.depth / 2),
+      deskPoint(k, -Kiosk.width / 2, Kiosk.stand + 0.35),
+      deskPoint(k, Kiosk.width / 2, Kiosk.stand + 0.35),
+    ];
+    final xs = corners.map((p) => p.$1);
+    final zs = corners.map((p) => p.$2);
+    rects.add((xs.reduce(math.min), xs.reduce(math.max), zs.reduce(math.min), zs.reduce(math.max)));
+  }
+  // The meeting room under the loft: its glass walls, with the doorway in the north one, and the
+  // table with its chairs, as office.ts puts them.
+  const g = 0.06;
+  rects.add((MeetingRoom.minX - g, MeetingRoom.minX + g, MeetingRoom.minZ - g, MeetingRoom.maxZ));
+  rects.add((MeetingRoom.minX - g, MeetingRoom.door.x0, MeetingRoom.minZ - g, MeetingRoom.minZ + g));
+  rects.add((MeetingRoom.door.x1, MeetingRoom.maxX, MeetingRoom.minZ - g, MeetingRoom.minZ + g));
+  const t = (x: MeetingTable.x, z: MeetingTable.z, width: MeetingTable.width, depth: MeetingTable.depth);
+  rects.add((t.x - t.width / 2, t.x + t.width / 2, t.z - t.depth / 2, t.z + t.depth / 2));
+  // Chairs tucked in at the table, a little smaller than a desk's, so there's a way round behind them.
+  for (final d in meetingSeats) {
+    final (cx, cz) = deskPoint(d, 0, 0.85);
+    circles.add((cx, cz, 0.3));
   }
   return (rects: rects, circles: circles);
 }
@@ -278,6 +322,10 @@ class _Heap {
 
 /// Just inside the exit door, in the west wall.
 final Pt _exit = (Floor.minX + 0.45, exitDoor.u);
+
+/// Just inside the balcony doors, in the south wall.
+final Pt _balconyIn = (balconyDoor.u, Floor.maxZ - 0.45);
+
 /// Down the middle of the steps outside it.
 const double _stepsX = (ExitStairs.minX + ExitStairs.maxX) / 2;
 
@@ -295,27 +343,60 @@ double _pathLength(List<Pt> pts) {
   return n;
 }
 
+/// Where a worker called to a meeting comes in: out of the elevator.
+const Pt _inFrom = (Elevator.x, elevatorFront + 0.5);
+
+/// A worker's walk in to its seat when it's called to a meeting: out of the elevator and round the
+/// furniture to beside its chair (the last point), on whichever side is the shorter way, where it hops on.
+List<Pt> wayIn(DeskDef seat) {
+  final ways = [-1.0, 1.0].map((side) {
+    final pts = [
+      ...route(_inFrom, deskPoint(seat, side * 0.7, seat.room ? 1.4 : 1.75)),
+      deskPoint(seat, side * 0.7, 0.95),
+    ];
+    return (pts: pts, cost: _pathLength(pts));
+  }).toList();
+  return ways[0].cost <= ways[1].cost ? ways[0].pts : ways[1].pts;
+}
+
 /// A worker's walk out of the building once it's sent home. The first point is where it hops down,
 /// beside its chair (or its bean bag) on whichever side is the shorter way out; then round the
 /// furniture to the exit door in the west wall, across the landing outside, down the steps to the
 /// street and off along the sidewalk.
 List<Pt> wayHome(DeskDef seat) {
-  final ways = [-1.0, 1.0].map((side) {
-    // Beside the chair and back from the desk into the aisle, or off the bean bag and round behind it.
-    final (down, back) = seat.beanbag
-        ? (deskPoint(seat, side * 1.05, 0.1), deskPoint(seat, side * 1.05, 1.25))
-        : (deskPoint(seat, side * 0.7, 0.95), deskPoint(seat, side * 0.7, 1.75));
-    // A bean bag can stand with one side up against something.
-    final blocked = seat.beanbag && !walkable(down.$1, down.$2);
-    final pts = [down, ...route(back, _exit)];
-    return (pts: pts, cost: (blocked ? 1000 : 0) + _pathLength(pts));
-  }).toList();
-  final inside = ways[0].cost <= ways[1].cost ? ways[0].pts : ways[1].pts;
+  final inside = _wayTo(seat, _exit);
   return [
     ...inside,
     (_stepsX, exitDoor.u),
-    (_stepsX, ExitStairs.landingZ1 + (ExitStairs.steps - 1) * ExitStairs.run + 0.6),
-    (_stepsX, _sidewalkZ),
-    (_walkOffX, _sidewalkZ),
+    ...walkOff((_stepsX, ExitStairs.landingZ1 + (ExitStairs.steps - 1) * ExitStairs.run + 0.6)),
   ];
+}
+
+/// The same walk on a floor above the bottom one, which has no exit door: round the furniture to the
+/// balcony doors, out across the balcony and up to its railing ([Parachute.jump]), where it goes over.
+List<Pt> wayToBalcony(DeskDef seat) {
+  final inside = _wayTo(seat, _balconyIn);
+  return [...inside, (balconyDoor.u, Balcony.minZ + 0.4), (Parachute.jump.x, Parachute.jump.z)];
+}
+
+/// From [from], down on the street, over to the near sidewalk and off along it to the west, where they're gone.
+List<Pt> walkOff(Pt from) => [from, (from.$1, _sidewalkZ), (_walkOffX, _sidewalkZ)];
+
+/// From beside [seat], where it hops down, round the furniture to [door] on the office floor.
+List<Pt> _wayTo(DeskDef seat, Pt door) {
+  final ways = [-1.0, 1.0].map((side) {
+    // Beside the chair and back from the desk into the aisle, off the bean bag and round behind it, or
+    // out from behind the kiosk and round its front, into the room.
+    final (down, back) = seat.beanbag
+        ? (deskPoint(seat, side * 1.05, 0.1), deskPoint(seat, side * 1.05, 1.25))
+        : seat.station != null
+        ? (deskPoint(seat, side * 0.95, Kiosk.stand), deskPoint(seat, side * 0.95, -1))
+        // At the meeting table there's less room behind the chair, before the glass.
+        : (deskPoint(seat, side * 0.7, 0.95), deskPoint(seat, side * 0.7, seat.room ? 1.4 : 1.75));
+    // A bean bag or a kiosk can stand with one side up against something (the elevator, by the queue).
+    final blocked = (seat.beanbag || seat.station != null) && !walkable(down.$1, down.$2);
+    final pts = [down, ...route(back, door)];
+    return (pts: pts, cost: (blocked ? 1000 : 0) + _pathLength(pts));
+  }).toList();
+  return ways[0].cost <= ways[1].cost ? ways[0].pts : ways[1].pts;
 }

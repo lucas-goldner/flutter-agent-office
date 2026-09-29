@@ -267,7 +267,7 @@ class Store {
         you = m.you;
         _setPeers(m.peers);
         floors = m.floors;
-        projectsDir = m.projectsDir;
+        projectsDir = m.projectsDir.dir; // custom, by, at: see ProjectsDirState
         ice = m.ice;
         chat
           ..clear()
