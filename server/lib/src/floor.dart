@@ -249,7 +249,8 @@ class Floor {
       workers.list().any((w) => isBusy(w.status)) ||
       queue.state().tasks.any((t) => t.status != TaskStatus.done);
 
-  FloorInfo info() {
+  /// [local]: the project the office was started in (see Building.isLocal).
+  FloorInfo info({bool? local}) {
     final ws = workers.list();
     return FloorInfo(
       id: id,
@@ -257,6 +258,7 @@ class Floor {
       repo: def.repo,
       dir: dir,
       palette: def.palette,
+      local: local,
       addedBy: def.addedBy,
       addedAt: def.addedAt,
       workers: ws.length,

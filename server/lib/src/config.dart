@@ -28,6 +28,7 @@ class Config {
     required this.dir,
     required this.dataDir,
     required this.projectsDir,
+    this.projects,
     this.project,
     required this.host,
     required this.port,
@@ -56,8 +57,11 @@ class Config {
   final String dir;
   final String dataDir;
 
-  /// Where new floors are cloned, as `<projectsDir>/<owner>/<repo>`.
+  /// Where new floors are cloned by default, as `<projectsDir>/<owner>/<repo>`.
   final String projectsDir;
+
+  /// --projects / AGENT_OFFICE_PROJECTS: picks the projects folder, as ⚙️ Settings in the office does.
+  final String? projects;
 
   /// Started as `agent-office <dir>`: that checkout is a floor of its own (it's also `dir`).
   final String? project;
@@ -110,6 +114,7 @@ const help = '''agent-office — a 3D office for your team and its Claude Code /
 Usage:
   agent-office [options]
   agent-office [dir] [options]
+  agent-office setup [--projects <dir>] [--project <owner/repo>]...
   agent-office prune [dir] [--dry-run] [--force]
   agent-office accounts [list|invite|revoke|role|password] ...
 
@@ -118,11 +123,18 @@ pick one of the repositories your `gh` login can see, and the office clones it
 into the projects folder as a new floor. Workers, terminals, boards and the
 task queue on a floor all belong to that floor's checkout.
 
+The first time it starts in a terminal with no floors, it walks you through
+where projects are cloned, signing the GitHub CLI in, and your first project.
+
 Started from anywhere, the office keeps its data in --home. Given a [dir] (or
 started in a project where an office already ran), it keeps its data in
-<dir>/.agent-office as it always has, and that project is one of the floors.
+<dir>/.agent-office as it always has, and that project starts out as a floor
+(an admin can take it off in the elevator like any other).
 
 Commands:
+  setup                   Pick the folder projects are cloned into and clone
+                          projects as floors: a walkthrough in a terminal, or
+                          just --projects / --project for scripts (see setup --help)
   prune                   Remove leftover worker worktrees (.agent-office/worktrees/)
                           and their office/* branches. Anything with uncommitted
                           changes or unpushed commits is kept unless --force is given.
@@ -133,7 +145,8 @@ Options:
       --home <dir>        Where the office keeps its data when no [dir] is given
                           (default ~/agent-office, env AGENT_OFFICE_HOME)
       --projects <dir>    Where new floors are cloned, as <dir>/<owner>/<repo>
-                          (default ~/agent-office, env AGENT_OFFICE_PROJECTS)
+                          (default ~/agent-office, env AGENT_OFFICE_PROJECTS).
+                          Also settable from ⚙️ Settings in the office
   -p, --port <n>          Port to listen on (default 4600, env PORT)
   -H, --host <addr>       Address to bind (default 0.0.0.0)
       --password <pw>     Office password (env AGENT_OFFICE_PASSWORD).
@@ -346,7 +359,7 @@ Config loadConfig(List<String> argv) {
   }
   final dir = project.isNotEmpty ? project : home;
   // New floors go next to the office's data when it has a home of its own, and never into a project.
-  final projectsDir = projects.isNotEmpty ? projects : (project.isNotEmpty ? p.join(homeDir(), 'agent-office') : home);
+  final projectsDir = project.isNotEmpty ? p.join(homeDir(), 'agent-office') : home;
   if (port.isNaN || port != port.truncateToDouble() || port <= 0 || port > 65535) {
     _fail('agent-office: invalid --port');
   }
@@ -426,6 +439,7 @@ Config loadConfig(List<String> argv) {
     dir: dir,
     dataDir: dataDir,
     projectsDir: projectsDir,
+    projects: projects.isEmpty ? null : projects,
     project: project.isEmpty ? null : project,
     host: host,
     port: port.toInt(),

@@ -178,13 +178,6 @@ const _maxPayload = 2 * 1024 * 1024;
 /// Kept as the one place the Node server's `bufferedAmount` checks go through.
 int _buffered(_Client c) => 0;
 
-/// A path under the home folder as ~/…, for showing people.
-String _tildify(String path) {
-  final home = Platform.environment['HOME'] ?? '';
-  if (home.isEmpty) return path;
-  return path == home || path.startsWith('$home${p.separator}') ? '~${path.substring(home.length)}' : path;
-}
-
 String _clientIp(Request req, bool trustProxy) {
   if (trustProxy) {
     final fwd = headerValue(req.headers, 'x-forwarded-for');
@@ -422,6 +415,10 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
 
   // --- The building: a floor per project, each with its own workers, boards and queue -----------
   final building = Building(cfg.dataDir, cfg.projectsDir);
+  if (cfg.projects != null) {
+    final err = building.setProjectsDir(cfg.projects!, 'the command line');
+    if (err != null) stderr.writeln('agent-office: --projects: $err');
+  }
   final floors = <String, Floor>{};
   Floor? floorOf(_Client c) => c.peer.floor != null ? floors[c.peer.floor] : null;
 
@@ -464,7 +461,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
   });
 
   List<FloorInfo> floorInfos() => [
-    for (final f in floors.values) f.info(),
+    for (final f in floors.values) building.isLocal(f.id) ? f.info(local: true) : f.info(),
     for (final d in building.pending())
       FloorInfo(
         id: d.id,
@@ -1189,6 +1186,48 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     floorsChanged();
   }
 
+  /// Out to the lobby, where the elevator has nowhere to go: the building's last floor was taken off.
+  void toLobby(_Client c) {
+    final left = leave(c);
+    c.peer.floor = null;
+    sendTo(c, FloorEnterMsg(peers: [for (final o in clients.values) o.peer.info], view: floorView(null)));
+    arrived(c, left);
+  }
+
+  /// Takes [floor] off the building (already out of floors.json): everyone on it rides the elevator to
+  /// the next floor, or out to the lobby if it was the last (the roof goes with it), and its workers stop.
+  void closeFloor(Floor floor, String who) {
+    final name = floor.def.name;
+    final next = floors.values.where((f) => f != floor).firstOrNull;
+    // The list without it first, so nobody arrives somewhere (the lobby's panel) that still shows it.
+    final list = floorInfos().where((f) => f.id != floor.id).toList();
+    floorsSent = _json([for (final f in list) f.toJson()]);
+    broadcast(FloorsMsg(list));
+    for (final c in List.of(clients.values)) {
+      if (c.peer.floor == floor.id || (next == null && c.peer.floor == roof)) {
+        if (next != null) {
+          goToFloor(c, next);
+        } else {
+          toLobby(c);
+        }
+        sendTo(
+          c,
+          ToastMsg(
+            next != null
+                ? '🛗 $who took $name off the building, so you rode the elevator to ${next.def.name}'
+                : '🛗 $who took $name, the last floor, off the building',
+            ToastLevel.warn,
+          ),
+        );
+      } else {
+        sendTo(c, ToastMsg('🛗 $who took $name off the building', ToastLevel.info));
+      }
+    }
+    floors.remove(floor.id);
+    unawaited(floor.shutdown());
+    floorsChanged();
+  }
+
   /// Up to the rooftop bar, by elevator.
   void goToRoof(_Client c) {
     if (c.peer.floor == roof) return;
@@ -1461,6 +1500,34 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         } else {
           sendTo(c, BallMsg(floor.court.state()));
         }
+      case 'floor.remove':
+        // Everyone's workers on it stop: admins do it.
+        if (!meOf(c.accountId).admin) return warn(c, 'Only admins can take a floor off the building');
+        final id = _str(msg['floor'], 64);
+        final r = building.remove(id, who);
+        final def = r.floor;
+        if (def == null) return warn(c, r.error);
+        stdout.writeln('  $who took the ${def.name} floor off the building (${def.dir} stays where it is)');
+        final floor = floors[id];
+        if (floor != null) {
+          closeFloor(floor, who);
+        } else {
+          floorsChanged();
+        }
+      case 'floor.projectsDir':
+        // It's a folder on the office's machine that `gh` writes into: admins pick it.
+        final err = meOf(c.accountId).admin
+            ? building.setProjectsDir(_str(msg['dir'], 1024), who)
+            : 'Only admins can move the workspace folder';
+        warn(c, err);
+        if (err != null) break;
+        final state = building.projectsDirState();
+        broadcast(ProjectsDirMsg(state));
+        toastAll(
+          state.custom
+              ? '📁 $who moved the workspace folder to ${state.dir}'
+              : '📁 $who put the workspace folder back to ${state.dir}',
+        );
       case 'dog.pet':
         floorOf(c)?.dog.pet(c.peer.info);
       case 'dog.name':
@@ -2034,7 +2101,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         you: id,
         peers: [for (final c in clients.values) c.peer.info],
         floors: floorInfos(),
-        projectsDir: ProjectsDirState(dir: _tildify(cfg.projectsDir)), // custom, by, at: phase 2
+        projectsDir: building.projectsDirState(),
         ice: cfg.iceServers,
         chat: chat.recent(50),
         invites: team.available,
