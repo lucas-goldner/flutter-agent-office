@@ -9,6 +9,7 @@ import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
 import 'package:office_shared/floors.dart';
+
 import '../text.dart';
 import '../toon.dart';
 import 'geo.dart';
@@ -53,7 +54,15 @@ Node glassPane(double w, double h) {
   final g = group('glass');
   g.add(mesh(planeXY(w, h, both: true), glassMat, 0, 0, 0, false));
   for (final (gx, gw) in [(-w * 0.2, 0.18), (-w * 0.2 + 0.32, 0.08)]) {
-    g.add(place(mesh(planeXY(gw, h * 0.55, both: true), shineMat, 0, 0, 0, false), x: gx, y: h * 0.07, z: 0.01, rot: euler(0, 0, -0.5)));
+    g.add(
+      place(
+        mesh(planeXY(gw, h * 0.55, both: true), shineMat, 0, 0, 0, false),
+        x: gx,
+        y: h * 0.07,
+        z: 0.01,
+        rot: euler(0, 0, -0.5),
+      ),
+    );
   }
   return g;
 }
@@ -68,10 +77,11 @@ Node plant([double scale = 1]) {
   return g;
 }
 
-/// A floating cartoon pendant lamp.
-Node pendant() {
+/// A cartoon pendant lamp, its shade at 0, on a cord [cord] meters long.
+Node pendant([double cord = 0.48]) {
   final lamp = group('pendant');
-  lamp.add(mesh(cyl(0.01, 0.01, 0.6, 4), tc(Palette.ink), 0, 0.3, 0, false));
+  final c = cord / 0.8;
+  lamp.add(mesh(cyl(0.01, 0.01, c, 4), tc(Palette.ink), 0, c / 2, 0, false));
   lamp.add(mesh(cone(0.5, 0.45, 16, true), tc('#ffd166'), 0, 0, 0, false));
   lamp.add(mesh(sphere(0.16, 10, 8), tc('#fff7d6', emissive: '#ffe08a'), 0, -0.15, 0, false));
   lamp.scale = vm.Vector3.all(0.8);
@@ -87,7 +97,15 @@ Node chair(String color) {
   g.add(mesh(cyl(0.04, 0.04, 0.42, 8), tc(Palette.deskLeg), 0, 0.26, 0));
   for (var i = 0; i < 5; i++) {
     final a = i / 5 * math.pi * 2;
-    g.add(place(mesh(box(0.05, 0.04, 0.32), tc(Palette.deskLeg)), x: math.sin(a) * 0.15, y: 0.05, z: math.cos(a) * 0.15, rot: yaw(a)));
+    g.add(
+      place(
+        mesh(box(0.05, 0.04, 0.32), tc(Palette.deskLeg)),
+        x: math.sin(a) * 0.15,
+        y: 0.05,
+        z: math.cos(a) * 0.15,
+        rot: yaw(a),
+      ),
+    );
   }
   return mergeByMaterial(g);
 }

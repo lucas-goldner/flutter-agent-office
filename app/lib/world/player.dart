@@ -7,6 +7,7 @@ import 'dart:math' as math;
 import 'package:vector_math/vector_math.dart' as vm;
 
 import 'package:office_shared/layout.dart';
+
 import 'collider.dart';
 
 const double kRadius = 0.32;
@@ -78,6 +79,13 @@ class PlayerController {
 
   /// Where you're sitting, or null on your feet.
   SeatPlace? seat;
+
+  /// How far below the floor you're on the street is: further down the higher your floor (see streetBelow).
+  double street = streetY;
+
+  /// Something that has hold of you instead of your legs (the ladder, a fire pole): it moves you
+  /// each frame, with no walking, falling or bumping into things, and the camera follows.
+  void Function(double dt)? rig;
 
   /// You got up by walking off or jumping (not by [stand]).
   void Function()? onStand;
@@ -152,9 +160,24 @@ class PlayerController {
   /// How far sitting moves your hips (and eyes) from where they are standing.
   double get _lift => seat == null ? 0 : seat!.hips - kHips;
 
+  /// Whether up (W, ↑), down (S, ↓) or jump (Space) is held down, and you have the controls.
+  bool holding({bool up = false, bool down = false, bool jump = false}) =>
+      enabled && ((up && input.forward) || (down && input.back) || (jump && input.jump));
+
   void update(double dt) {
     dt = math.min(dt, 0.05);
     final k = input;
+    final r = rig;
+    if (r != null) {
+      r(dt);
+      vy = 0;
+      grounded = false;
+      stepOffset *= math.exp(-dt * 16);
+      _bob = 0;
+      _jitterT += dt;
+      updateCamera();
+      return;
+    }
     if (seat != null) {
       if (!enabled || !k.any) {
         moving = false;
@@ -194,7 +217,8 @@ class PlayerController {
       }
     }
 
-    final ground = groundAt(colliders, pos.x, pos.z, pos.y);
+    // Never below the street: past the edge of the grass there's nothing else to stand on.
+    final ground = math.max(groundAt(colliders, pos.x, pos.z, pos.y), street);
     final jump = enabled && k.jump && grounded;
     if (jump) {
       vy = kJumpV * jumpBoost;
@@ -247,23 +271,44 @@ class PlayerController {
     // room while you're in the office, out of the building while you're outside or on the balcony.
     // And under the loft, its roof or the garage ceiling.
     const m = 0.4;
-    final indoors = pos.y > -slab - 0.5 && pos.x > Floor.minX && pos.x < Floor.maxX && pos.z > Floor.minZ && pos.z < Floor.maxZ;
+    // On the ladder or a pole you can be down in a shaft under the floor, but you're still indoors.
+    final rigged = rig != null;
+    final indoors =
+        (rigged || pos.y > -slab - 0.5) &&
+        pos.x > Floor.minX &&
+        pos.x < Floor.maxX &&
+        pos.z > Floor.minZ &&
+        pos.z < Floor.maxZ;
     if (indoors) {
       cam.x = cam.x.clamp(Floor.minX + m, Floor.maxX - m);
       cam.z = cam.z.clamp(Floor.minZ + m, Floor.maxZ - m);
     }
-    final floorY = groundAt(colliders, pos.x, pos.z, pos.y);
+    final floorY = rigged ? 0.0 : math.max(groundAt(colliders, pos.x, pos.z, pos.y), street);
     final roof = ceilingAt(colliders, cam.x, cam.z, floorY) - 0.3;
     cam.y = cam.y.clamp(floorY + 0.6, math.max(floorY + 0.6, math.min(floorY + 3.5, roof)));
     // Down on the street, stay under the garage ceiling so its edge never cuts across the view.
-    if (pos.y < -slab - 1) cam.y = math.min(cam.y, math.max(floorY + 0.6, -slab - 0.3));
+    final garage = street - streetY - slab;
+    if (pos.y < garage - 1 && !rigged) cam.y = math.min(cam.y, math.max(floorY + 0.6, garage - 0.3));
     // How far you are out past each outside wall (west, east, north, south), and how far inside them the camera is.
     const e = wallT + m;
-    final out = [Floor.minX - wallT - pos.x, pos.x - Floor.maxX - wallT, Floor.minZ - wallT - pos.z, pos.z - Floor.maxZ - wallT];
+    final out = [
+      Floor.minX - wallT - pos.x,
+      pos.x - Floor.maxX - wallT,
+      Floor.minZ - wallT - pos.z,
+      pos.z - Floor.maxZ - wallT,
+    ];
     final side = out.indexOf(out.reduce(math.max));
-    final camIn = [cam.x - (Floor.minX - e), Floor.maxX + e - cam.x, cam.z - (Floor.minZ - e), Floor.maxZ + e - cam.z].reduce(math.min) > 0;
-    // Outside, back the camera out through the wall you're standing beyond.
-    if (!indoors && out[side] > 0 && camIn && (cam.y > -slab || side == 0 || side == 2)) {
+    final camIn =
+        [
+          cam.x - (Floor.minX - e),
+          Floor.maxX + e - cam.x,
+          cam.z - (Floor.minZ - e),
+          Floor.maxZ + e - cam.z,
+        ].reduce(math.min) >
+        0;
+    // Outside, back the camera out through the wall you're standing beyond: above the garage always,
+    // and down in it where it's walled in (the west and north sides).
+    if (!indoors && out[side] > 0 && camIn && (cam.y > garage || side == 0 || side == 2)) {
       switch (side) {
         case 0:
           cam.x = Floor.minX - e;
@@ -327,7 +372,10 @@ class PlayerController {
     }
     // A stair: step up onto it if there's room there.
     final up = hit.top - pos.y;
-    if (grounded && up <= kStep && _blocker(x, z, hit.top) == null && pos.y + kHeight + up <= ceilingAt(colliders, x, z, pos.y)) {
+    if (grounded &&
+        up <= kStep &&
+        _blocker(x, z, hit.top) == null &&
+        pos.y + kHeight + up <= ceilingAt(colliders, x, z, pos.y)) {
       pos.setValues(x, hit.top, z);
       stepOffset -= up;
       return;
@@ -379,9 +427,10 @@ bool touches(Collider c, double x, double z, double r) {
   return (x - nx) * (x - nx) + (z - nz) * (z - nz) < r * r;
 }
 
-/// The floor under someone standing at (x, z) with their feet at [y]: the highest top they're on or above, else the street.
+/// The floor under someone standing at (x, z) with their feet at [y]: the highest top they're on or
+/// above (out of doors, the street's; see streetColliders).
 double groundAt(List<Collider> colliders, double x, double z, double y) {
-  var g = streetY;
+  var g = double.negativeInfinity;
   for (final c in colliders) {
     if (c.top > 50 || y < c.top - 0.1 || c.top <= g) continue;
     if (touches(c, x, z, kRadius)) g = c.top;

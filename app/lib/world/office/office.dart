@@ -11,6 +11,7 @@ import 'package:office_shared/decor.dart' show WallId, WallRect, wallFacing;
 import 'package:office_shared/floors.dart';
 import 'package:office_shared/layout.dart' as lay;
 import 'package:office_shared/layout.dart' hide Elevator, Gong, Jukebox, Whiteboard;
+
 import '../collider.dart';
 import '../labels.dart';
 import '../text.dart';
@@ -24,6 +25,7 @@ import 'office_colliders.dart';
 import 'outside.dart';
 import 'parts.dart';
 import 'shell.dart';
+import 'stack.dart';
 import 'whiteboard.dart';
 
 export 'elevator.dart' show Elevator;
@@ -31,11 +33,20 @@ export 'gong.dart' show Gong;
 export 'jukebox.dart' show JukeboxView;
 export 'loft.dart' show Face;
 export 'outside.dart' show Halo, Lamp, NightBulb, NightParts;
+export 'stack.dart' show FloorStack, StackState;
 export 'whiteboard.dart' show WhiteboardStand;
 
 /// A desk or a bean bag: somewhere a worker sits.
 class DeskView {
-  DeskView({required this.def, required this.group, required this.laptopAnchor, required this.seatAnchor, required this.chair, required this.vacancy, required this.vacancyY});
+  DeskView({
+    required this.def,
+    required this.group,
+    required this.laptopAnchor,
+    required this.seatAnchor,
+    required this.chair,
+    required this.vacancy,
+    required this.vacancyY,
+  });
 
   final DeskDef def;
   final Node group;
@@ -70,6 +81,7 @@ class Office {
     required this.jukebox,
     required this.whiteboard,
     required this.night,
+    required this.stack,
   });
 
   final Node group;
@@ -96,6 +108,9 @@ class Office {
 
   /// Lights, windows and glass for the sky to change with the time of day and the weather.
   final NightParts night;
+
+  /// The ceiling, the floor, and the ladder and fire pole between the floors of the building.
+  final FloorStack stack;
 
   final List<WallRect> _fixtures;
   final Looks _looks;
@@ -178,7 +193,15 @@ DeskView _buildDesk(DeskDef def, int index, Material trimMat) {
   final legMat = tc('#8d99ae');
   for (final sx in [-1, 1]) {
     for (final sz in [-1, 1]) {
-      body.add(mesh(cyl(0.035, 0.035, height - 0.08, 8), legMat, sx * (width / 2 - 0.14), (height - 0.08) / 2, sz * (depth / 2 - 0.12)));
+      body.add(
+        mesh(
+          cyl(0.035, 0.035, height - 0.08, 8),
+          legMat,
+          sx * (width / 2 - 0.14),
+          (height - 0.08) / 2,
+          sz * (depth / 2 - 0.12),
+        ),
+      );
     }
   }
   // Modesty panel facing away from the worker.
@@ -211,7 +234,15 @@ DeskView _buildDesk(DeskDef def, int index, Material trimMat) {
   const vacancyY = height + 0.55;
   final vacancy = vacancyMarker(vacancyY);
   group.add(vacancy);
-  return DeskView(def: def, group: group, laptopAnchor: laptopAnchor, seatAnchor: seatAnchor, chair: ch, vacancy: vacancy, vacancyY: vacancyY);
+  return DeskView(
+    def: def,
+    group: group,
+    laptopAnchor: laptopAnchor,
+    seatAnchor: seatAnchor,
+    chair: ch,
+    vacancy: vacancy,
+    vacancyY: vacancyY,
+  );
 }
 
 const _beanbagColors = ['#ff6b6b', '#4ecdc4', '#9b5de5', '#ffd166', '#f15bb5', '#00bbf9', '#06d6a0', '#fb8500'];
@@ -245,7 +276,15 @@ DeskView _buildBeanbag(DeskDef def, int index) {
   const vacancyY = 1.25;
   final vacancy = vacancyMarker(vacancyY);
   group.add(vacancy);
-  return DeskView(def: def, group: group, laptopAnchor: laptopAnchor, seatAnchor: seatAnchor, chair: chairNode, vacancy: vacancy, vacancyY: vacancyY);
+  return DeskView(
+    def: def,
+    group: group,
+    laptopAnchor: laptopAnchor,
+    seatAnchor: seatAnchor,
+    chair: chairNode,
+    vacancy: vacancy,
+    vacancyY: vacancyY,
+  );
 }
 
 /// A framed board on a wall; the face shows the board later (cork, chalk or whiteboard).
@@ -264,16 +303,20 @@ Office buildOffice({required LabelHub labels}) {
   final fixtures = <WallRect>[];
   void fixture(WallId wall, double u, double y, double w, double h) =>
       fixtures.add(WallRect(wall: wall, u0: u - w / 2, u1: u + w / 2, y0: y - h / 2, y1: y + h / 2));
-  const width = Floor.maxX - Floor.minX;
-  const depth = Floor.maxZ - Floor.minZ;
-  const cx = (Floor.maxX + Floor.minX) / 2;
-  const cz = (Floor.maxZ + Floor.minZ) / 2;
 
   // What each floor paints its own way (see setLook): the walls, their trim, the planks.
   final looks = Looks();
 
-  // Floor.
-  group.add(place(plankedFloor(width, depth, looks: looks), x: cx, z: cz));
+  // Floor, and the ceiling, with the ways up and down to the other floors through them (see stack.dart).
+  final planks = Toon.create(hex('#ffffff'));
+  looks.planks.add(planks);
+  // The stack's colliders come and go with the floors; the rest go in ahead of them at the end.
+  final colliders = <Collider>[];
+  final stack = buildStack(colliders, planks);
+  group.add(stack.group);
+  interactables.addAll(stack.interactables);
+  // The ladder and its signs, up the west wall.
+  fixture(Side.west, Ladder.z + 0.6, wallHeight / 2, Ladder.width + 2.4, wallHeight);
 
   // What never moves and needs no clicking: rugs, plants, lamps, the coffee table, the kitchen
   // counter… merged into a few meshes at the end.
@@ -362,19 +405,29 @@ Office buildOffice({required LabelHub labels}) {
     group.add(place(board.group, x: b.x + nx * 0.08, y: b.y, z: b.z + nz * 0.08, rot: yaw(b.rotY)));
     boardMeshes[key] = board.face;
     final label = textPlane(b.label, const TextOpts(bg: '#fffaf3', size: 64));
-    group.add(place(label, x: b.x + nx * 0.04, y: b.y + b.height / 2 + 0.5, z: b.z + nz * 0.04, rot: yaw(b.rotY), scale: 1.3));
+    group.add(
+      place(label, x: b.x + nx * 0.04, y: b.y + b.height / 2 + 0.5, z: b.z + nz * 0.04, rot: yaw(b.rotY), scale: 1.3),
+    );
     final it = Interactable(kind: kind, x: b.x + nx * 1.6, z: b.z + nz * 1.6, radius: 2.4);
     interactables.add(it);
     tagInteract(board.group, it);
     // The board and its label above it, up to the ceiling.
     final wall = wallFacing(b.rotY);
     final bottom = b.y - (b.height + 0.3) / 2;
-    fixture(wall, wall == Side.north || wall == Side.south ? b.x : b.z, (bottom + wallHeight) / 2, b.width + 0.3, wallHeight - bottom);
+    fixture(
+      wall,
+      wall == Side.north || wall == Side.south ? b.x : b.z,
+      (bottom + wallHeight) / 2,
+      b.width + 0.3,
+      wallHeight - bottom,
+    );
   }
 
   // Lounge: TV, couch, coffee table, beanbags, and the jukebox in the corner.
   final tvGroup = Node(name: 'tv');
-  tvGroup.add(place(mesh(roundedBox(Tv.width + 0.3, 0.14, Tv.height + 0.3, 0.12), tc(Palette.ink)), rot: euler(math.pi / 2)));
+  tvGroup.add(
+    place(mesh(roundedBox(Tv.width + 0.3, 0.14, Tv.height + 0.3, 0.12), tc(Palette.ink)), rot: euler(math.pi / 2)),
+  );
   final tvMat = flat('#1b1d2e');
   final tvNode = mesh(planeXY(Tv.width, Tv.height), tvMat, 0, 0, 0.08, false);
   tvGroup.add(tvNode);
@@ -441,10 +494,11 @@ Office buildOffice({required LabelHub labels}) {
     decor.add(place(plant(s), x: x, z: z, scale: s));
   }
 
-  // Ceiling lamps (floating cartoon pendants).
+  // Ceiling lamps (cartoon pendants), hung on long cords down from the high ceiling.
+  const lampY = 4.05;
   for (final (x, z) in const [(-10.5, -4.0), (-1.5, -4.0), (-10.5, 4.0), (-1.5, 4.0), (13.0, 0.0)]) {
-    decor.add(place(pendant(), x: x, y: wallHeight - 0.15, z: z, scale: 0.8));
-    night.halos.add(Halo(at: vm.Vector3(x, wallHeight - 0.27, z), size: 1.3, color: '#ffe08a'));
+    decor.add(place(pendant(wallHeight - lampY), x: x, y: lampY, z: z, scale: 0.8));
+    night.halos.add(Halo(at: vm.Vector3(x, lampY - 0.12, z), size: 1.3, color: '#ffe08a'));
   }
 
   final bossScreen = buildLoft(group, interactables, looks);
@@ -483,7 +537,7 @@ Office buildOffice({required LabelHub labels}) {
     doors,
     beanbags,
     group: group,
-    colliders: officeColliders(elevator: elevator.colliders),
+    colliders: colliders..insertAll(0, officeColliders(elevator: elevator.colliders)),
     interactables: interactables,
     desks: desks,
     boardMeshes: boardMeshes,
@@ -494,5 +548,6 @@ Office buildOffice({required LabelHub labels}) {
     jukebox: jukebox,
     whiteboard: whiteboard,
     night: night,
+    stack: stack,
   );
 }
