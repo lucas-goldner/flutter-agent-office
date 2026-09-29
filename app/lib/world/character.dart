@@ -21,7 +21,9 @@ import 'costumes.dart';
 import 'emoji_pop.dart';
 import 'geo.dart';
 import 'label_widgets.dart';
+import 'card.dart';
 import 'labels.dart';
+import 'worker_pr.dart';
 import 'player.dart' show kHips;
 import 'toon.dart';
 import 'worker_acts.dart';
@@ -423,11 +425,44 @@ class Person {
     _label = _labels.add(
       WorldLabel(
         anchor: root,
-        offset: vm.Vector3(0, 2.0, 0),
+        offset: vm.Vector3(0, 2.0 + _doingLift, 0),
         alignment: Alignment.center,
         child: TagPill('$name$suffix', bg: '#fffaf3', size: 40),
       ),
     );
+  }
+
+  // ---- The line under the name tag: what they have open, or where they are (see whereabouts) ----
+
+  WorldLabel? _doing;
+  String _doingText = '';
+
+  /// How far the line under the name tag lifts the name tag (and the mic badge, and chat bubbles).
+  double get _doingLift => _doing != null ? 0.25 : 0;
+
+  /// Where a chat bubble goes: over the name tag, however high it sits.
+  double get bubbleY => 2.45 + _doingLift;
+
+  /// Puts a smaller line under the name tag, like "💻 in Pixel's terminal"; null (or '') takes it away.
+  void setDoing(String? text) {
+    text ??= '';
+    if (text == _doingText) return;
+    _doingText = text;
+    _labels.remove(_doing);
+    _doing = null;
+    if (text.isNotEmpty) {
+      _doing = _labels.add(
+        WorldLabel(
+          anchor: root,
+          offset: vm.Vector3(0, 1.95, 0),
+          alignment: Alignment.center,
+          child: TagPill(text, bg: '#e9ecef', size: 26),
+        )..visible = _label?.visible ?? true,
+      );
+    }
+    // The name tag and the mic badge move up out of the way of the line under them.
+    _label?.offset = vm.Vector3(0, 2.0 + _doingLift, 0);
+    _mic.position = vm.Vector3(_mic.position.x, 2.25 + _doingLift, _mic.position.z);
   }
 
   /// How loud this person is talking right now (0 when silent); drives the mic badge and the mouth.
@@ -437,13 +472,39 @@ class Person {
     _mic.visible = _speaking;
   }
 
-  void showLabel(bool v) => _label?.visible = v;
+  void showLabel(bool v) {
+    _label?.visible = v;
+    _doing?.visible = v;
+  }
 
   /// Reach out with the right hand, as if pressing or grabbing something in front of you.
   void reach() => _reachT = 0;
 
-  /// A mug of coffee in the left hand, or not.
-  void holdMug(bool on) => _mug.visible = on;
+  /// A mug of coffee in the left hand, or not. It waits while the hands are full (a card).
+  void holdMug(bool on) {
+    _wantsMug = on;
+    _mug.visible = on && !(_card?.held ?? false);
+  }
+
+  bool _wantsMug = false;
+
+  /// An issue card off the board, held out in front in both hands (see carry).
+  HeldCard? _card;
+
+  /// Carries an issue card in both hands, or puts it down (null). The mug waits while the hands are full.
+  void carry(CarriedIssue? card) {
+    if (card == null && _card == null) return;
+    _card ??= () {
+      // Between the hands when both arms are out in front (see update), its front to whoever they walk up to.
+      final holder = Node(name: 'card-holder')
+        ..position = vm.Vector3(0, 0.8, 0.36)
+        ..rotation = euler(-0.1, 0, 0);
+      _body.add(holder);
+      return HeldCard(holder, 0.46);
+    }();
+    _card!.set(card);
+    holdMug(_wantsMug);
+  }
 
   /// Waves, gives a thumbs up, claps…: the gesture, with its emoji popping up over their head.
   void emote(Emote e) {
@@ -619,6 +680,17 @@ class Person {
       }
     }
     if (_smokeT >= 0) _smokeStep(dt, moving, airborne);
+    if (_card?.held ?? false) {
+      // Both arms out in front, hands on the card's edges: it doesn't swing while they walk.
+      _armL
+        ..x = -1.25
+        ..y = 0
+        ..z = 0.3;
+      _armR
+        ..x = -1.25
+        ..y = 0
+        ..z = -0.3;
+    }
     var reach = 0.0;
     if (_reachT >= 0) {
       _reachT += dt;
@@ -659,6 +731,8 @@ class Person {
     _endEmote();
     _labels.remove(_label);
     _label = null;
+    _labels.remove(_doing);
+    _doing = null;
   }
 }
 
@@ -1084,11 +1158,25 @@ class Worker {
 
   bool get isLeaving => _leaving != null;
 
+  /// Its pull request, open or merged: its bubble is outlined (and labelled, while it rests) to match.
+  WorkerPr? _pr;
+
+  void setPr(WorkerPr? pr) {
+    if (pr == _pr) return;
+    _pr = pr;
+    _drawBubble();
+  }
+
   void _drawBubble() {
     if (_leaving != null) return;
     final task = _task;
     final b = workerBubble(status, bouncing);
-    final key = task != null ? '${status.wire}|$bouncing|${task.name}|${task.summary}' : b.text;
+    final pr = _pr;
+    final border = pr != null ? prInk[pr.state] : null;
+    // Not working on or waiting for something more: its pull request in place of ready / done / asleep.
+    final prText = prLabel(pr, status);
+    final text = prText ?? b.text;
+    final key = '$border|$prText|${task != null ? '${status.wire}|$bouncing|${task.name}|${task.summary}' : text}';
     if (key == _bubbleKey) return;
     _bubbleKey = key;
     _labels.remove(_bubble);
@@ -1100,18 +1188,19 @@ class Worker {
         offset: vm.Vector3(0, 1.74, 0),
         alignment: Alignment.bottomCenter,
         child: TaskCard(
-          chip: taskChip[status] ?? taskChip[WorkerStatus.idle],
+          chip: prText != null ? CardChip(prText.toUpperCase(), border!, '#ffffff') : taskChip[status] ?? taskChip[WorkerStatus.idle],
           title: task.name,
           body: task.summary,
           bg: isAsleep(status) ? '#e9ecef' : b.bg,
+          border: border,
         ),
       );
-    } else if (b.text.isNotEmpty) {
+    } else if (text.isNotEmpty) {
       _bubble = WorldLabel(
         anchor: root,
         offset: vm.Vector3(0, 1.95, 0),
         alignment: Alignment.center,
-        child: TagPill(b.text, bg: b.bg, size: 38),
+        child: TagPill(text, bg: b.bg, size: 38, border: border ?? '#2b2d42'),
       );
     }
     if (_bubble != null) _labels.add(_bubble!);

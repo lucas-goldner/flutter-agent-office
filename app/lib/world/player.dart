@@ -32,6 +32,9 @@ const double kDragLookSpeed = 0.005;
 
 enum ViewMode { first, third }
 
+/// Why a walk along a path ended.
+enum PathEnd { arrived, cancelled, stuck }
+
 /// What the keyboard is doing this frame, as physical keys (layout-independent, like e.code).
 class PlayerInput {
   bool forward = false, back = false, left = false, right = false;
@@ -81,6 +84,68 @@ class PlayerController {
 
   /// You got up by walking off or jumping (not by [stand]).
   void Function()? onStand;
+
+  /// Corners still to walk through on your own (see [walkPath]), or null while you're steering.
+  List<({double x, double z})>? _path;
+
+  /// How long a walk along [_path] has been getting nowhere, and whether it's running.
+  double _stuckFor = 0;
+  bool _pathRun = false;
+
+  /// A walk along a path ended: at its end, by a key of yours, or up against something.
+  void Function(PathEnd why)? onPathEnd;
+
+  /// Whether you're walking a path by yourself.
+  bool get walkingPath => _path != null;
+
+  /// Walks you through these corners by yourself until you get there, or take a step or a jump of your own.
+  void walkPath(List<({double x, double z})> points) {
+    _path = points.isEmpty ? null : [...points];
+    _stuckFor = 0;
+  }
+
+  void stopWalking() => _path = null;
+
+  /// A step along [_path]: toward its next corner, turning (and in first person, looking) the way you go.
+  void _followPath(double dt) {
+    final path = _path!;
+    final next = path.first;
+    final dx = next.x - pos.x, dz = next.z - pos.z;
+    final dist = math.sqrt(dx * dx + dz * dz);
+    if (dist < 0.25) {
+      path.removeAt(0);
+      if (path.isEmpty) {
+        _path = null;
+        onPathEnd?.call(PathEnd.arrived);
+      }
+      return;
+    }
+    // Run the long way round, walk the last few meters.
+    var left = dist;
+    for (var i = 1; i < path.length; i++) {
+      left += math.sqrt(math.pow(path[i].x - path[i - 1].x, 2) + math.pow(path[i].z - path[i - 1].z, 2));
+    }
+    _pathRun = left > 6;
+    final step = math.min(dist, (_pathRun ? kRun : kWalk) * speedBoost * dt);
+    final x0 = pos.x, z0 = pos.z;
+    _tryMove(pos.x + dx / dist * step, pos.z);
+    _tryMove(pos.x, pos.z + dz / dist * step);
+    moving = true;
+    final want = math.atan2(dx, dz);
+    final ease = math.min(1.0, dt * 8);
+    if (view == ViewMode.first) {
+      camYaw += math.atan2(math.sin(want + math.pi - camYaw), math.cos(want + math.pi - camYaw)) * ease;
+    } else {
+      facing += math.atan2(math.sin(want - facing), math.cos(want - facing)) * ease;
+    }
+    // Up against something the map didn't know about: give up rather than walk on the spot.
+    final moved = math.sqrt(math.pow(pos.x - x0, 2) + math.pow(pos.z - z0, 2));
+    _stuckFor = moved < step * 0.2 ? _stuckFor + dt : 0;
+    if (_stuckFor > 1) {
+      _path = null;
+      onPathEnd?.call(PathEnd.stuck);
+    }
+  }
   bool enabled = true;
   final PlayerInput input = PlayerInput();
 
@@ -173,9 +238,15 @@ class PlayerController {
       if (k.left) ix -= 1;
       if (k.right) ix += 1;
     }
-    moving = ix != 0 || iz != 0;
+    final steering = ix != 0 || iz != 0;
+    moving = steering;
+    if (_path != null && (steering || (enabled && k.jump))) {
+      _path = null;
+      onPathEnd?.call(PathEnd.cancelled);
+    }
+    if (_path != null && enabled) _followPath(dt);
     if (view == ViewMode.first) facing = math.atan2(math.sin(camYaw + math.pi), math.cos(camYaw + math.pi));
-    if (moving) {
+    if (steering) {
       final len = math.sqrt(ix * ix + iz * iz);
       ix /= len;
       iz /= len;
@@ -220,7 +291,7 @@ class PlayerController {
     }
     stepOffset *= math.exp(-dt * 16);
     final walking = moving && grounded;
-    walkPhase += dt * (walking ? (k.run ? 14 : 11) * speedBoost : 0);
+    walkPhase += dt * (walking ? ((_path != null ? _pathRun : k.run) ? 14 : 11) * speedBoost : 0);
     final bob = walking ? math.sin(walkPhase).abs() * 0.035 : 0.0;
     _bob += (bob - _bob) * math.min(1, dt * 18);
     _jitterT += dt;

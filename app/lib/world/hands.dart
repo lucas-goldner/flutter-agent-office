@@ -23,6 +23,9 @@ import 'package:vector_math/vector_math.dart' as vm;
 import 'character.dart'
     show cigarette, coffeeMug, dragCurve, emoteEnvelope, kReachTime, kSmokeCycle, reachCurve, setEmissive;
 import 'costumes.dart';
+import 'package:office_shared/protocol.dart' show CarriedIssue;
+
+import 'card.dart';
 import 'geo.dart';
 import 'toon.dart';
 
@@ -95,20 +98,8 @@ class Hands {
       ..rotation = euler(0, 0, 0.3)
       ..visible = false;
     _right.group.add(_thumbUp);
-    // Tipped back, so you look down onto its front (the card in it is the board's, see [cardHolder]).
-    cardHolder
-      ..rotation = euler(-0.35, 0)
-      ..visible = false;
-    root.add(cardHolder);
     setLayers(root, layer);
   }
-
-  /// Where an issue card you carry goes, held low in front of you in both hands (see [setCarrying]).
-  final Node cardHolder = Node(name: 'card-holder');
-  bool _carrying = false;
-
-  /// 0 → 1 as the card comes up into view and the hands close in on it.
-  double _carryK = 0;
 
   /// The emote your character is doing, and how far into it (see Person.emote).
   Emote? _emote;
@@ -124,18 +115,6 @@ class Hands {
   /// An undead warlock's hands for Halloween, mittens for Christmas (see [setCostume]).
   HolidayTheme? _costume;
   late final PreprocessedMaterial _rags = toonUnique(hex('#24123a'))..doubleSided = true;
-
-  /// An issue card in both hands, or none: the hands close in on its corners. Put what's held in
-  /// [cardHolder]; the mug waits while the hands are full.
-  void setCarrying(bool on) {
-    if (on == _carrying) return;
-    _carrying = on;
-    if (on) _carryK = 0;
-    cardHolder.visible = on;
-    holdMug(_wantsMug);
-  }
-
-  bool get carrying => _carrying;
 
   /// Your hands' half of an emote: a wave, a thumbs up, a clap… in front of your eyes.
   void emote(Emote e) {
@@ -300,13 +279,35 @@ class Hands {
   /// Reach out with the right hand.
   void reach() => _reachT = 0;
 
-  /// A mug of coffee in the left hand, or not.
+  /// A mug of coffee in the left hand, or not. It waits while the hands are full (a card).
   void holdMug(bool on) {
     _wantsMug = on;
-    _mug.visible = on && !_carrying;
+    _mug.visible = on && !(_card?.held ?? false);
   }
 
   bool _wantsMug = false;
+
+  /// An issue card off the board, held low in front of you in both hands, tipped back so you look
+  /// down onto its front.
+  Node? _cardHolder;
+  HeldCard? _card;
+
+  /// 0 → 1 as the card comes up into view and the hands close in on it.
+  double _carryK = 0;
+
+  /// An issue card in both hands, or none (null). The mug waits while the hands are full.
+  void carry(CarriedIssue? card) {
+    if (card == null && _card == null) return;
+    _card ??= () {
+      final holder = _cardHolder = Node(name: 'card-holder')..rotation = euler(-0.35, 0, 0);
+      root.add(holder);
+      return HeldCard(holder, 0.24, onAdd: (n) => setLayers(n, layer));
+    }();
+    final was = _card!.held;
+    _card!.set(card);
+    if (!was) _carryK = 0;
+    holdMug(_wantsMug);
+  }
 
   /// Raise the mug for a sip, once the right hand is back from the coffee machine.
   void sip() => _sipT = -kReachTime * 0.6;
@@ -379,9 +380,9 @@ class Hands {
       if (_sipT! >= _sipTime) _sipT = null;
     }
     final shake = s.jitter * 0.004;
-    _carryK += ((_carrying ? 1 : 0) - _carryK) * math.min(1, dt * 7);
+    final held = _card?.held ?? false;
+    _carryK += ((held ? 1 : 0) - _carryK) * math.min(1, dt * 7);
     final carry = _carryK;
-
     final pose = <int, (vm.Vector3, vm.Vector3)>{};
     for (final (arm, side) in [(_right, 1), (_left, -1)]) {
       final p = arm.base.clone();
@@ -399,6 +400,12 @@ class Hands {
       r.z += side * 0.35 * carry;
       pose[side] = (p, r);
     }
+    // The card rides along with the hands, coming up from below as you take it.
+    _cardHolder?.position = vm.Vector3(
+      _sway.x + step * 0.008,
+      _sway.y + breathe + bounce + _air * 0.05 - 0.115 - 0.3 * (1 - carry),
+      -0.5,
+    );
     // The reach: the right hand jabs out toward the crosshair, the left pulls back a little.
     final (rp, rr) = pose[1]!;
     final (lp, lr) = pose[-1]!;
@@ -426,12 +433,6 @@ class Hands {
       _emberGlow += ((d > 0.9 ? 1.4 : 0.3) - _emberGlow) * math.min(1, dt * 6);
       setEmissive(_ember, hex('#ff3b00'), _emberGlow);
     }
-    // The card rides along with the hands, coming up from below as you take it.
-    cardHolder.position = vm.Vector3(
-      _sway.x + step * 0.008,
-      _sway.y + breathe + bounce + _air * 0.05 - 0.115 - 0.3 * (1 - carry),
-      -0.5,
-    );
     if (_emote != null) _emoteStep(dt, rp, rr, lp, lr);
     if (_costume == HolidayTheme.halloween) _burn(t);
     _right.group

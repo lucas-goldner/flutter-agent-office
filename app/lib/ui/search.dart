@@ -36,7 +36,7 @@ Future<SearchResults> _search(OfficeScope scope, String q) async {
 /// Opens the 🔎 window on the last search, or on [query] when given.
 ModalHandle openSearch(OfficeScope scope, {String? query}) {
   if (query != null) _lastQuery = query;
-  return ModalStack.instance.show((m) => _SearchWindow(modal: m, scope: scope));
+  return ModalStack.instance.show((m) => _SearchWindow(modal: m, scope: scope))..doing = '🔎 searching the office';
 }
 
 class _SearchWindow extends StatefulWidget {
