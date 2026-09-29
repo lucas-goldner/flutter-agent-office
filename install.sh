@@ -3,9 +3,12 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/AgentSystemLabs/agent-office/main/install.sh | bash
 #
-# Anything after `bash -s --` goes to the office, e.g. a project directory and a port:
+# Anything after `bash -s --` goes to the office, e.g. a port:
 #
-#   curl -fsSL https://raw.githubusercontent.com/AgentSystemLabs/agent-office/main/install.sh | bash -s -- . --port 4700
+#   curl -fsSL https://raw.githubusercontent.com/AgentSystemLabs/agent-office/main/install.sh | bash -s -- --port 4700
+#
+# The first time the office starts in a terminal it asks where to clone your projects, signs the
+# GitHub CLI in if it isn't, and lets you pick your first repository to clone as a floor.
 #
 # A release is one executable plus the web client, built for Linux and macOS on x64 and arm64; no
 # Node.js needed. Releases go in ~/.local/share/agent-office (versions/<tag>, with `current` linking
@@ -258,6 +261,9 @@ main() {
     return 0
   fi
   step "Starting Agent Office $tag"
+  # Piped into bash (curl … | bash), stdin is the rest of this script: give the office the terminal
+  # instead, so its first-run walkthrough can ask where projects go and which one to start with.
+  if [ ! -t 0 ] && [ -t 1 ] && (: </dev/tty) 2>/dev/null; then exec "$exe" "$@" </dev/tty; fi
   exec "$exe" "$@"
 }
 

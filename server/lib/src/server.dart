@@ -346,8 +346,9 @@ class Office {
     this.publicDir,
     this.hookPort,
     this._floors,
-    this.resolvedAgent,
-  );
+    this.resolvedAgent, {
+    required String Function() projectsDir,
+  }) : _projectsDir = projectsDir;
 
   final RelicServer _server;
   final Future<void> Function(bool keep) _shutdown;
@@ -355,6 +356,10 @@ class Office {
   final String publicDir;
   final int hookPort;
   final Map<String, Floor> _floors;
+  final String Function() _projectsDir;
+
+  /// Where new floors are cloned now (⚙️ Settings can move it).
+  String projectsDir() => _projectsDir();
 
   /// The configured agent's full path, or null when only the login shell can find it.
   final String? resolvedAgent;
@@ -2258,7 +2263,16 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     await hookServer.close(force: true);
   };
 
-  return Office._(server, shutdown, accounts, clientDir, hookPort, floors, resolveCommand(cfg.agentCmd));
+  return Office._(
+    server,
+    shutdown,
+    accounts,
+    clientDir,
+    hookPort,
+    floors,
+    resolveCommand(cfg.agentCmd),
+    projectsDir: () => building.projectsDir,
+  );
 }
 
 String _message(Object err) => switch (err) {

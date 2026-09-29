@@ -1,13 +1,17 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:path/path.dart' as p;
+
 import 'package:agent_office_server/src/accounts.dart' show accountsCommand;
+import 'package:agent_office_server/src/building.dart' show tildify;
 import 'package:agent_office_server/src/config.dart';
 import 'package:agent_office_server/src/hook.dart' show runHook;
 import 'package:agent_office_server/src/prune.dart' show prune;
 import 'package:agent_office_server/src/ptyhost.dart';
 import 'package:agent_office_server/src/ptys.dart' show ptyHostCommand;
 import 'package:agent_office_server/src/server.dart';
+import 'package:agent_office_server/src/setup.dart' show interactive, setupCommand, welcome;
 import 'package:agent_office_server/src/upgrade.dart' show Upgrader;
 
 /// The office's one executable: the CLI and the server, plus the PTY host and the hook helper the
@@ -18,6 +22,7 @@ Future<void> main(List<String> argv) async {
   if (cmd == 'hook') return _exit(await runHook(argv.sublist(1)));
   if (cmd == 'prune') return _exit(await prune(argv.sublist(1)));
   if (cmd == 'accounts') return _exit(accountsCommand(argv.sublist(1)));
+  if (cmd == 'setup') return _exit(await setupCommand(argv.sublist(1)));
   if (cmd == '--version') {
     // Without the environment, the upgrader only works out the version (it never checks GitHub).
     stdout.writeln(
@@ -36,6 +41,10 @@ Future<void> main(List<String> argv) async {
     stderr.writeln('agent-office: ${e.message}');
     return _exit(1);
   }
+
+  final atTerminal = interactive();
+  // A new office started in a terminal: where projects go, GitHub, and the first floor, before it opens.
+  if (cfg.project == null && atTerminal) await welcome(cfg);
 
   // Last line of defense: one bad request must never take down every running worker.
   runZonedGuarded(() => _serve(cfg), (err, st) => stderr.writeln('agent-office: unhandled error $err\n$st'));
@@ -93,7 +102,7 @@ Future<void> _serve(Config cfg) async {
 
   String floorsLine() {
     final floors = office.floors();
-    final where = 'new ones are cloned into ${cfg.projectsDir}';
+    final where = 'new ones are cloned into ${tildify(office.projectsDir())}';
     if (floors.isEmpty) return '🛗 no floors yet — ride the elevator in the office to add a project ($where)';
     return '🛗 ${floors.length} floor${floors.length == 1 ? '' : 's'}: ${floors.map((f) => f.def.name).join(', ')} ($where)';
   }
@@ -113,10 +122,12 @@ Future<void> _serve(Config cfg) async {
   }
 
   final agent = office.resolvedAgent;
+  // Started in a project that's still one of the floors (it can be taken off like any other).
+  final local = cfg.project != null && office.floors().any((f) => p.normalize(p.absolute(f.def.dir)) == cfg.project);
   stdout.writeln(
     '''
 
-  🏢  agent-office is open${cfg.project != null ? ' for ${cfg.project}' : ''}
+  🏢  agent-office is open${local ? ' for ${cfg.project}' : ''}
 
   ${floorsLine()}
 
