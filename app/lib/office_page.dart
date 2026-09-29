@@ -208,6 +208,17 @@ class _OfficePageState extends State<OfficePage> {
                     ),
                   ),
                 ),
+                // A floor blown up under you: the white-hot flash.
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: ValueListenableBuilder<double>(
+                      valueListenable: c.flash,
+                      builder: (context, v, _) => v <= 0
+                          ? const SizedBox.shrink()
+                          : ColoredBox(color: const Color(0xFFFFF4D6).withValues(alpha: v * 0.9)),
+                    ),
+                  ),
+                ),
                 Positioned.fill(
                   child: Hud(
                     controller: c.hud,

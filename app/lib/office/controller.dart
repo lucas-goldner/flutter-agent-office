@@ -76,6 +76,7 @@ import '../world/sky_view.dart';
 import '../world/smoke.dart';
 import '../world/space.dart';
 import '../world/toon.dart';
+import 'blast.dart';
 import 'hanging.dart';
 
 /// How close (meters) you stop a worker jumping, and how far you go before it starts again.
@@ -173,6 +174,13 @@ class OfficeController implements OfficeActions {
   final ValueNotifier<bool> hanging = ValueNotifier(false);
   final ValueNotifier<Color> sky = ValueNotifier(const Color(0xFFBFE3FF));
   final ValueNotifier<bool> fade = ValueNotifier(false);
+
+  /// The white flash of a floor being blown up under you, 0-1 (see [Blast]).
+  final ValueNotifier<double> flash = ValueNotifier(0);
+  final Blast blast = Blast();
+
+  /// Messages held back while the floor you're on blows up, so the ride down waits for the boom.
+  List<ServerMsg>? _held;
   late final HudController hud = HudController(
     HudCallbacks(
       onElevator: showElevator,
@@ -413,6 +421,9 @@ class OfficeController implements OfficeActions {
   // ---- Messages ---------------------------------------------------------------------------------
 
   void _onMessage(ServerMsg msg) {
+    final held = _held;
+    if (held != null && msg is! WelcomeMsg) return held.add(msg);
+    if (msg is FloorsMsg && floorBlownUp(store.floor, msg.floors)) _blowUp();
     if (msg is WelcomeMsg) voiceRoom.beforeWelcome();
     if (msg is WelcomeMsg || msg is FloorEnterMsg) departures.clear();
     if (msg is WorkerRemoveMsg) _sentHome.add(msg.workerId);
@@ -771,6 +782,42 @@ class OfficeController implements OfficeActions {
       Timer(const Duration(milliseconds: 320), () {
         _placeInCar(inside ? (x: player.pos.x, z: player.pos.z) : null);
         net.send(FloorGoCmd(floorId));
+      });
+    });
+  }
+
+  /// Someone blew the floor you're on off the building (💣 in the elevator): a flash, smoke and
+  /// debris and the screen shaking, then the lights go down and you ride to the next floor.
+  void _blowUp() {
+    if (_held != null) return;
+    _held = [];
+    ModalStack.instance.closeAll();
+    hanger.cancel();
+    if (player.seat != null) standUp();
+    player.enabled = false;
+    player.input.clear();
+    // Out in front of you, where you'll see it.
+    final fwd = (player.camTarget - player.camPos)
+      ..y = 0
+      ..normalize();
+    final at = vm.Vector3(player.pos.x, 0.2, player.pos.z) + fwd * 5;
+    blast.start();
+    smoke.plume(at);
+    confetti.burst(at.x, at.y + 0.5, at.z, 90, 1.4);
+    sound.thunder(0, 1);
+    Timer(Duration(milliseconds: (Blast.ride * 1000).round()), () {
+      fade.value = true;
+      Timer(const Duration(milliseconds: 350), () {
+        final msgs = _held ?? const [];
+        _held = null;
+        for (final m in msgs) {
+          _onMessage(m);
+        }
+        // Nothing came (no next floor to go to, or the office is gone): back as you were.
+        if (!msgs.any((m) => m is FloorEnterMsg)) {
+          fade.value = false;
+          player.enabled = !ModalStack.instance.open;
+        }
       });
     });
   }
@@ -1803,10 +1850,13 @@ class OfficeController implements OfficeActions {
     // In first person you are the camera; in third, hide yourself when it's zoomed in right behind your head.
     me.root.visible =
         !firstPerson && player.camPos.distanceTo(vm.Vector3(player.pos.x, player.pos.y + 1.3, player.pos.z)) > 1.5;
+    blast.update(dt);
+    flash.value = blast.flash;
+    final jolt = blast.shake();
     camera = PerspectiveCamera(
       fovRadiansY: 55 * math.pi / 180,
-      position: toEngine(player.camPos),
-      target: toEngine(player.camTarget),
+      position: toEngine(player.camPos + jolt),
+      target: toEngine(player.camTarget + jolt * 0.5),
       fovNear: 0.1,
       fovFar: 200,
     );
