@@ -208,8 +208,9 @@ void paintMeetingSign(Canvas canvas, MeetingState state) {
   if (m.status == MeetingStatus.running) {
     y = lines(meetingStage(m), g.style(32, weight: FontWeight.w800, color: light), y, 3, 40);
     final who = speaking(m);
-    if (who.isNotEmpty)
+    if (who.isNotEmpty) {
       lines('💬 ${who.join(', ')}', g.style(30, weight: FontWeight.w700, color: css('#bde0fe')), y + 8, 3, 38);
+    }
     // The budget, as a bar that fills up, and what's been spent.
     final f = math.min(1.0, m.tokens / math.max(1, m.budget));
     const barY = h - 118;
