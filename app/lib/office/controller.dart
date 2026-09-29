@@ -26,6 +26,7 @@ import 'package:office_shared/jukebox.dart';
 import 'package:office_shared/layout.dart' hide Elevator, Gong, Jukebox, Whiteboard;
 import 'package:office_shared/layout.dart' as lay show Elevator;
 import 'package:office_shared/protocol.dart';
+import 'package:office_shared/rooftop.dart' show roof;
 import 'package:office_shared/status.dart';
 import '../state/store.dart';
 import '../ui/ask.dart';
@@ -33,9 +34,11 @@ import '../ui/boards.dart';
 import '../ui/changes.dart';
 import '../ui/character.dart';
 import '../ui/elevator.dart';
+import '../ui/floormenu.dart';
 import '../ui/help.dart';
 import '../ui/hud.dart';
 import '../ui/jukebox.dart';
+import '../ui/menu_logic.dart' show waitingInOrder, waitingLabel;
 import '../ui/modal.dart';
 import '../ui/prompt.dart';
 import '../ui/provider.dart';
@@ -48,6 +51,7 @@ import '../ui/team.dart';
 import '../ui/accounts.dart';
 import '../ui/arcade.dart';
 import '../ui/terminal.dart';
+import '../ui/title.dart' show waitingElsewhere;
 import '../ui/upgrade.dart';
 import '../ui/whiteboard.dart';
 import '../ui/whiteboard_logic.dart' show othersDrawing, whiteboardHint;
@@ -189,7 +193,10 @@ class OfficeController implements OfficeActions {
       onHelp: openHelp,
       onOpenWorker: openWorkerTerminal,
       onEditProfile: editProfile,
+      onFloors: showFloors,
+      onTalk: talk,
     ),
+    prefs: HudPrefs(settings: settings, save: settings.save)..actions = hudActions(),
   );
 
   late final Office office;
@@ -342,6 +349,8 @@ class OfficeController implements OfficeActions {
       ..add(watchTabTitle(store))
       ..add(watchFloorsWaiting(store, ding: () => sound.ding(Ding.needsInput)));
     net.status.listen((up) => connected.value = up);
+    HardwareKeyboard.instance.addHandler(_onKeyUp);
+    _unsubscribe.add(() => HardwareKeyboard.instance.removeHandler(_onKeyUp));
     _messages = net.messages.listen(_onMessage);
 
     ready.value = true;
@@ -509,6 +518,241 @@ class OfficeController implements OfficeActions {
 
   @override
   void showElevator() => openElevator(scope, ride: ride);
+
+  // ---- The HUD: a few buttons on the top bar, everything else in the ☰ menu (#100) -------------
+
+  /// What the ☰ menu offers; any of them can be pinned to the top bar. Other parts of the office add
+  /// theirs here.
+  List<HudAction> hudActions() {
+    int open<T>(Iterable<T> xs, bool Function(T) f) => xs.where(f).length;
+    String? noMedia() => voice.value.available
+        ? null
+        : desktopApp
+        ? notInDesktopApp('Voice chat and screen sharing')
+        : 'Voice and screen sharing need HTTPS or localhost — use a TLS proxy, --self-signed, or an SSH tunnel';
+    List<WorkerInfo> waiting() => waitingInOrder(store.workers.values);
+    UpgradeState u() => store.upgrade;
+    return [
+      HudAction(
+        id: 'issues',
+        icon: '📌',
+        label: 'Issues',
+        section: HudSection.open,
+        count: () => open(store.issues.items, (i) => i.state == 'OPEN'),
+        run: () => openBoard(scope, BoardKind.issues),
+      ),
+      HudAction(
+        id: 'pulls',
+        icon: '🔀',
+        label: 'Pull requests',
+        section: HudSection.open,
+        count: () => open(store.pulls.items, (p) => p.state == 'OPEN'),
+        run: () => openBoard(scope, BoardKind.pulls),
+      ),
+      HudAction(
+        id: 'queue',
+        icon: '📋',
+        label: 'Task queue',
+        section: HudSection.open,
+        count: () => open(store.queue.tasks, (t) => t.status != TaskStatus.done),
+        title: () => 'Issues and tasks waiting for a worker',
+        run: showQueue,
+      ),
+      HudAction(
+        id: 'services',
+        icon: '🌐',
+        label: 'Services',
+        section: HudSection.open,
+        count: () => store.services.items.length,
+        title: () => 'Web servers the workers are running',
+        run: () => openServices(scope),
+      ),
+      HudAction(
+        id: 'whiteboard',
+        icon: '📝',
+        label: 'Whiteboard',
+        section: HudSection.open,
+        title: () => 'Draw together, live',
+        run: () => whiteboard.open(),
+      ),
+      HudAction(
+        id: 'search',
+        icon: '🔎',
+        label: 'Search',
+        section: HudSection.open,
+        key: '/',
+        title: () => 'Search the chat and every terminal',
+        run: showSearch,
+      ),
+      HudAction(
+        id: 'elevator',
+        icon: '🛗',
+        label: 'Elevator',
+        section: HudSection.open,
+        count: () => waitingElsewhere(store.floors, store.floor),
+        title: () => 'Ride to another project',
+        run: showElevator,
+      ),
+      // Up on the top bar while workers wait on someone (N does the same), next to the Workers button.
+      HudAction(
+        id: 'waiting',
+        icon: '🙋',
+        iconOf: () => waiting().any((w) => w.status == WorkerStatus.needsInput) ? '🙋' : '✅',
+        label: 'Next worker that needs you',
+        section: HudSection.open,
+        key: 'N',
+        shown: () => waiting().isNotEmpty,
+        status: () => waiting().isNotEmpty,
+        chip: () => waitingLabel(waiting()).replaceFirst(RegExp(r'^(🙋|✅) '), ''),
+        on: () => waiting().every((w) => w.status == WorkerStatus.done),
+        tone: () => waiting().any((w) => w.status == WorkerStatus.needsInput) ? HudTone.danger : null,
+        title: () => 'Go to the worker that has waited longest on someone (N)',
+        run: () {
+          final w = waiting().firstOrNull;
+          if (w != null) goToDesk(w.deskId);
+        },
+      ),
+      // In voice, V is push to talk, so leaving is only from here.
+      HudAction(
+        id: 'voice',
+        icon: '🎙️',
+        label: 'Join voice',
+        labelOf: () => voice.value.inVoice ? 'Leave voice' : 'Join voice',
+        section: HudSection.together,
+        keyOf: () => voice.value.inVoice ? null : 'V',
+        on: () => voice.value.inVoice,
+        blocked: noMedia,
+        run: () => voiceRoom.toggleVoice(pushToTalk: settings.pushToTalk),
+      ),
+      // While you're in voice, the top bar keeps the mute button handy. Muted is the usual with push
+      // to talk, so it doesn't stand out then.
+      HudAction(
+        id: 'mute',
+        icon: '🎙️',
+        iconOf: () => voice.value.muted ? '🔇' : '🎙️',
+        label: 'Mute',
+        labelOf: () => voice.value.muted ? 'Unmute' : 'Mute',
+        section: HudSection.together,
+        key: 'M',
+        shown: () => voice.value.inVoice,
+        status: () => voice.value.inVoice,
+        on: () => voice.value.inVoice,
+        tone: () => voice.value.muted && !settings.pushToTalk ? HudTone.danger : null,
+        title: () => voice.value.muted ? 'Muted: hold V to talk, or M to unmute' : 'Mute (M) · hold V to talk',
+        run: () => voiceRoom.toggleMute(),
+      ),
+      HudAction(
+        id: 'share',
+        icon: '🖥️',
+        label: 'Share screen',
+        labelOf: () => voice.value.sharing ? 'Stop sharing' : 'Share screen',
+        section: HudSection.together,
+        on: () => voice.value.sharing,
+        status: () => voice.value.sharing,
+        chip: () => 'Sharing',
+        blocked: noMedia,
+        run: () => voiceRoom.toggleShare(),
+      ),
+      HudAction(
+        id: 'decor',
+        icon: '🖼️',
+        label: 'Hang a picture',
+        labelOf: () => hanging.value ? 'Stop hanging the picture' : 'Hang a picture',
+        section: HudSection.together,
+        key: 'F',
+        on: () => hanging.value,
+        status: () => hanging.value,
+        run: () => hanger.active ? hanger.cancel() : hanger.start(),
+      ),
+      HudAction(
+        id: 'team',
+        icon: '👥',
+        label: 'Invite teammates',
+        section: HudSection.together,
+        shown: () => store.invites,
+        run: () => openTeam(scope),
+      ),
+      HudAction(
+        id: 'accounts',
+        icon: '🔑',
+        label: 'Accounts',
+        section: HudSection.together,
+        shown: () => store.me.admin,
+        title: () => 'Invite people, see who has an account, revoke them',
+        run: () => openAccounts(scope),
+      ),
+      HudAction(id: 'settings', icon: '⚙️', label: 'Settings', section: HudSection.office, run: showSettings),
+      HudAction(id: 'help', icon: '❓', label: 'Controls', section: HudSection.office, key: 'H', run: openHelp),
+      HudAction(
+        id: 'upgrade',
+        icon: '⬆️',
+        label: 'Upgrade the office',
+        labelOf: () => u().phase == UpgradePhase.building
+            ? 'Upgrading…'
+            : u().latest != null
+            ? 'Update the office'
+            : 'Upgrade the office',
+        section: HudSection.office,
+        shown: () => u().available,
+        // A new version, or one being built, gets a place on the top bar until it's in.
+        status: () => u().latest != null || u().phase == UpgradePhase.building,
+        chip: () => u().phase == UpgradePhase.building ? 'Upgrading…' : 'Update',
+        tone: () => u().latest != null && u().phase != UpgradePhase.building ? HudTone.primary : null,
+        title: () => u().latest != null ? 'New version: ${u().latest!.subject}' : 'Upgrade the office',
+        run: () => openUpgrade(scope),
+      ),
+    ];
+  }
+
+  /// The project in the corner: the floor list under it, or the elevator while there's no floor yet.
+  void showFloors(Rect? anchor) {
+    if (store.floor == null) return showElevator();
+    toggleFloorMenu(
+      store,
+      FloorMenuOptions(go: switchFloor, elevator: showElevator, roof: () => ride(roof)),
+      anchor: anchor,
+    );
+  }
+
+  /// Straight to another floor from the floor list, to the same spot in the office you're in now.
+  void switchFloor(String floorId) {
+    // The roof isn't laid out like a floor: to and from it, it's the elevator.
+    if (store.floor == roof || floorId == roof) return ride(floorId);
+    if (_riding != null || floorId == store.floor) return;
+    ModalStack.instance.closeAll();
+    hanger.cancel();
+    if (player.seat != null) standUp();
+    _riding = (floor: floorId, timer: Timer(const Duration(seconds: 10), _rideFailed));
+    player.enabled = false;
+    player.input.clear();
+    fade.value = true;
+    final p = player.pos;
+    Timer(
+      const Duration(milliseconds: 170),
+      () => net.send(FloorGoCmd(floorId, at: (x: p.x, y: p.y, z: p.z, rotY: player.facing))),
+    );
+  }
+
+  /// V: joins voice, and in it, push to talk: the mic is on while it's held (see [_onKeyUp]).
+  /// False when there's nothing to do with it (so it isn't eaten).
+  bool talk(bool down) {
+    if (!down) {
+      voiceRoom.stopTalking();
+      return true;
+    }
+    if (voice.value.inVoice) {
+      voiceRoom.startTalking();
+    } else {
+      voiceRoom.joinVoice(pushToTalk: settings.pushToTalk);
+    }
+    return true;
+  }
+
+  /// Letting go of V mutes you again, wherever the key comes up: a window or a terminal opened meanwhile.
+  bool _onKeyUp(KeyEvent e) {
+    if (e is KeyUpEvent && e.physicalKey == PhysicalKeyboardKey.keyV) talk(false);
+    return false;
+  }
 
   /// Rides the elevator to another floor. From outside the car, you step in while the lights are down.
   @override
@@ -948,7 +1192,10 @@ class OfficeController implements OfficeActions {
     scope,
     settings: settings,
     onChange: (s) {
+      // Switching to push to talk mutes you now; back to an open mic turns it on.
+      final talkChanged = s.pushToTalk != settings.pushToTalk;
       settings
+        ..pushToTalk = s.pushToTalk
         ..view = s.view
         ..volume = s.volume
         ..muted = s.muted
@@ -956,6 +1203,7 @@ class OfficeController implements OfficeActions {
         ..musicMuted = s.musicMuted
         ..notify = s.notify
         ..save();
+      if (talkChanged) voiceRoom.setMuted(settings.pushToTalk);
       player.setView(settings.view);
       sound.setVolume(settings.volume, settings.muted);
       sound.setMusicVolume(settings.music, settings.musicMuted);
@@ -1674,7 +1922,8 @@ class OfficeController implements OfficeActions {
     }
     _renderHint();
     final show = firstPerson && !ModalStack.instance.open;
-    final next = CrosshairState(show: show, on: _target != null, free: show && lockAvailable && !pointerLocked);
+    final free = show && lockAvailable && !pointerLocked;
+    final next = CrosshairState(show: show, on: _target != null, free: free, relookOnKey: free && relookOnKey);
     if (next != crosshair.value) crosshair.value = next;
   }
 
@@ -1691,6 +1940,10 @@ class OfficeController implements OfficeActions {
   /// Set by the page: whether the mouse can be captured for looking around, and whether it is.
   bool lockAvailable = true;
   bool pointerLocked = false;
+
+  /// Set by the page when closing the last window may not have given you the mouse back: the next
+  /// key you press takes it instead (a key counts for the browser, where the Esc that closed it doesn't).
+  bool relookOnKey = false;
 
   static double _yawOf(vm.Quaternion q) {
     final f = q.rotated(vm.Vector3(0, 0, 1));

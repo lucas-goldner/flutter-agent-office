@@ -227,16 +227,23 @@ class HintBar extends StatelessWidget {
 /// something you can use; `free` when the mouse isn't captured ("Click to look around").
 @immutable
 class CrosshairState {
-  const CrosshairState({this.show = false, this.on = false, this.free = false});
+  const CrosshairState({this.show = false, this.on = false, this.free = false, this.relookOnKey = false});
   final bool show;
   final bool on;
   final bool free;
 
+  /// Closing a window may not have given the mouse back, so the next key you press takes it.
+  final bool relookOnKey;
+
   @override
   bool operator ==(Object other) =>
-      other is CrosshairState && other.show == show && other.on == on && other.free == free;
+      other is CrosshairState &&
+      other.show == show &&
+      other.on == on &&
+      other.free == free &&
+      other.relookOnKey == relookOnKey;
   @override
-  int get hashCode => Object.hash(show, on, free);
+  int get hashCode => Object.hash(show, on, free, relookOnKey);
 }
 
 class Crosshair extends StatelessWidget {
@@ -285,7 +292,10 @@ class Crosshair extends StatelessWidget {
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                       decoration: BoxDecoration(color: Swatch.ink, borderRadius: BorderRadius.circular(10)),
-                      child: Text('Click to look around', style: heavy(13, color: Swatch.paper)),
+                      child: Text(
+                        state.relookOnKey ? 'Press a key or click to look around' : 'Click to look around',
+                        style: heavy(13, color: Swatch.paper),
+                      ),
                     ),
                   ),
                 ),
@@ -405,11 +415,29 @@ class _CaffeineMeterState extends State<CaffeineMeter> {
 
 // ---- The chat log --------------------------------------------------------------------------------
 
-/// The last 60 lines of chat, newest at the bottom (#chat-log).
+/// How long a chat line stays up before it fades away (see [ChatLog.fade]).
+const Duration kChatLinger = Duration(seconds: 12);
+
+/// When this page first showed each line.
+final Expando<int> _chatSeen = Expando('chat seen');
+
+/// The lines still up at [now] (ms since 1970): the ones first shown less than [kChatLinger] ago.
+/// Lines shown for the first time now are stamped with it.
+List<ChatLine> lingering(List<ChatLine> lines, int now) => [
+  for (final c in lines)
+    if (now - (_chatSeen[c] ??= now) < kChatLinger.inMilliseconds) c,
+];
+
+/// The last 60 lines of chat, newest at the bottom (#chat-log). With [fade], lines go once they've
+/// been up a while.
 class ChatLog extends StatefulWidget {
-  const ChatLog(this.lines, {super.key});
+  const ChatLog(this.lines, {super.key, this.fade = false, this.bottomGap = 0});
 
   final List<ChatLine> lines;
+  final bool fade;
+
+  /// Space under it, only while it shows anything.
+  final double bottomGap;
 
   @override
   State<ChatLog> createState() => _ChatLogState();
@@ -417,6 +445,7 @@ class ChatLog extends StatefulWidget {
 
 class _ChatLogState extends State<ChatLog> {
   final _scroll = ScrollController();
+  Timer? _next;
 
   @override
   void didUpdateWidget(ChatLog old) {
@@ -427,25 +456,40 @@ class _ChatLogState extends State<ChatLog> {
 
   @override
   void dispose() {
+    _next?.cancel();
     _scroll.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final lines = widget.lines.length > 60 ? widget.lines.sublist(widget.lines.length - 60) : widget.lines;
+    var lines = widget.lines.length > 60 ? widget.lines.sublist(widget.lines.length - 60) : widget.lines;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final up = lingering(lines, now);
+    _next?.cancel();
+    if (up.isNotEmpty) {
+      // Drawn again when the oldest line still up is due to go.
+      final due = _chatSeen[up.first]! + kChatLinger.inMilliseconds - now;
+      _next = Timer(Duration(milliseconds: due.clamp(0, kChatLinger.inMilliseconds) + 50), () {
+        if (mounted) setState(() {});
+      });
+    }
+    if (widget.fade) lines = up;
     if (lines.isEmpty) return const SizedBox.shrink();
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxHeight: 160),
-      // Reversed, so it stays scrolled to the newest line whatever the lines measure.
-      child: ListView.separated(
-        controller: _scroll,
-        reverse: true,
-        shrinkWrap: true,
-        padding: const EdgeInsets.symmetric(horizontal: 4),
-        itemCount: lines.length,
-        separatorBuilder: (_, _) => const SizedBox(height: 2),
-        itemBuilder: (context, i) => _line(lines[lines.length - 1 - i]),
+    return Padding(
+      padding: EdgeInsets.only(bottom: widget.bottomGap),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxHeight: 160),
+        // Reversed, so it stays scrolled to the newest line whatever the lines measure.
+        child: ListView.separated(
+          controller: _scroll,
+          reverse: true,
+          shrinkWrap: true,
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          itemCount: lines.length,
+          separatorBuilder: (_, _) => const SizedBox(height: 2),
+          itemBuilder: (context, i) => _line(lines[lines.length - 1 - i]),
+        ),
       ),
     );
   }

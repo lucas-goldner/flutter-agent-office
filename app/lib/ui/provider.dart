@@ -36,6 +36,41 @@ AgentProvider resolvedProvider(AgentProvider? provider, ProjectInfo? project) {
 
 String providerLabel(AgentProvider? provider, ProjectInfo? project) => kProviderLabel[resolvedProvider(provider, project)]!;
 
+const Map<String, String> kClaudeModelLabel = {'fable': 'Fable', 'opus': 'Opus', 'sonnet': 'Sonnet', 'haiku': 'Haiku'};
+
+const Map<AgentEffort, String> kEffortLabel = {
+  AgentEffort.low: 'Low',
+  AgentEffort.medium: 'Medium',
+  AgentEffort.high: 'High',
+  AgentEffort.xhigh: 'Extra high',
+  AgentEffort.max: 'Max',
+};
+
+/// A short badge for the task card / sidebar: "Opus", "Opus · High", or the raw OpenCode model id.
+String? modelBadge(AgentProvider? provider, String? model, AgentEffort? effort) {
+  if (model == null && effort == null) return null;
+  if (provider == AgentProvider.claude) {
+    final parts = [?kClaudeModelLabel[model], if (effort != null) kEffortLabel[effort]!];
+    return parts.isEmpty ? null : parts.join(' · ');
+  }
+  return model;
+}
+
+/// The worker a new one starts on unless someone picks another: the one set in ⚙️ Settings
+/// ([picked], from store.prompts.agent), or the office's --agent on its own default model.
+AgentChoice officeChoice(ProjectInfo? project, PromptsAgent? picked) {
+  if (picked != null && supportedProviders(project).contains(picked.provider)) {
+    return AgentChoice(provider: picked.provider, model: picked.model, effort: picked.effort);
+  }
+  return AgentChoice(provider: resolvedProvider(project?.defaultProvider, project));
+}
+
+/// "Claude Code · Opus · High", "Claude Code", "OpenCode · anthropic/claude-sonnet-4".
+String choiceLabel(AgentChoice c) {
+  final badge = modelBadge(c.provider, c.model, c.effort);
+  return badge == null ? kProviderLabel[c.provider]! : '${kProviderLabel[c.provider]} · $badge';
+}
+
 /// The same names, under the HUD's older spelling.
 const Map<AgentProvider, String> providerNames = kProviderLabel;
 
