@@ -204,8 +204,10 @@ void main() {
     bob.send({'t': 'floor.projectsDir', 'dir': 'relative'});
     await bob.next((m) => m['t'] == 'toast' && m['text'] == 'Use a full path, like ~/Workspace');
     bob.send({'t': 'floor.remove', 'floor': 'other'});
-    final floors = await ada.next((m) => m['t'] == 'floors');
-    expect([for (final f in floors['floors'] as List) f['id']], ['project']);
+    // (Earlier moves may still send a list with it on; the one without it comes first after the removal.)
+    List<Object?> ids(Map<String, dynamic> m) => [for (final f in m['floors'] as List) (f as Map)['id']];
+    final floors = await ada.next((m) => m['t'] == 'floors' && !ids(m).contains('other'));
+    expect(ids(floors), ['project']);
     expect((await ada.next((m) => m['t'] == 'floor.enter'))['floor'], 'project');
     await ada.next((m) => m['t'] == 'toast' && '${m['text']}'.contains('took other off the building'));
   });
