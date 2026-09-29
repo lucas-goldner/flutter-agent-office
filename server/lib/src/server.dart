@@ -26,6 +26,7 @@ import 'services.dart';
 import 'sky.dart';
 import 'static.dart';
 import 'team.dart';
+import 'theme.dart';
 import 'upgrade.dart';
 import 'usage.dart';
 import 'webhook.dart';
@@ -505,6 +506,9 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
 
   // Day, night and the weather outside the windows, the same for everyone.
   final sky = Sky(city: cfg.city, weather: cfg.weather, onChange: (state) => broadcast(SkyMsg(state)))..start();
+  // Halloween or Christmas all over the building, the same for everyone (⚙️ Settings). On 'auto' it
+  // goes by the calendar at the office, the sky's clock.
+  final themes = Themes(cfg.dataDir, () => sky.state.utcOffset, (state) => broadcast(ThemeMsg(state)))..start();
 
   // What the workers spend, all time and today, with the optional daily budget.
   final ledger = Ledger(
@@ -1751,6 +1755,19 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         if (floor == null || !floor.jukebox.stop(who)) break;
         jukeboxChanged(floor);
         toastFloor(floor, '🔇 $who turned the jukebox off');
+      case 'theme.set':
+        final pick = ThemePick.tryParse(msg['pick']);
+        if (pick == null || pick == themes.state().pick) break;
+        themes.set(pick, who);
+        final now = themes.state().active;
+        toastAll(switch (pick) {
+          ThemePick.halloween => '🎃 $who dressed the office up for Halloween',
+          ThemePick.christmas => '🎄 $who dressed the office up for Christmas',
+          ThemePick.off => '$who took the holiday decorations down',
+          ThemePick.auto =>
+            '📅 $who set the decorations to follow the calendar'
+                '${now != null ? " (it's ${now == HolidayTheme.halloween ? 'Halloween 🎃' : 'Christmas 🎄'} season)" : ''}',
+        });
       case 'ping':
         sendTo(c, PongMsg(at: _num(msg['at']), now: _now().toDouble()));
     }
@@ -1820,6 +1837,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         me: me,
         notify: webhook.state(),
         sky: sky.state,
+        theme: themes.state(),
         view: onRoof ? roofView() : floorView(floor),
       ),
     );
@@ -1920,6 +1938,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     upgrader.stop();
     webhook.stop();
     sky.stop();
+    themes.stop();
     limits.close();
     for (final f in floors.values) {
       await f.shutdown(true);
@@ -1948,6 +1967,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     services.stop();
     webhook.stop();
     sky.stop();
+    themes.stop();
     final closing = [for (final f in floors.values) f.shutdown(keep)];
     ledger.flush();
     limits.close();
