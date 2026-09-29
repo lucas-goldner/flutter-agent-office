@@ -6,9 +6,11 @@ import 'package:flutter/material.dart';
 
 import '../office_scope.dart';
 import 'package:office_shared/floors.dart';
+import 'package:office_shared/rooftop.dart' show roof;
 import 'package:office_shared/protocol.dart';
 import '../state/store.dart';
 import 'hud_parts.dart' show cssColor;
+import 'bar.dart' show RoofButton;
 import 'modal.dart';
 import 'theme.dart';
 import 'window_parts.dart';
@@ -61,7 +63,7 @@ class _ElevatorWindowState extends State<_ElevatorWindow> with ListenTo {
   @override
   void initState() {
     super.initState();
-    listenTo(store.topics(const [Topic.floors, Topic.repos, Topic.floor]), () => setState(() {}));
+    listenTo(store.topics(const [Topic.floors, Topic.repos, Topic.floor, Topic.peers]), () => setState(() {}));
     listenStream(widget.scope.net.messages, (msg) {
       if (msg is FloorAddedMsg) _onAdded(msg);
     });
@@ -145,6 +147,16 @@ class _ElevatorWindowState extends State<_ElevatorWindow> with ListenTo {
                     ? 'Every project is a floor of this building. Pick a floor to ride to, or add another project.'
                     : "Every project is a floor of this building, and it doesn't have any yet. Pick one of your repositories: the office clones it and it becomes the first floor.",
                 style: heavy(16, weight: FontWeight.w700),
+              ),
+            ),
+          // The roof, over every floor: the rooftop bar (see ui/bar.dart).
+          if (store.floors.any((f) => f.cloning != true))
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: RoofButton(
+                here: store.floor == roof,
+                people: store.peers.values.where((p) => p.floor == roof).length,
+                onRide: () => _go(roof),
               ),
             ),
           if (store.floors.isEmpty)

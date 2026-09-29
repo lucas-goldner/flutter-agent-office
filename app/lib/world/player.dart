@@ -8,6 +8,7 @@ import 'package:vector_math/vector_math.dart' as vm;
 
 import 'package:office_shared/layout.dart';
 import 'collider.dart';
+import 'drunk.dart' show drunkStagger, drunkSway;
 
 const double kRadius = 0.32;
 
@@ -74,6 +75,9 @@ class PlayerController {
 
   /// 0 (steady) to 1: how hard the view trembles after one coffee too many.
   double jitter = 0;
+
+  /// How drunk you are (see booze.dart): the view rolls and sways, and you stagger as you walk.
+  double drunk = 0;
   double _jitterT = 0;
 
   /// Where you're sitting, or null on your feet.
@@ -180,7 +184,9 @@ class PlayerController {
       ix /= len;
       iz /= len;
       // Camera-relative: "forward" is where the camera looks.
-      final sin = math.sin(camYaw), cos = math.cos(camYaw);
+      // Drunk, your feet wander off to one side and then the other.
+      final stagger = drunkStagger(drunk, _jitterT);
+      final sin = math.sin(camYaw + stagger), cos = math.cos(camYaw + stagger);
       final dx = ix * cos + iz * sin;
       final dz = -ix * sin + iz * cos;
       final speed = (k.run ? kRun : kWalk) * speedBoost;
@@ -230,7 +236,9 @@ class PlayerController {
   void updateCamera({bool snap = false}) {
     if (view == ViewMode.first) {
       camPos.setValues(pos.x, pos.y + kEyeHeight + _bob + stepOffset + _lift, pos.z);
-      final (yaw, pitch) = _shaken(camYaw, lookPitch);
+      final (shakenYaw, shakenPitch) = _shaken(camYaw, lookPitch);
+      final sway = drunkSway(drunk, _jitterT);
+      final yaw = shakenYaw + sway.yaw, pitch = shakenPitch + sway.pitch;
       // three.js's camera with rotation (pitch, yaw, 0) in YXZ order looks down -z turned by yaw.
       final dir = vm.Vector3(-math.sin(yaw) * math.cos(pitch), math.sin(pitch), -math.cos(yaw) * math.cos(pitch));
       camTarget.setFrom(camPos + dir);
@@ -285,7 +293,14 @@ class PlayerController {
       final (yaw, pitch) = _shaken(0, 0);
       camTarget.add(vm.Vector3(yaw, pitch, 0) * camDist);
     }
+    if (drunk > 0) {
+      final sway = drunkSway(drunk, _jitterT);
+      camTarget.add(vm.Vector3(sway.yaw, sway.pitch, 0) * camDist);
+    }
   }
+
+  /// Drunk, the view rolls this far (radians) about where you look: for the camera's up.
+  double get roll => drunkSway(drunk, _jitterT).roll;
 
   /// The jitters: the view trembles a little, on top of wherever you're looking.
   (double, double) _shaken(double yaw, double pitch) {

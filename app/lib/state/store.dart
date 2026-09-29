@@ -159,6 +159,12 @@ class Store {
   /// The office's clock minus ours, from the quickest ping (see 'pong'); for the jukebox.
   ({double offset, double rtt})? _clockSync;
 
+  /// The office's clock (ms since 1970) as near as this page can tell, which the DJ on the roof keeps time by.
+  double officeNow() {
+    final c = _clockSync;
+    return c != null ? nowMs() + c.offset : DateTime.now().millisecondsSinceEpoch.toDouble();
+  }
+
   /// The floor's whiteboard: the newest copy of every element anyone drew, deleted ones too.
   Map<String, WbElement> whiteboard = {};
   List<String> drawing = [];

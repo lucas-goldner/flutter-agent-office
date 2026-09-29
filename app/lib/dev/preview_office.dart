@@ -4,6 +4,7 @@
 //   ?cam=x,y,z&at=x,y,z&fov=degrees          a camera of your own (office coordinates, as the TS).
 //   &beanbags=1   brings every bean bag out;  &look=2  paints floor palette 2;
 //   &elevator=1   opens the elevator;          &juke=1  plays the jukebox.
+//   &roof=1       the rooftop bar instead, &dj=seconds into the DJ's set, &dark=0-1 how dark it is.
 
 import 'dart:convert';
 
@@ -15,7 +16,9 @@ import 'package:office_shared/floors.dart';
 import 'package:office_shared/layout.dart' as lay;
 import '../ui/theme.dart';
 import '../world/labels.dart';
+import '../audio/dnb_score.dart';
 import '../world/office/office.dart';
+import '../world/rooftop.dart';
 import '../world/toon.dart';
 
 void main() => runApp(const MaterialApp(debugShowCheckedModeBanner: false, home: PreviewOffice()));
@@ -61,6 +64,7 @@ class _PreviewOfficeState extends State<PreviewOffice> {
   final labels = LabelHub();
   late final PerspectiveCamera camera;
   Office? office;
+  Rooftop? roof;
   double t = 0;
 
   @override
@@ -89,6 +93,12 @@ class _PreviewOfficeState extends State<PreviewOffice> {
       if (q['elevator'] == '1') o.elevator.setOpen(true);
       if (q['juke'] == '1') o.jukebox.show(true, 'Lo-fi beats to code to');
       if (q['dump'] == '1') debugPrint('DUMP ${_dump(o)}');
+      if (q['roof'] == '1') {
+        final r = roof = buildRooftop(o.night, labels);
+        o.group.visible = false;
+        (scene.root.children.first).add(r.group);
+        debugPrint('rooftop built: ${r.colliders.length} colliders, ${r.interactables.length} interactables');
+      }
       if (mounted) setState(() => office = o);
     }();
   }
@@ -100,6 +110,8 @@ class _PreviewOfficeState extends State<PreviewOffice> {
     final eye = camera.position;
     o.update(t, dt, [vm.Vector3(eye.x, eye.y, -eye.z)]);
     o.jukebox.update(t, dt, 0.5);
+    final q = Uri.base.queryParameters;
+    roof?.update(t, dt, djFrame(t + (double.tryParse(q['dj'] ?? '') ?? 0)), RoofEnv(dark: double.tryParse(q['dark'] ?? '') ?? 0.3, motion: true));
   }
 
   @override

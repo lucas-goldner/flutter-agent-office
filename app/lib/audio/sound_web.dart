@@ -19,9 +19,10 @@ import 'dart:typed_data';
 import 'package:web/web.dart' as web;
 
 import 'package:office_shared/jukebox.dart' show jukeboxStream;
-import 'package:office_shared/layout.dart' show desks;
+import 'package:office_shared/layout.dart' show DjBooth, desks;
 import 'package:office_shared/protocol.dart' show GongWhy;
 import '../state/store.dart' show nowMs;
+import 'dnb.dart';
 import 'music.dart';
 import 'samples.dart';
 import 'sound_model.dart';
@@ -68,6 +69,13 @@ class OfficeSound implements DogSounds {
 
   /// Worker dings, which you still want to hear from another tab.
   late web.GainNode _alerts;
+
+  /// The office's own hum (the room and the fridge), left behind going up on the roof…
+  late web.GainNode _indoors;
+
+  /// …where there's wind, and the city far below.
+  late web.GainNode _outside;
+  bool _outdoors = false;
   late web.AnalyserNode _analyser;
   late _Buffers _buf;
   double _volume = 0.7;
@@ -98,6 +106,13 @@ class OfficeSound implements DogSounds {
   TunePlayer? _tune;
   web.HTMLAudioElement? _stream;
   Timer? _musicTimer;
+  // The DJ on the roof, through the speakers by the booth, at your music volume.
+  late web.PannerNode _djIn;
+  DjPlayer? _dj;
+
+  /// How far into the DJ's set it is (see djTime), while you're up there.
+  double Function()? _djClock;
+  Timer? _djTimer;
 
   /// A stream that won't play here.
   void Function(String text)? onMusicError;
@@ -110,6 +125,7 @@ class OfficeSound implements DogSounds {
     _unlisten?.call();
     _unlisten = null;
     _musicTimer?.cancel();
+    _djTimer?.cancel();
   }
 
   /// Volume is 0–1; muted silences everything without losing the level.
@@ -176,6 +192,11 @@ class OfficeSound implements DogSounds {
     _ambience.connect(_master);
     _alerts = ctx.createGain();
     _alerts.connect(_master);
+    _indoors = ctx.createGain();
+    _indoors.connect(_ambience);
+    _outside = ctx.createGain();
+    _outside.gain.value = 0;
+    _outside.connect(_ambience);
     // The jukebox skips the master (it has its own volume) and keeps playing while the tab is hidden.
     _musicIn = _panner(jukeboxAt, musicRef, musicRolloff);
     _musicTone = biquad(ctx, 'lowpass', 16000, 0.5);
@@ -185,12 +206,18 @@ class OfficeSound implements DogSounds {
     _musicMeter.fftSize = 2048;
     _musicIn.to(_musicTone).to(_musicBus).to(ctx.destination);
     _musicBus.connect(_musicMeter);
+    // Loud enough to hear from anywhere on the roof, and loudest on the dance floor.
+    _djIn = _panner(const Pos(DjBooth.x, 2.2, DjBooth.z), 7, 0.8);
+    _djIn.connect(_musicBus);
     _applyVolume();
     _applyMusicVolume();
     _applyJukebox();
     _applyVisibility();
     _startRoomTone();
     _startFridge();
+    _startWind();
+    _applyOutdoors();
+    _applyDj();
     final now = ctx.currentTime;
     _nextBird = now + _rand(5, 15);
     _nextCricket = now + _rand(2, 6);
@@ -258,11 +285,11 @@ class OfficeSound implements DogSounds {
     }
     _tickRain(now);
     if (now >= _nextPhone) {
-      _phone(now);
+      if (!_outdoors) _phone(now);
       _nextPhone = now + _rand(90, 240);
     }
     if (now >= _nextFidget) {
-      _fidget(now);
+      if (!_outdoors) _fidget(now);
       _nextFidget = now + _rand(10, 30);
     }
   }
@@ -473,7 +500,7 @@ class OfficeSound implements DogSounds {
     final rumble = _noise(_buf.brown, loop: true);
     final rumbleG = ctx.createGain();
     rumbleG.gain.value = 0.07;
-    rumble.to(biquad(ctx, 'lowpass', 300, 0.7)).to(rumbleG).to(_ambience);
+    rumble.to(biquad(ctx, 'lowpass', 300, 0.7)).to(rumbleG).to(_indoors);
     // ...and the air vents, swelling slowly.
     final air = _noise(_buf.white, loop: true);
     final airG = ctx.createGain();
@@ -483,7 +510,7 @@ class OfficeSound implements DogSounds {
     final swellDepth = ctx.createGain();
     swellDepth.gain.value = 0.004;
     swell.to(swellDepth).connect(airG.gain);
-    air.to(biquad(ctx, 'bandpass', 650, 0.5)).to(airG).to(_ambience);
+    air.to(biquad(ctx, 'bandpass', 650, 0.5)).to(airG).to(_indoors);
     rumble.start();
     air.start();
     swell.start();
@@ -504,7 +531,7 @@ class OfficeSound implements DogSounds {
     hum.connect(tone);
     whine.to(whineG).to(tone);
     final out = _panner(fridge, 1, 1.6);
-    tone.to(gain).to(out).to(_ambience);
+    tone.to(gain).to(out).to(_indoors);
     hum.start();
     whine.start();
     _fridge = _Fridge(gain, ctx.currentTime + _rand(3, 12));
@@ -517,7 +544,7 @@ class OfficeSound implements DogSounds {
     f.on = !f.on;
     f.gain.gain.setTargetAtTime(f.on ? 0.06 : 0, now, f.on ? 0.6 : 0.3);
     f.next = now + (f.on ? _rand(25, 50) : _rand(20, 45));
-    _play(_pick(_buf.steps), at: fridge, gain: 0.25, rate: 0.6, ref: 1, rolloff: 1.6);
+    _play(_pick(_buf.steps), at: fridge, gain: 0.25, rate: 0.6, ref: 1, rolloff: 1.6, dest: _indoors);
     _count(f.on ? 'fridgeOn' : 'fridgeOff');
   }
 
@@ -906,6 +933,159 @@ class OfficeSound implements DogSounds {
     final s = _stream;
     if (s == null) return;
     s.volume = streamVolume(_musicGain(), jukeboxDistance(_listener));
+  }
+
+  // ---- The roof ---------------------------------------------------------------------------------
+
+  /// Up on the roof (true), or inside on a floor: the office's hum gives way to the wind and the city.
+  void setOutdoors(bool on) {
+    _outdoors = on;
+    _applyOutdoors();
+  }
+
+  void _applyOutdoors() {
+    final ctx = _ctx;
+    if (ctx == null) return;
+    final now = ctx.currentTime;
+    _indoors.gain.setTargetAtTime(_outdoors ? 0 : 1, now, 0.3);
+    _outside.gain.setTargetAtTime(_outdoors ? 1 : 0, now, 0.3);
+  }
+
+  void _startWind() {
+    final ctx = _ctx!;
+    // Traffic, far below…
+    final city = _noise(_buf.brown, loop: true);
+    final cityG = ctx.createGain();
+    cityG.gain.value = 0.08;
+    city.to(biquad(ctx, 'lowpass', 420, 0.6)).to(cityG).to(_outside);
+    // …and the wind, gusting and dropping, whistling higher as it picks up.
+    final wind = _noise(_buf.white, loop: true);
+    final tone = biquad(ctx, 'bandpass', 520, 0.8);
+    final windG = ctx.createGain();
+    windG.gain.value = 0.012;
+    final gust = ctx.createOscillator();
+    gust.frequency.value = 0.08;
+    final gustDepth = ctx.createGain();
+    gustDepth.gain.value = 0.009;
+    gust.to(gustDepth).connect(windG.gain);
+    final pitch = ctx.createGain();
+    pitch.gain.value = 220;
+    gust.to(pitch).connect(tone.frequency);
+    wind.to(tone).to(windG).to(_outside);
+    city.start();
+    wind.start();
+    gust.start();
+  }
+
+  /// The DJ's set on the roof, [clock] saying how far into it it is (see djTime); null stops it.
+  void setDj(double Function()? clock) {
+    final was = _djClock != null;
+    _djClock = clock;
+    if (was != (clock != null)) _applyDj();
+  }
+
+  void _applyDj() {
+    final ctx = _ctx;
+    if (ctx == null) return;
+    if (_djClock == null) {
+      _dj?.stop();
+      _dj = null;
+      _djTimer?.cancel();
+      _djTimer = null;
+      return;
+    }
+    if (_dj != null) return;
+    final dj = _dj = DjPlayer(ctx, _djIn);
+    _count('dj');
+    // On a timer rather than every frame, so it carries on in a background tab.
+    void tick() {
+      final clock = _djClock;
+      if (clock != null) dj.tick(clock());
+    }
+
+    tick();
+    _djTimer = Timer.periodic(const Duration(milliseconds: 150), (_) => tick());
+  }
+
+  /// Someone at the DJ booth blew the air horn.
+  void horn() {
+    final dj = _dj;
+    if (dj == null) return;
+    dj.horn();
+    _count('horn');
+  }
+
+  /// A drink poured at the bar: ice into the glass, a splash, and a clink.
+  void pour(double x, double y, double z) {
+    final ctx = _ctx;
+    if (ctx == null) return;
+    _count('pour');
+    final out = _panner(Pos(x, y, z), 1.2, 1);
+    out.connect(_ambience);
+    final t0 = ctx.currentTime + 0.05;
+    // Ice cubes knocking in.
+    for (var i = 0; i < 3; i++) {
+      _clink(out, t0 + i * _rand(0.07, 0.12), _rand(2200, 3200), 0.05);
+    }
+    // The pour: filtered noise that rises in pitch as the glass fills.
+    final pour = _noise(_buf.white);
+    final tone = biquad(ctx, 'bandpass', 700, 1.4);
+    tone.frequency.setValueAtTime(700, t0 + 0.35);
+    tone.frequency.linearRampToValueAtTime(1500, t0 + 1.15);
+    final g = ctx.createGain();
+    envelope(g.gain, t0 + 0.35, const [(0.06, 0.09), (0.7, 0.08), (0.85, 0)]);
+    final wobble = _noise(_buf.gurgle, loop: true);
+    wobble.playbackRate.value = 4;
+    final amp = ctx.createGain();
+    amp.gain.value = 0.6;
+    wobble.connect(amp.gain);
+    pour.to(tone).to(amp).to(g).to(out);
+    pour.start(t0 + 0.35);
+    pour.stop(t0 + 1.3);
+    wobble.start(t0 + 0.35);
+    wobble.stop(t0 + 1.3);
+    // Slid across the bar to you.
+    _clink(out, t0 + 1.45, 3900, 0.08);
+  }
+
+  /// A glass rings: a couple of high partials, gone in a moment.
+  void _clink(web.AudioNode out, double when, double f, double level) {
+    final ctx = _ctx!;
+    for (final (mul, lvl) in const [(1.0, 1.0), (2.76, 0.4)]) {
+      final o = ctx.createOscillator();
+      o.frequency.value = f * mul;
+      final g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, when);
+      g.gain.exponentialRampToValueAtTime(level * lvl, when + 0.003);
+      g.gain.exponentialRampToValueAtTime(0.0001, when + 0.25);
+      o.to(g).to(out);
+      o.start(when);
+      o.stop(when + 0.3);
+    }
+  }
+
+  /// Hic! One too many.
+  void hiccup() {
+    final ctx = _ctx;
+    if (ctx == null) return;
+    _count('hiccup');
+    final t0 = ctx.currentTime + 0.02;
+    final o = ctx.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(260, t0);
+    o.frequency.exponentialRampToValueAtTime(420, t0 + 0.06);
+    final g = ctx.createGain();
+    envelope(g.gain, t0, const [(0.008, 0.12), (0.05, 0.08), (0.11, 0)]);
+    o.to(biquad(ctx, 'bandpass', 1100, 2.5)).to(g).to(_ambience);
+    o.start(t0);
+    o.stop(t0 + 0.14);
+    // The catch in the throat, just before it.
+    final n = _noise(_buf.white);
+    final ng = ctx.createGain();
+    envelope(ng.gain, t0 - 0.015, const [(0.004, 0.08), (0.02, 0)]);
+    n.to(biquad(ctx, 'bandpass', 1800, 1)).to(ng).to(_ambience);
+    n.start(t0 - 0.015);
+    n.stop(t0 + 0.02);
   }
 
   // ---- Plumbing --------------------------------------------------------------------------------

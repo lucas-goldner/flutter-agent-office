@@ -40,6 +40,15 @@ class OfficeSound implements DogSounds {
   void setJukebox(JukeboxPlay? play) {}
   void setMusicVolume(double volume, bool muted) {}
 
+  /// Up on the roof, or inside on a floor.
+  void setOutdoors(bool on) {}
+
+  /// The DJ's set on the roof (see djTime); null stops it. The lights still follow it (dnb_score.dart).
+  void setDj(double Function()? clock) {}
+  void horn() {}
+  void pour(double x, double y, double z) {}
+  void hiccup() {}
+
   /// The jukebox's lights stay still.
   double beat() => 0;
 }

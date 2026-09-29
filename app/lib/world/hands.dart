@@ -18,7 +18,10 @@ import 'dart:math' as math;
 import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
+import 'package:office_shared/rooftop.dart' show Drink, DrinkId;
+
 import 'character.dart' show cigarette, coffeeMug, dragCurve, kReachTime, kSmokeCycle, reachCurve, setEmissive;
+import 'drinks.dart' show drinkGlass;
 import 'geo.dart';
 import 'toon.dart';
 
@@ -88,6 +91,10 @@ class Hands {
   late final _Arm _left;
   double _reachT = -1;
   late final Node _mug;
+  bool _wantsMug = false;
+
+  /// A drink from the rooftop bar, held where the mug goes.
+  ({DrinkId id, Node node})? _glass;
 
   /// Seconds into a sip (negative while it waits for the reach to finish), or null.
   double? _sipT;
@@ -165,7 +172,26 @@ class Hands {
   void reach() => _reachT = 0;
 
   /// A mug of coffee in the left hand, or not.
-  void holdMug(bool on) => _mug.visible = on;
+  void holdMug(bool on) {
+    _wantsMug = on;
+    _mug.visible = on && _glass == null;
+  }
+
+  /// A drink from the rooftop bar in the left hand, where the mug goes (and in its place), or none (null).
+  void holdDrink(Drink? d) {
+    if (d?.id == _glass?.id) return;
+    _glass?.node.detach();
+    _glass = null;
+    if (d != null) {
+      final node = drinkGlass(d)
+        ..position = vm.Vector3(0.09, -0.035, -0.03)
+        ..rotation = euler(_left.baseRot.x, _left.baseRot.y, _left.baseRot.z).inverted();
+      setLayers(node, layer);
+      _left.group.add(node);
+      _glass = (id: d.id, node: node);
+    }
+    holdMug(_wantsMug);
+  }
 
   /// Raise the mug for a sip, once the right hand is back from the coffee machine.
   void sip() => _sipT = -kReachTime * 0.6;

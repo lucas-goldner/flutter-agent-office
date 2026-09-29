@@ -11,6 +11,7 @@ import 'office_scope.dart';
 import 'ui/arcade.dart';
 import 'ui/hud.dart';
 import 'ui/modal.dart';
+import 'world/drunk.dart';
 import 'world/hands.dart';
 import 'world/labels.dart';
 import 'world/player.dart';
@@ -158,16 +159,20 @@ class _OfficePageState extends State<OfficePage> {
                         onPointerUp: _up,
                         onPointerSignal: _wheel,
                         onPointerHover: (e) => c.hanger.mouse = e.localPosition,
-                        // Playing DEADFALL, the office around the monitor is drawn every third frame.
-                        child: FrameSkipSceneView(
-                          c.scene,
-                          every: () => c.arcade.settled ? 3 : 1,
-                          onTick: (elapsed, dt) => c.tick(dt, _view),
-                          viewsBuilder: (_) => [
-                            RenderView(camera: c.camera, layerMask: kRenderLayerAll & ~Hands.layer),
-                            if (c.player.view == ViewMode.first && c.devHands && !c.arcade.zoomed)
-                              c.hands.overlayView(),
-                          ],
+                        // A few drinks in at the rooftop bar, the frame sways, blurs and warms (world/drunk.dart).
+                        child: DrunkVision(
+                          look: c.roofHub.look,
+                          // Playing DEADFALL, the office around the monitor is drawn every third frame.
+                          child: FrameSkipSceneView(
+                            c.scene,
+                            every: () => c.arcade.settled ? 3 : 1,
+                            onTick: (elapsed, dt) => c.tick(dt, _view),
+                            viewsBuilder: (_) => [
+                              RenderView(camera: c.camera, layerMask: kRenderLayerAll & ~Hands.layer),
+                              if (c.player.view == ViewMode.first && c.devHands && !c.arcade.zoomed)
+                                c.hands.overlayView(),
+                            ],
+                          ),
                         ),
                       );
                     },
