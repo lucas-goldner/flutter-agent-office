@@ -28,7 +28,7 @@ const List<(String, String)> helpRows = [
   ),
   (
     '🎉',
-    'The gong next to the PR board rings, and confetti flies over the desk, whenever a pull request merges. Walk up and press E to bang it yourself',
+    'Whenever a pull request merges, the gong next to the PR board rings, confetti rains down all over the floor and every worker gets up on its desk for a quick dance. Walk up to the gong and press E to bang it yourself',
   ),
   ('Drag / wheel', 'Orbit and zoom the camera in third person'),
   ('P', 'Prompt: give a task to a new or existing worker at the desk you face'),
@@ -43,6 +43,10 @@ const List<(String, String)> helpRows = [
   ),
   ('O', 'Open a pull request for a worker on its own branch, or see the one it has'),
   ('T', 'Chat'),
+  (
+    'G / 1–6',
+    'Emote: hold G, point at one and let go (or tap G and click one), or press 1–6: wave, thumbs up, clap, dance, point, facepalm. Everyone on your floor sees it',
+  ),
   ('/', 'Search the chat and every terminal on your floor, back to before the office last restarted'),
   ('V / M', 'Join voice / mute'),
   ('Esc', 'Close any window and get back to looking around'),

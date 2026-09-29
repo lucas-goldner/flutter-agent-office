@@ -21,6 +21,7 @@ import '../net/office_socket.dart' hide Profile;
 import '../notify.dart';
 import '../office_scope.dart';
 import 'package:office_shared/avatar.dart';
+import 'package:office_shared/emotes.dart';
 import 'package:office_shared/floors.dart';
 import 'package:office_shared/jukebox.dart';
 import 'package:office_shared/layout.dart' hide Elevator, Gong, Jukebox, Whiteboard;
@@ -33,6 +34,7 @@ import '../ui/boards.dart';
 import '../ui/changes.dart';
 import '../ui/character.dart';
 import '../ui/elevator.dart';
+import '../ui/emote_wheel.dart';
 import '../ui/help.dart';
 import '../ui/hud.dart';
 import '../ui/jukebox.dart';
@@ -60,7 +62,9 @@ import '../world/collider.dart';
 import '../world/confetti.dart';
 import '../world/dog.dart';
 import '../world/gallery.dart';
+import '../world/geo.dart' show pointIn;
 import '../world/hands.dart';
+import '../world/holiday.dart';
 import '../world/label_widgets.dart';
 import '../world/labels.dart';
 import '../world/laptop.dart';
@@ -191,11 +195,11 @@ class OfficeController implements OfficeActions {
       onEditProfile: editProfile,
     ),
   );
-
   late final Office office;
 
   /// Voice chat and screen sharing (the TV, the thumbnails, mouths and proximity volume).
   late final OfficeVoice voiceRoom;
+
   /// The 📝 whiteboard: its window, and the drawing on the board in the office.
   late final WhiteboardHub whiteboard;
   late final PlayerController player;
@@ -212,6 +216,19 @@ class OfficeController implements OfficeActions {
   late final Arcade arcade;
   final SkyModel skyModel = SkyModel();
   late final SkyView skyView;
+
+  /// Halloween or Christmas decorations, up while the building's dressed up for one (see [_dressUp]).
+  late final Holiday holiday;
+  HolidayTheme? _theme;
+
+  /// The emote wheel (hold G), and your own emote's emoji popping up on screen in first person.
+  late final EmoteWheel emoteWheel = EmoteWheel(onPick: emote);
+  final ValueNotifier<(Emote, int)?> emotePop = ValueNotifier(null);
+  int _emotePops = 0;
+
+  /// The same limit the server keeps, so an emote you see yourself do is one everyone else sees too.
+  final EmoteBucket _emoteLimit = EmoteBucket();
+  double _emoteWarnedAt = -1e9;
   final Caffeine caffeine = Caffeine();
 
   final Map<String, _Remote> _remotes = {};
@@ -275,6 +292,8 @@ class OfficeController implements OfficeActions {
     root
       ..add(confetti.node)
       ..add(smoke.node);
+    holiday = Holiday(colliders: office.colliders, plantLeaves: office.plantLeaves);
+    root.add(holiday.group);
 
     final saved = loadProfile();
     final me0 = await Api.whoami().catchError((_) => null);
@@ -439,6 +458,7 @@ class OfficeController implements OfficeActions {
         }
         _upgradePhase = m.upgrade.phase;
         voiceRoom.welcomed();
+        _dressUp(m.theme.active);
       case RtcMsg m:
         voiceRoom.signal(m.from, m.data);
       case FloorEnterMsg _:
@@ -469,6 +489,10 @@ class OfficeController implements OfficeActions {
         }
       case GongMsg m:
         _gongRang(m.why, m.pr);
+      case PeerEmoteMsg m:
+        _remotes[m.id]?.person.emote(m.emote);
+      case ThemeMsg m:
+        _dressUp(m.state.active);
       default:
         break;
     }
@@ -580,7 +604,9 @@ class OfficeController implements OfficeActions {
       if (peer.id == store.you || !store.onMyFloor(peer)) continue;
       var r = _remotes[peer.id];
       if (r == null) {
-        final person = Person(peer.name, peer.color, peer.look, labels)..onSmoke = _puff;
+        final person = Person(peer.name, peer.color, peer.look, labels)
+          ..onSmoke = _puff
+          ..setCostume(_theme);
         person.root.position = vm.Vector3(peer.x, peer.y, peer.z);
         root.add(person.root);
         r = _Remote(person, peer.look);
@@ -634,8 +660,11 @@ class OfficeController implements OfficeActions {
       var v = _workerViews[w.id];
       if (v == null) {
         departures.vacate(w.deskId);
-        final model = Worker(w.name, w.color, labels);
+        final model = Worker(w.name, w.color, labels)..setCostume(_theme);
         desk.seatAnchor.add(model.root);
+        // Its globe floats beside the laptop, out from behind the card over its head and the back
+        // of its chair, so it shows from across the room.
+        model.setPropSpot(pointIn(model.root, desk.laptopAnchor, vm.Vector3(0.64, 0.5, -0.1)));
         final laptop = Laptop();
         desk.laptopAnchor.add(laptop.root);
         desk.vacancy.visible = false;
@@ -650,6 +679,12 @@ class OfficeController implements OfficeActions {
           if (ding != null) sound.ding(ding);
           notifier.alert(w);
         }
+        // Finished what it was on: a little spin and a puff of confetti.
+        if (w.status == WorkerStatus.done &&
+            (v.status == WorkerStatus.working || v.status == WorkerStatus.needsInput)) {
+          v.model.celebrate();
+          _burstOver(w.deskId, 40);
+        }
         v.status = w.status;
         v.acked = w.acked;
         v.model.setStatus(w.status, waitingOnSomeone(w));
@@ -660,8 +695,17 @@ class OfficeController implements OfficeActions {
             ? WorkerTask(name: '${providerLabel(w.provider, store.project)} · ${task.name}', summary: task.summary)
             : task,
       );
+      v.model.setAction(w.action);
       final def = deskById[w.deskId];
-      if (def != null) sound.setTyping(w.id, def.x, def.z, w.status == WorkerStatus.working);
+      // Keys clack while it types, not while it reads, watches its tests or browses.
+      if (def != null) {
+        sound.setTyping(
+          w.id,
+          def.x,
+          def.z,
+          w.status == WorkerStatus.working && (w.action == null || w.action == WorkerAction.edit),
+        );
+      }
       final again = w.kind == WorkerKind.shell ? 'restart' : 'resume';
       v.laptop.setPlaceholder(
         w.status == WorkerStatus.offline
@@ -677,6 +721,8 @@ class OfficeController implements OfficeActions {
       final desk = office.desks[v.deskId];
       // Sent home: it packs up and walks out, and the seat shows as free once it's up.
       if (desk != null && _sentHome.contains(id)) {
+        // Off the desk first if it was up there dancing: it packs up in its seat.
+        v.model.stopDancing();
         departures.add(v.model, v.laptop, _Leaving(desk));
       } else {
         v.model.root.detach();
@@ -1195,7 +1241,9 @@ class OfficeController implements OfficeActions {
     sound.gong(why);
     final top = office.gong.top;
     if (why == GongWhy.merged) {
-      // Over the desk it came from while its worker is still there, who jumps for joy; otherwise over the gong.
+      // Confetti rains down all over the floor, and pops over the desk the PR came from while its worker's still there.
+      confetti.rain(_floorArea, _area(_floorArea) * _confettiDensity, 3, _ceilingOver);
+      confetti.rain(_loftArea, _area(_loftArea) * _confettiDensity, 3, (_, _) => Loft.y + Loft.height - 0.1);
       final it = store.pulls.items.where((p) => p.number == pr).firstOrNull;
       final w = pr == null
           ? null
@@ -1204,10 +1252,10 @@ class OfficeController implements OfficeActions {
                 .firstOrNull;
       if (w != null && _workerViews.containsKey(w.id)) {
         _burstOver(w.deskId, 220);
-        if (!isAsleep(w.status)) _workerViews[w.id]!.model.cheer();
       } else {
         confetti.burst(top.x, top.y, top.z, 220);
       }
+      _danceParty();
     } else if (why == GongWhy.queue) {
       // Three strokes: a burst at the gong, then every desk, then a cannon.
       confetti.burst(top.x, top.y, top.z, 160);
@@ -1224,6 +1272,102 @@ class OfficeController implements OfficeActions {
       });
     }
   }
+
+  static const ConfettiArea _floorArea = (minX: Floor.minX, maxX: Floor.maxX, minZ: Floor.minZ, maxZ: Floor.maxZ);
+  static const ConfettiArea _loftArea = (minX: Loft.minX, maxX: Loft.maxX, minZ: Loft.minZ, maxZ: Loft.maxZ);
+
+  /// Confetti a square meter of floor gets when a pull request merges.
+  static const double _confettiDensity = 3.5;
+  static double _area(ConfettiArea a) => (a.maxX - a.minX) * (a.maxZ - a.minZ);
+
+  /// Where confetti rains from downstairs over (x, z): the ceiling, or under the loft, the underside of its floor.
+  static double _ceilingOver(double x, double z) {
+    final loft = x > Loft.minX && x < Loft.maxX && z > Loft.minZ && z < Loft.maxZ;
+    return loft ? Loft.y - 0.35 : wallHeight - 0.1;
+  }
+
+  /// A pull request merged: every worker awake on the floor gets up on its desk and dances.
+  void _danceParty() {
+    for (final e in _workerViews.entries) {
+      final v = e.value;
+      final desk = office.desks[v.deskId];
+      final parent = v.model.root.parent;
+      if (desk == null || parent == null || isAsleep(store.workers[e.key]?.status ?? WorkerStatus.offline)) continue;
+      v.model.dance(stageFrom(parent, desk.stage));
+    }
+  }
+
+  // ---- Holidays ---------------------------------------------------------------------------------
+
+  /// Dresses the building up for the holiday it's set to (⚙️ Settings), or takes it all down: the sky and
+  /// the decorations, the dog, your hands and your character, everyone else, and every worker.
+  void _dressUp(HolidayTheme? theme) {
+    _theme = theme;
+    holiday.set(theme);
+    skyModel.setTheme(theme);
+    dog.setCostume(theme);
+    hands.setCostume(theme);
+    me.setCostume(theme);
+    for (final r in _remotes.values) {
+      r.person.setCostume(theme);
+    }
+    for (final v in _workerViews.values) {
+      v.model.setCostume(theme);
+    }
+  }
+
+  // ---- Emotes -----------------------------------------------------------------------------------
+
+  /// Plays an emote on your character and your hands, and shows it to everyone else on the floor.
+  void emote(Emote e) {
+    final now = nowMs().toDouble();
+    if (!_emoteLimit.take(now)) {
+      if (now - _emoteWarnedAt > 3000) {
+        _emoteWarnedAt = now;
+        toast('Easy there, one emote at a time', ToastKind.warn);
+      }
+      return;
+    }
+    me.emote(e);
+    hands.emote(e);
+    if (player.view == ViewMode.first) emotePop.value = (e, ++_emotePops);
+    net.send(EmoteCmd(e));
+  }
+
+  /// G opens the emote wheel (hold it and point, or tap it and click); 1–6 play one straight away.
+  bool _emoteKey(KeyEvent e) {
+    final k = e.physicalKey;
+    if (k == PhysicalKeyboardKey.keyG) {
+      if (e is KeyDownEvent) emoteWheel.press();
+      if (e is KeyUpEvent) emoteWheel.release();
+      return true;
+    }
+    if (e is! KeyDownEvent) return false;
+    if (k == PhysicalKeyboardKey.escape && emoteWheel.isOpen) {
+      emoteWheel.close();
+      return true;
+    }
+    final n = _emoteDigits.indexOf(k);
+    if (n < 0) return false;
+    emoteWheel.close();
+    emote(emotes[n % 6]);
+    return true;
+  }
+
+  static const List<PhysicalKeyboardKey> _emoteDigits = [
+    PhysicalKeyboardKey.digit1,
+    PhysicalKeyboardKey.digit2,
+    PhysicalKeyboardKey.digit3,
+    PhysicalKeyboardKey.digit4,
+    PhysicalKeyboardKey.digit5,
+    PhysicalKeyboardKey.digit6,
+    PhysicalKeyboardKey.numpad1,
+    PhysicalKeyboardKey.numpad2,
+    PhysicalKeyboardKey.numpad3,
+    PhysicalKeyboardKey.numpad4,
+    PhysicalKeyboardKey.numpad5,
+    PhysicalKeyboardKey.numpad6,
+  ];
 
   // ---- Targeting and the hint -------------------------------------------------------------------
 
@@ -1449,10 +1593,19 @@ class OfficeController implements OfficeActions {
 
   /// A key went down while the office has the keyboard. True when it was one of the office's own.
   bool onKey(KeyEvent e) {
+    // Letting go of G picks what the wheel points at, whatever else has the keyboard now.
+    if (e is KeyUpEvent && e.physicalKey == PhysicalKeyboardKey.keyG) {
+      emoteWheel.release();
+      return emoteWheel.isOpen;
+    }
     if (e is! KeyDownEvent) return false;
     if (ModalStack.instance.open || hud.typing) return false;
     final hk = HardwareKeyboard.instance;
     if (hk.isMetaPressed || hk.isControlPressed || hk.isAltPressed) return false;
+    if (_emoteKey(e)) {
+      player.input.clear();
+      return true;
+    }
     if (hanger.key(e.physicalKey, reach: _reachOut)) return true;
     final deskKey = _deskKeys[e.physicalKey];
     if (deskKey != null) {
@@ -1630,6 +1783,7 @@ class OfficeController implements OfficeActions {
         r.stepT -= math.pi / 11;
         sound.stepAt(pos.x, pos.z);
       }
+      r.person.emojiLift = r.bubble != null ? 0.45 : 0;
       if (r.bubble != null && now > r.bubbleUntil) {
         labels.remove(r.bubble);
         r.bubble = null;
@@ -1661,6 +1815,7 @@ class OfficeController implements OfficeActions {
     _checkSmokeBreak(now);
     smoke.update(dt, player.camPos, player.camTarget);
     confetti.update(dt);
+    holiday.update(t, skyModel.lampsOn, player.camPos);
     hanger.update(view, locked: lockAvailable ? pointerLocked : null);
     _updateSky(dt, t);
 
