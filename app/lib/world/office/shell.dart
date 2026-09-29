@@ -24,8 +24,13 @@ class Door {
   Door(this.x, this.y, this.z, this.show);
 
   final double x;
-  final double y;
+
+  /// Mutable for the exit door, which is further down the higher your floor is.
+  double y;
   final double z;
+
+  /// Stays shut: the exit door, seen from a floor above it.
+  bool locked = false;
 
   /// 0 shut, 1 wide open.
   double open = 0;
@@ -178,8 +183,10 @@ Node doorFrame(Opening o) {
   final at = onWall(o.wall, o.u);
   // Over the landing, where it lights the way down at night.
   final lampAt = vm.Vector3(at.x - wallT / 2 - 0.14, o.y1 + 0.33, at.z);
-  night.halos.add(Halo(at: lampAt, size: 0.9, color: '#ffe08a'));
-  night.lamps.add(Lamp(x: lampAt.x - 0.6, y: lampAt.y, z: lampAt.z, reach: 5, color: '#ffe3a3', power: 2.2));
+  night.halos.add(Halo(at: lampAt, size: 0.9, color: '#ffe08a', ground: true));
+  night.lamps.add(
+    Lamp(x: lampAt.x - 0.6, y: lampAt.y, z: lampAt.z, reach: 5, color: '#ffe3a3', power: 2.2, ground: true),
+  );
   final door = Door(at.x, 0, at.z, (k) => hinge.rotation = yaw(-1.8 * k * k * (3 - 2 * k)));
   return (group: mount(g, o), door: door);
 }
@@ -268,12 +275,6 @@ void buildBalcony(Node group, List<Interactable> interactables, NightParts night
       z: cz,
     ),
   );
-
-  // Posts down to the street at the outer corners.
-  const postH = -slab - streetY;
-  for (final x in [minX + 0.25, maxX - 0.25]) {
-    parts.add(mesh(cyl(0.12, 0.12, postH, 12), tc('#e6e8ee'), x, streetY + postH / 2, maxZ - 0.25));
-  }
 
   // The railing: posts, a wooden top rail and glass between, on the three open sides.
   const railH = 1.05;
@@ -388,6 +389,39 @@ void buildBalcony(Node group, List<Interactable> interactables, NightParts night
     const TextOpts(bg: '#2b2d42', color: '#fffaf3', size: 56, border: '#fffaf3'),
   );
   group.add(place(sign, x: -6.5, y: 2.2, z: minZ + 0.02, scale: 0.8));
+}
+
+/// The bottom floor's balcony stands on posts down to the street, at its outer corners (the ones
+/// above it hang off their walls). Their colliders are [balconyPostColliders].
+void buildBalconyPosts(Node group) {
+  const postH = -slab - streetY;
+  for (final x in [Balcony.minX + 0.25, Balcony.maxX - 0.25]) {
+    group.add(mesh(cyl(0.12, 0.12, postH, 12), tc('#e6e8ee'), x, streetY + postH / 2, Balcony.maxZ - 0.25));
+  }
+}
+
+/// Wall where the exit door is, for the floors above the bottom one: painted like the rest of the
+/// wall, inside and out, with its baseboard.
+({Node group, Collider collider}) exitPlug(Looks looks) {
+  const o = exitDoor;
+  final at = onWall(o.wall, o.u);
+  final g = Node(name: 'exit-plug');
+  // A box's faces go +x, -x, +y, -y, +z, -z; on the west wall, -x is outdoors.
+  final outside = tc(Palette.exterior);
+  final mats = [for (var i = 0; i < 6; i++) i == 1 ? outside : looks.wall];
+  g.add(place(boxFaces(wallT, o.y1 - o.y0, o.width, mats), x: at.x, y: (o.y0 + o.y1) / 2, z: at.z));
+  g.add(mesh(box(wallT + 0.04, 0.25, o.width), looks.trim, at.x, 0.125, at.z, false));
+  g.visible = false;
+  return (
+    group: g,
+    collider: Collider(
+      minX: Floor.minX - wallT,
+      maxX: Floor.minX,
+      minZ: o.u - o.width / 2,
+      maxZ: o.u + o.width / 2,
+      top: 99,
+    ),
+  );
 }
 
 /// Outside the exit: a concrete landing level with the office floor, and steps running south

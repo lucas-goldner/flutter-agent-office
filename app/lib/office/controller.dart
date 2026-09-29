@@ -346,6 +346,7 @@ class OfficeController implements OfficeActions {
         if (desk != null && store.workerAtDesk(deskId) == null) desk.vacancy.visible = true;
         _arrangeBeanbags();
       },
+      upstairs: () => office.stack.state.index > 0,
     );
     notifier = DesktopNotifier(enabled: () => settings.notify, openWorker: openWorkerTerminal);
     // Pictures on the walls (and the one you're hanging), and DEADFALL on the boss's monitor.
@@ -656,7 +657,8 @@ class OfficeController implements OfficeActions {
     }
   }
 
-  /// The ladder and the pole go where there are floors to go to from this one.
+  /// The ladder and the pole go where there are floors to go to from this one, and the building is
+  /// as tall as there are floors.
   void _syncStack() {
     final floors = _builtFloors();
     final index = floors.indexWhere((f) => f.id == store.floor);
@@ -666,6 +668,9 @@ class OfficeController implements OfficeActions {
     final next = StackState(index: math.max(0, index), count: index < 0 ? 1 : floors.length, up: up, down: down);
     if (next == office.stack.state) return;
     office.stack.set(next);
+    // The building is as tall as there are floors, with the street as far down as this one is up.
+    office.setLevel(next.index, next.count);
+    player.street = streetBelow(index);
   }
 
   /// What the hint says while you're on the ladder or a pole.
@@ -1783,7 +1788,7 @@ class OfficeController implements OfficeActions {
       position: toEngine(player.camPos),
       target: toEngine(player.camTarget),
       fovNear: 0.1,
-      fovFar: 200,
+      fovFar: 320,
     );
     camera = arcade.update(camera, dt, view);
     final look = (player.camTarget - player.camPos)..normalize();
@@ -1951,7 +1956,9 @@ class OfficeController implements OfficeActions {
     for (var i = 0; i < 8; i++) {
       if (i < lamps.length && m.lampsOn > 0.005) {
         final lamp = lamps[i];
-        l.lampPos[i].setValues(lamp.x, lamp.y, lamp.z, lamp.reach);
+        // The ones down by the street are as far down as the street is from the floor you're on.
+        final y = lamp.ground ? lamp.y + office.night.street - streetY : lamp.y;
+        l.lampPos[i].setValues(lamp.x, y, lamp.z, lamp.reach);
         final c = Rgb.hex(int.parse(lamp.color.substring(1), radix: 16)).scale(lamp.power * m.lampsOn);
         l.lampColor[i].setValues(c.r, c.g, c.b);
       } else {
@@ -1966,8 +1973,10 @@ class OfficeController implements OfficeActions {
     setToonColor(office.night.clouds, m.clouds.color);
     final fog = scene.fog;
     fog.color = m.background.vector;
-    fog.start = m.fogNear;
-    fog.end = m.fogFar;
+    // The haze thins out the higher you are over the street (see hazeFog).
+    final haze = hazeFog(m.fogNear, m.fogFar, player.camPos.y, office.night.street);
+    fog.start = haze.start;
+    fog.end = haze.end;
     final bg = m.background.color;
     if (bg != sky.value) sky.value = bg;
     sound.setWeather(m.rain, 1 - m.daylight);

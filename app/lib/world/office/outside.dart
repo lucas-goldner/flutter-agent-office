@@ -30,6 +30,7 @@ class Lamp {
     required this.reach,
     required this.color,
     required this.power,
+    this.ground = false,
   });
 
   final double x;
@@ -40,6 +41,9 @@ class Lamp {
 
   /// How bright, at the middle of the pool.
   final double power;
+
+  /// Down by the street (a street lamp, the one over the exit): it's further down the higher your floor is.
+  final bool ground;
 }
 
 /// A bulb whose glow goes from [day] (by day) up to full at night.
@@ -56,11 +60,14 @@ class NightBulb {
 
 /// Where a bulb's soft halo goes at night, and its colour.
 class Halo {
-  const Halo({required this.at, required this.size, required this.color});
+  const Halo({required this.at, required this.size, required this.color, this.ground = false});
 
   final vm.Vector3 at;
   final double size;
   final String color;
+
+  /// Down by the street, as for a [Lamp].
+  final bool ground;
 }
 
 /// Everything that changes between day and night and with the weather, for the sky to drive.
@@ -72,6 +79,9 @@ class NightParts {
         ..baseColorFactor = vm.Vector4(1, 1, 1, 0);
 
   final List<NightBulb> bulbs = [];
+
+  /// How far below the floor you're on the street is (see streetBelow): what the `ground` lamps drop with.
+  double street = streetY;
   final List<Halo> halos = [];
   final List<Lamp> lamps = [];
 
@@ -289,15 +299,19 @@ void _streetLamp(Node parts, NightParts night, Material glass, double x, double 
   final hz = z + toward * 1.2;
   parts.add(mesh(cyl(0.12, 0.42, 0.26, 12), ink, x, _g + h - 0.1, hz));
   parts.add(mesh(sphere(0.22, 12, 8), glass, x, _g + h - 0.3, hz, false));
-  night.halos.add(Halo(at: vm.Vector3(x, _g + h - 0.34, hz), size: 2.4, color: '#ffd89a'));
-  night.lamps.add(Lamp(x: x, y: _g + h - 0.6, z: hz, reach: 10, color: '#ffcf8a', power: 4));
+  night.halos.add(Halo(at: vm.Vector3(x, _g + h - 0.34, hz), size: 2.4, color: '#ffd89a', ground: true));
+  night.lamps.add(Lamp(x: x, y: _g + h - 0.6, z: hz, reach: 10, color: '#ffcf8a', power: 4, ground: true));
 }
 
+/// How far the grass and the road go, end to end: from the top floor the haze is up to 300 m off
+/// (see sky_view.dart), and their ends must be further than that even at the edge of the view.
+const double _reach = 1200;
+
 /// Everything outside, down on the street: grass, the lot in front of the garage, a road with
-/// sidewalks and street lamps, trees, neighbours' buildings and some clouds. Its colliders are
-/// [streetColliders].
-void buildStreet(Node group, NightParts night) {
-  group.add(mesh(groundPlane(400, 400), tc('#a7d98b'), 0, _g - 0.03, 0, false));
+/// sidewalks and street lamps, trees and neighbours' buildings, and in [sky] some clouds. Its
+/// colliders are [streetColliders].
+void buildStreet(Node group, NightParts night, Node sky) {
+  group.add(mesh(groundPlane(_reach, _reach), tc('#a7d98b'), 0, _g - 0.03, 0, false));
 
   // The lot in front of the garage, out to the sidewalk.
   group.add(_groundPlane(60, 21 - Bldg.maxZ, 0, _g - 0.01, (Bldg.maxZ + 21) / 2, color: '#9a9ea8'));
@@ -321,10 +335,10 @@ void buildStreet(Node group, NightParts night) {
     g.drawRect(const Rect.fromLTWH(0, 61, 150, 6), fill(linColor('#ffd166')));
   });
   group.add(
-    _groundPlane(400, Road.maxZ - Road.minZ, 0, _g - 0.008, (Road.minZ + Road.maxZ) / 2, map: road, su: 400 / 8),
+    _groundPlane(_reach, Road.maxZ - Road.minZ, 0, _g - 0.008, (Road.minZ + Road.maxZ) / 2, map: road, su: _reach / 8),
   );
   for (final (z0, z1) in [(21.0, Road.minZ), (Road.maxZ, Road.maxZ + 2)]) {
-    group.add(mesh(box(400, 0.08, z1 - z0), tc('#e3ddd0'), 0, _g, (z0 + z1) / 2));
+    group.add(mesh(box(_reach, 0.08, z1 - z0), tc('#e3ddd0'), 0, _g, (z0 + z1) / 2));
   }
 
   // Trees along the sidewalks and around the building.
@@ -380,7 +394,7 @@ void buildStreet(Node group, NightParts night) {
   }
 
   // Puffy clouds, far off.
-  final sky = _node('clouds');
+  final puffs = _node('clouds');
   const clouds = [
     (-70.0, 34.0, -60.0, 1.3),
     (-10.0, 40.0, -90.0, 1.6),
@@ -395,7 +409,7 @@ void buildStreet(Node group, NightParts night) {
     for (final (dx, dy, r) in const [(0.0, 0.0, 5.0), (5.5, -1.0, 3.8), (-5.5, -1.2, 3.6), (2.5, 2.4, 3.4)]) {
       c.add(place(mesh(sphere(r, 14, 10), night.clouds, 0, 0, 0, false), x: dx, y: dy, scale3: vm.Vector3(1, 0.75, 1)));
     }
-    sky.add(place(c, x: x, y: y, z: z, scale: s, rot: yaw(math.atan2(-x, -z))));
+    puffs.add(place(c, x: x, y: y, z: z, scale: s, rot: yaw(math.atan2(-x, -z))));
   }
-  group.add(mergeByMaterial(sky));
+  sky.add(mergeByMaterial(puffs));
 }

@@ -179,14 +179,22 @@ Collider _plant(double x, double z, double s, [double floor = 0]) {
   );
 }
 
+/// The posts under the bottom floor's balcony, down to the street (see buildBalconyPosts).
+List<Collider> balconyPostColliders() => [
+  for (final x in [Balcony.minX + 0.25, Balcony.maxX - 0.25])
+    Collider(
+      minX: x - 0.14,
+      maxX: x + 0.14,
+      minZ: Balcony.maxZ - 0.39,
+      maxZ: Balcony.maxZ - 0.11,
+      bottom: streetY,
+      top: -slab,
+    ),
+];
+
 List<Collider> balconyColliders() {
   const minX = Balcony.minX, maxX = Balcony.maxX, minZ = Balcony.minZ, maxZ = Balcony.maxZ;
   final out = <Collider>[Collider(minX: minX, maxX: maxX, minZ: minZ, maxZ: maxZ, bottom: -slab, top: 0)];
-  for (final x in [minX + 0.25, maxX - 0.25]) {
-    out.add(
-      Collider(minX: x - 0.14, maxX: x + 0.14, minZ: maxZ - 0.39, maxZ: maxZ - 0.11, bottom: streetY, top: -slab),
-    );
-  }
   for (final (x0, z0, x1, z1) in balconySides) {
     out.add(
       Collider(
@@ -521,14 +529,23 @@ List<Collider> whiteboardColliders() {
   ];
 }
 
-/// Everything in the office you can't walk through, in the order office.ts pushes it. Pass the
-/// built elevator's colliders so its door collider is the one it opens and shuts.
-List<Collider> officeColliders({List<Collider>? elevator}) => [
-  ...wallsPlan().colliders,
+/// Down to the street, which is the bottom floor's: the steps down from its exit door, the posts
+/// under its balcony, the garage under it and the street out front. On a floor above it, all of it
+/// is that many storeys further down (see Office.setLevel).
+List<Collider> groundColliders() => [
   ...exitStairsColliders(),
-  ...balconyColliders(),
+  ...balconyPostColliders(),
   ...garageColliders(),
   ...streetColliders(),
+];
+
+/// Everything in the office you can't walk through, in the order office.ts pushes it. Pass the
+/// built elevator's colliders so its door collider is the one it opens and shuts, and the ground's
+/// so they're the ones that move down with the street.
+List<Collider> officeColliders({List<Collider>? elevator, List<Collider>? ground}) => [
+  ...wallsPlan().colliders,
+  ...balconyColliders(),
+  ...(ground ?? groundColliders()),
   for (final d in desks) deskCollider(d),
   ...loungeColliders(),
   ...kitchenColliders(),

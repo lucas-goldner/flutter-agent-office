@@ -26,6 +26,7 @@ import 'outside.dart';
 import 'parts.dart';
 import 'shell.dart';
 import 'stack.dart';
+import 'tower.dart';
 import 'whiteboard.dart';
 
 export 'elevator.dart' show Elevator;
@@ -82,7 +83,32 @@ class Office {
     required this.whiteboard,
     required this.night,
     required this.stack,
+    required this._level,
   });
+
+  final _Level _level;
+
+  /// You're on floor [index] of a building [count] floors tall (0 is the bottom one): the rest of the
+  /// building goes up over you and down under you, the street that many storeys down, and only the
+  /// bottom floor has its exit door.
+  void setLevel(int index, int count) {
+    final l = _level;
+    final drop = index * storey;
+    l.ground.position = vm.Vector3(0, -drop, 0);
+    for (final (c, top, bottom) in l.base) {
+      // Walls up into the sky stay that way.
+      if (top <= 50) c.top = top - drop;
+      c.bottom = bottom - drop;
+    }
+    night.street = streetBelow(index);
+    l.exit.y = -drop;
+    l.exit.locked = index > 0;
+    l.plug.group.visible = index > 0;
+    final has = colliders.contains(l.plug.collider);
+    if (index > 0 && !has) colliders.add(l.plug.collider);
+    if (index == 0 && has) colliders.remove(l.plug.collider);
+    l.tower.set(index, count);
+  }
 
   final Node group;
   final List<Collider> colliders;
@@ -159,7 +185,7 @@ class Office {
       }
     }
     for (final d in _doors) {
-      final want = near.contains(d) ? 1.0 : 0.0;
+      final want = near.contains(d) && !d.locked ? 1.0 : 0.0;
       if (d.open == want) continue;
       d.open = want > d.open ? math.min(1, d.open + dt * 2.5) : math.max(0, d.open - dt * 1.6);
       d.show(d.open);
@@ -172,6 +198,19 @@ class Office {
     elevator.update(dt);
     gong.update(dt);
   }
+}
+
+/// What moves when you change floors (see Office.setLevel).
+class _Level {
+  _Level(this.ground, this.base, this.exit, this.plug, this.tower);
+
+  final Node ground;
+
+  /// The ground's colliders, and where their tops and bottoms are from the bottom floor.
+  final List<(Collider, double, double)> base;
+  final Door exit;
+  final ({Node group, Collider collider}) plug;
+  final Tower tower;
 }
 
 class _Beanbag {
@@ -342,12 +381,17 @@ Office buildOffice({required LabelHub labels}) {
   }
   group.add(mergeByMaterial(glazing));
   final doors = <Door>[];
+  // Down to the street, which is the bottom floor's: its exit door and the steps down from it, the
+  // posts under its balcony, the garage under it and the street out front. On a floor above it, all
+  // of it is that many storeys further down (see setLevel).
+  final ground = Node(name: 'ground');
   final exit = buildExitDoor(night);
-  group.add(exit.group);
+  ground.add(exit.group);
   doors.add(exit.door);
   final stairs = Node(name: 'exit-stairs');
   buildExitStairs(stairs);
-  group.add(mergeByMaterial(stairs));
+  buildBalconyPosts(stairs);
+  ground.add(mergeByMaterial(stairs));
   // The door, its frame and the EXIT sign over it.
   fixture(exitDoor.wall, exitDoor.u, (exitDoor.y1 + 0.7) / 2, exitDoor.width + 0.3, exitDoor.y1 + 0.7);
   // Out the glass doors on the south wall: the balcony.
@@ -357,9 +401,17 @@ Office buildOffice({required LabelHub labels}) {
   fixture(balconyDoor.wall, balconyDoor.u, (balconyDoor.y1 + 0.1) / 2, balconyDoor.width + 0.2, balconyDoor.y1 + 0.1);
   buildBalcony(group, interactables, night);
 
-  // Downstairs: the garage under the office, and the street outside.
-  buildGarage(group);
-  buildStreet(group, night);
+  buildGarage(ground);
+  // The clouds stay up in the sky, however far down the street is.
+  buildStreet(ground, night, group);
+  group.add(ground);
+  final groundCs = groundColliders();
+  // Upstairs there's no way out on the west side: the doorway is wall like the rest of it.
+  final plug = exitPlug(looks);
+  group.add(plug.group);
+  // The rest of the building, above and below this floor.
+  final tower = buildTower(colliders, night);
+  group.add(tower.group);
 
   // Desks.
   final desks = <String, DeskView>{};
@@ -537,7 +589,7 @@ Office buildOffice({required LabelHub labels}) {
     doors,
     beanbags,
     group: group,
-    colliders: colliders..insertAll(0, officeColliders(elevator: elevator.colliders)),
+    colliders: colliders..insertAll(0, officeColliders(elevator: elevator.colliders, ground: groundCs)),
     interactables: interactables,
     desks: desks,
     boardMeshes: boardMeshes,
@@ -549,5 +601,6 @@ Office buildOffice({required LabelHub labels}) {
     whiteboard: whiteboard,
     night: night,
     stack: stack,
-  );
+    level: _Level(ground, [for (final c in groundCs) (c, c.top, c.bottom ?? 0)], exit.door, plug, tower),
+  )..setLevel(0, 1);
 }

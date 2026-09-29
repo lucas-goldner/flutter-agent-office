@@ -668,6 +668,20 @@ class Worker {
 
   WorkerTask? get task => _task;
 
+  /// On its way out: says something else over its head in place of its farewell.
+  void say(String text) {
+    if (_leaving == null) return;
+    _labels.remove(_bubble);
+    _bubble = _labels.add(
+      WorldLabel(
+        anchor: root,
+        offset: vm.Vector3(0, 1.95, 0),
+        alignment: Alignment.center,
+        child: TagPill(text, bg: '#e9ecef', size: 34),
+      ),
+    );
+  }
+
   /// Sent home: its light goes out, its face falls, and its things pop into a box in its arms.
   /// [farewell] goes over its head.
   void leave(String farewell) {
