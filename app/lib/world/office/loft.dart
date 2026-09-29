@@ -8,6 +8,7 @@ import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
 import 'package:office_shared/layout.dart' hide Elevator, Gong, Jukebox, Whiteboard;
+
 import '../collider.dart';
 import '../text.dart';
 import '../toon.dart';
@@ -43,7 +44,14 @@ Face buildLoft(Node group, List<Interactable> interactables, Looks looks) {
 
   // Floor slab, planked like downstairs, with a trim fascia you see from below.
   stat.add(mesh(box(w, slabT, d), trimMat, cx, floorY - slabT / 2, cz));
-  group.add(place(plankedFloor(w, d, looks: looks), x: cx, y: floorY + 0.005, z: cz));
+  group.add(
+    place(
+      plankedFloor(w, d, looks: looks),
+      x: cx,
+      y: floorY + 0.005,
+      z: cz,
+    ),
+  );
 
   // Posts holding up the open corner.
   for (final x in [minX + 0.15, cx]) {
@@ -51,9 +59,11 @@ Face buildLoft(Node group, List<Interactable> interactables, Looks looks) {
   }
 
   // The outside walls carry on up behind the loft (buildWalls); the sun shines through them and the roof.
-  stat.add(mesh(box(w + wallT, 0.2, d + wallT), wallMat, cx + wallT / 2, roofY + 0.1, cz + wallT / 2, false));
-  stat.add(mesh(box(w + 0.34, 0.24, 0.04), trimMat, cx + 0.15, roofY + 0.1, minZ - 0.02, false));
-  stat.add(mesh(box(0.04, 0.24, d + 0.34), trimMat, minX - 0.02, roofY + 0.1, cz + 0.15, false));
+  // The roof runs into them, stopping short of their outside face.
+  const into = wallT - 0.03;
+  stat.add(mesh(box(w + into, 0.2, d + into), wallMat, cx + into / 2, roofY + 0.1, cz + into / 2, false));
+  stat.add(mesh(box(w + 0.02 + into, 0.24, 0.04), trimMat, cx + (into - 0.02) / 2, roofY + 0.1, minZ - 0.02, false));
+  stat.add(mesh(box(0.04, 0.24, d + 0.02 + into), trimMat, minX - 0.02, roofY + 0.1, cz + (into - 0.02) / 2, false));
   stat.add(mesh(box(w, 0.25, 0.04), trimMat, cx, floorY + 0.125, maxZ - 0.02, false));
   stat.add(mesh(box(0.04, 0.25, d), trimMat, maxX - 0.02, floorY + 0.125, cz, false));
 
@@ -61,7 +71,8 @@ Face buildLoft(Node group, List<Interactable> interactables, Looks looks) {
   const doorZ = LoftPlan.doorZ;
   void pane(double len, double px, double pz, double rotY) =>
       stat.add(place(glassPane(len, height), x: px, y: floorY + height / 2, z: pz, rot: yaw(rotY)));
-  void bar(double bw, double bh, double bd, double x, double y, double z) => stat.add(mesh(box(bw, bh, bd), frameMat, x, y, z, false));
+  void bar(double bw, double bh, double bd, double x, double y, double z) =>
+      stat.add(mesh(box(bw, bh, bd), frameMat, x, y, z, false));
   const northZ = minZ + t / 2;
   const westX = minX + t / 2;
   for (var i = 0; i < 6; i++) {
@@ -83,7 +94,16 @@ Face buildLoft(Node group, List<Interactable> interactables, Looks looks) {
   bar(t + 0.06, 0.12, westLen, westX, roofY - 0.06, minZ + westLen / 2);
   // Over the door at the top of the stairs.
   const doorTop = LoftPlan.doorTop;
-  stat.add(mesh(box(t + 0.04, roofY - doorTop, maxZ - doorZ), wallMat, westX, (roofY + doorTop) / 2, (doorZ + maxZ) / 2, false));
+  stat.add(
+    mesh(
+      box(t + 0.04, roofY - doorTop, maxZ - doorZ),
+      wallMat,
+      westX,
+      (roofY + doorTop) / 2,
+      (doorZ + maxZ) / 2,
+      false,
+    ),
+  );
 
   // Stairs: a solid run of steps up the south wall, wood treads, a handrail on the open side.
   const fromX = Stairs.fromX, toX = Stairs.toX, steps = Stairs.steps;
@@ -99,7 +119,16 @@ Face buildLoft(Node group, List<Interactable> interactables, Looks looks) {
   profile.lineTo(toX - fromX, 0);
   stat.add(mesh(extrudeShape(profile, sw), wallMat, fromX, 0, Stairs.minZ));
   for (var i = 1; i <= steps; i++) {
-    stat.add(mesh(box(run + 0.04, 0.06, sw), woodMat, fromX + (i - 0.5) * run - 0.02, i * rise - 0.03, Stairs.minZ + sw / 2, false));
+    stat.add(
+      mesh(
+        box(run + 0.04, 0.06, sw),
+        woodMat,
+        fromX + (i - 0.5) * run - 0.02,
+        i * rise - 0.03,
+        Stairs.minZ + sw / 2,
+        false,
+      ),
+    );
   }
   const railZ = Stairs.minZ + 0.06;
   const railH = 0.9;
@@ -110,7 +139,15 @@ Face buildLoft(Node group, List<Interactable> interactables, Looks looks) {
   const x0 = fromX + 0.5 * run;
   const x1 = fromX + (steps - 0.5) * run;
   final hlen = math.sqrt(math.pow(x1 - x0, 2) + math.pow((x1 - x0) * (rise / run), 2)) + 0.1;
-  stat.add(place(mesh(box(hlen, 0.07, 0.07), woodMat, 0, 0, 0, false), x: (x0 + x1) / 2, y: (rise + floorY) / 2 + railH, z: railZ, rot: euler(0, 0, math.atan2(rise, run))));
+  stat.add(
+    place(
+      mesh(box(hlen, 0.07, 0.07), woodMat, 0, 0, 0, false),
+      x: (x0 + x1) / 2,
+      y: (rise + floorY) / 2 + railH,
+      z: railZ,
+      rot: euler(0, 0, math.atan2(rise, run)),
+    ),
+  );
 
   // Inside: the big desk facing the glass, a comfy couch, a telescope aimed at the desks.
   const deskX = LoftPlan.deskX, deskZ = LoftPlan.deskZ;
@@ -129,7 +166,15 @@ Face buildLoft(Node group, List<Interactable> interactables, Looks looks) {
   final screenMat = flat('#4cc9f0');
   final screen = mesh(planeXY(0.8, 0.45), screenMat, 0, 1.18, -0.165, false);
   desk.add(screen);
-  desk.add(place(textPlane('👑 BOSS', const TextOpts(bg: '#ffd166', size: 48)), y: 0.5, z: -0.55, rot: yaw(math.pi), scale: 0.55));
+  desk.add(
+    place(
+      textPlane('👑 BOSS', const TextOpts(bg: '#ffd166', size: 48)),
+      y: 0.5,
+      z: -0.55,
+      rot: yaw(math.pi),
+      scale: 0.55,
+    ),
+  );
   final bossChair = chair('#2b2d42');
   desk.add(place(bossChair, z: 1.0, scale: 1.2));
   final chairIt = seatable(bossChair, 'boss-chair', 1.2, interactables);
@@ -156,7 +201,15 @@ Face buildLoft(Node group, List<Interactable> interactables, Looks looks) {
   for (var i = 0; i < 3; i++) {
     final a = i / 3 * math.pi * 2;
     final leg = mesh(cyl(0.025, 0.025, 1.1, 6), inkMat, 0, 0, 0);
-    scope.add(place(leg, x: math.sin(a) * 0.2, y: 0.52, z: math.cos(a) * 0.2, rot: euler(math.cos(a) * -0.35, 0, math.sin(a) * 0.35)));
+    scope.add(
+      place(
+        leg,
+        x: math.sin(a) * 0.2,
+        y: 0.52,
+        z: math.cos(a) * 0.2,
+        rot: euler(math.cos(a) * -0.35, 0, math.sin(a) * 0.35),
+      ),
+    );
   }
   final tube = Node(name: 'tube');
   tube.add(mesh(transformed(cyl(0.1, 0.06, 0.9, 14), rotX(math.pi / 2)), tc('#ffd166'), 0, 0, 0.1));
@@ -178,7 +231,16 @@ Face buildLoft(Node group, List<Interactable> interactables, Looks looks) {
   group.add(mergeByMaterial(stat));
 
   // Signs: one on the back wall inside, one over the glass for everyone downstairs.
-  group.add(place(textPlane('👑 Boss Office', const TextOpts(bg: '#fffaf3', size: 64)), x: maxX - 3, y: floorY + 1.9, z: maxZ - 0.04, rot: yaw(math.pi), scale: 0.8));
+  group.add(
+    place(
+      textPlane('👑 Boss Office', const TextOpts(bg: '#fffaf3', size: 64)),
+      x: maxX - 3,
+      y: floorY + 1.9,
+      z: maxZ - 0.04,
+      rot: yaw(math.pi),
+      scale: 0.8,
+    ),
+  );
   group.add(
     place(
       textPlane('👑 Boss Office', const TextOpts(bg: '#2b2d42', color: '#fffaf3', size: 64, border: '#fffaf3')),

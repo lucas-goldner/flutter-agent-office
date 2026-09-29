@@ -11,6 +11,7 @@ import 'package:office_shared/decor.dart' show WallId, WallRect, wallFacing;
 import 'package:office_shared/floors.dart';
 import 'package:office_shared/layout.dart' as lay;
 import 'package:office_shared/layout.dart' hide Elevator, Gong, Jukebox, Whiteboard;
+
 import '../collider.dart';
 import '../labels.dart';
 import '../text.dart';
@@ -24,6 +25,8 @@ import 'office_colliders.dart';
 import 'outside.dart';
 import 'parts.dart';
 import 'shell.dart';
+import 'stack.dart';
+import 'tower.dart';
 import 'whiteboard.dart';
 
 export 'elevator.dart' show Elevator;
@@ -31,6 +34,7 @@ export 'gong.dart' show Gong;
 export 'jukebox.dart' show JukeboxView;
 export 'loft.dart' show Face;
 export 'outside.dart' show Halo, Lamp, NightBulb, NightParts;
+export 'stack.dart' show FloorStack, StackState;
 export 'whiteboard.dart' show WhiteboardStand;
 
 /// A desk or a bean bag: somewhere a worker sits.
@@ -82,7 +86,33 @@ class Office {
     required this.jukebox,
     required this.whiteboard,
     required this.night,
+    required this.stack,
+    required this._level,
   });
+
+  final _Level _level;
+
+  /// You're on floor [index] of a building [count] floors tall (0 is the bottom one): the rest of the
+  /// building goes up over you and down under you, the street that many storeys down, and only the
+  /// bottom floor has its exit door.
+  void setLevel(int index, int count) {
+    final l = _level;
+    final drop = index * storey;
+    l.ground.position = vm.Vector3(0, -drop, 0);
+    for (final (c, top, bottom) in l.base) {
+      // Walls up into the sky stay that way.
+      if (top <= 50) c.top = top - drop;
+      c.bottom = bottom - drop;
+    }
+    night.street = streetBelow(index);
+    l.exit.y = -drop;
+    l.exit.locked = index > 0;
+    l.plug.group.visible = index > 0;
+    final has = colliders.contains(l.plug.collider);
+    if (index > 0 && !has) colliders.add(l.plug.collider);
+    if (index == 0 && has) colliders.remove(l.plug.collider);
+    l.tower.set(index, count);
+  }
 
   final Node group;
   final List<Collider> colliders;
@@ -108,6 +138,9 @@ class Office {
 
   /// Lights, windows and glass for the sky to change with the time of day and the weather.
   final NightParts night;
+
+  /// The ceiling, the floor, and the ladder and fire pole between the floors of the building.
+  final FloorStack stack;
 
   /// The potted plants' leaves (their pots are merged with the decor): hidden while holiday.dart
   /// turns the plants into Christmas trees.
@@ -163,7 +196,7 @@ class Office {
       }
     }
     for (final d in _doors) {
-      final want = near.contains(d) ? 1.0 : 0.0;
+      final want = near.contains(d) && !d.locked ? 1.0 : 0.0;
       if (d.open == want) continue;
       d.open = want > d.open ? math.min(1, d.open + dt * 2.5) : math.max(0, d.open - dt * 1.6);
       d.show(d.open);
@@ -177,6 +210,19 @@ class Office {
     elevator.update(dt);
     gong.update(dt);
   }
+}
+
+/// What moves when you change floors (see Office.setLevel).
+class _Level {
+  _Level(this.ground, this.base, this.exit, this.plug, this.tower);
+
+  final Node ground;
+
+  /// The ground's colliders, and where their tops and bottoms are from the bottom floor.
+  final List<(Collider, double, double)> base;
+  final Door exit;
+  final ({Node group, Collider collider}) plug;
+  final Tower tower;
 }
 
 class _Beanbag {
@@ -198,7 +244,15 @@ DeskView _buildDesk(DeskDef def, int index, Material trimMat) {
   final legMat = tc('#8d99ae');
   for (final sx in [-1, 1]) {
     for (final sz in [-1, 1]) {
-      body.add(mesh(cyl(0.035, 0.035, height - 0.08, 8), legMat, sx * (width / 2 - 0.14), (height - 0.08) / 2, sz * (depth / 2 - 0.12)));
+      body.add(
+        mesh(
+          cyl(0.035, 0.035, height - 0.08, 8),
+          legMat,
+          sx * (width / 2 - 0.14),
+          (height - 0.08) / 2,
+          sz * (depth / 2 - 0.12),
+        ),
+      );
     }
   }
   // Modesty panel facing away from the worker.
@@ -315,16 +369,20 @@ Office buildOffice({required LabelHub labels}) {
   final fixtures = <WallRect>[];
   void fixture(WallId wall, double u, double y, double w, double h) =>
       fixtures.add(WallRect(wall: wall, u0: u - w / 2, u1: u + w / 2, y0: y - h / 2, y1: y + h / 2));
-  const width = Floor.maxX - Floor.minX;
-  const depth = Floor.maxZ - Floor.minZ;
-  const cx = (Floor.maxX + Floor.minX) / 2;
-  const cz = (Floor.maxZ + Floor.minZ) / 2;
 
   // What each floor paints its own way (see setLook): the walls, their trim, the planks.
   final looks = Looks();
 
-  // Floor.
-  group.add(place(plankedFloor(width, depth, looks: looks), x: cx, z: cz));
+  // Floor, and the ceiling, with the ways up and down to the other floors through them (see stack.dart).
+  final planks = Toon.create(hex('#ffffff'));
+  looks.planks.add(planks);
+  // The stack's colliders come and go with the floors; the rest go in ahead of them at the end.
+  final colliders = <Collider>[];
+  final stack = buildStack(colliders, planks);
+  group.add(stack.group);
+  interactables.addAll(stack.interactables);
+  // The ladder and its signs, up the west wall.
+  fixture(Side.west, Ladder.z + 0.6, wallHeight / 2, Ladder.width + 2.4, wallHeight);
 
   // What never moves and needs no clicking: rugs, plants, lamps, the coffee table, the kitchen
   // counter… merged into a few meshes at the end.
@@ -350,12 +408,17 @@ Office buildOffice({required LabelHub labels}) {
   }
   group.add(mergeByMaterial(glazing));
   final doors = <Door>[];
+  // Down to the street, which is the bottom floor's: its exit door and the steps down from it, the
+  // posts under its balcony, the garage under it and the street out front. On a floor above it, all
+  // of it is that many storeys further down (see setLevel).
+  final ground = Node(name: 'ground');
   final exit = buildExitDoor(night);
-  group.add(exit.group);
+  ground.add(exit.group);
   doors.add(exit.door);
   final stairs = Node(name: 'exit-stairs');
   buildExitStairs(stairs);
-  group.add(mergeByMaterial(stairs));
+  buildBalconyPosts(stairs);
+  ground.add(mergeByMaterial(stairs));
   // The door, its frame and the EXIT sign over it.
   fixture(exitDoor.wall, exitDoor.u, (exitDoor.y1 + 0.7) / 2, exitDoor.width + 0.3, exitDoor.y1 + 0.7);
   // Out the glass doors on the south wall: the balcony.
@@ -365,9 +428,17 @@ Office buildOffice({required LabelHub labels}) {
   fixture(balconyDoor.wall, balconyDoor.u, (balconyDoor.y1 + 0.1) / 2, balconyDoor.width + 0.2, balconyDoor.y1 + 0.1);
   buildBalcony(group, interactables, night);
 
-  // Downstairs: the garage under the office, and the street outside.
-  buildGarage(group);
-  buildStreet(group, night);
+  buildGarage(ground);
+  // The clouds stay up in the sky, however far down the street is.
+  buildStreet(ground, night, group);
+  group.add(ground);
+  final groundCs = groundColliders();
+  // Upstairs there's no way out on the west side: the doorway is wall like the rest of it.
+  final plug = exitPlug(looks);
+  group.add(plug.group);
+  // The rest of the building, above and below this floor.
+  final tower = buildTower(colliders, night);
+  group.add(tower.group);
 
   // Desks.
   final desks = <String, DeskView>{};
@@ -413,19 +484,29 @@ Office buildOffice({required LabelHub labels}) {
     group.add(place(board.group, x: b.x + nx * 0.08, y: b.y, z: b.z + nz * 0.08, rot: yaw(b.rotY)));
     boardMeshes[key] = board.face;
     final label = textPlane(b.label, const TextOpts(bg: '#fffaf3', size: 64));
-    group.add(place(label, x: b.x + nx * 0.04, y: b.y + b.height / 2 + 0.5, z: b.z + nz * 0.04, rot: yaw(b.rotY), scale: 1.3));
+    group.add(
+      place(label, x: b.x + nx * 0.04, y: b.y + b.height / 2 + 0.5, z: b.z + nz * 0.04, rot: yaw(b.rotY), scale: 1.3),
+    );
     final it = Interactable(kind: kind, x: b.x + nx * 1.6, z: b.z + nz * 1.6, radius: 2.4);
     interactables.add(it);
     tagInteract(board.group, it);
     // The board and its label above it, up to the ceiling.
     final wall = wallFacing(b.rotY);
     final bottom = b.y - (b.height + 0.3) / 2;
-    fixture(wall, wall == Side.north || wall == Side.south ? b.x : b.z, (bottom + wallHeight) / 2, b.width + 0.3, wallHeight - bottom);
+    fixture(
+      wall,
+      wall == Side.north || wall == Side.south ? b.x : b.z,
+      (bottom + wallHeight) / 2,
+      b.width + 0.3,
+      wallHeight - bottom,
+    );
   }
 
   // Lounge: TV, couch, coffee table, beanbags, and the jukebox in the corner.
   final tvGroup = Node(name: 'tv');
-  tvGroup.add(place(mesh(roundedBox(Tv.width + 0.3, 0.14, Tv.height + 0.3, 0.12), tc(Palette.ink)), rot: euler(math.pi / 2)));
+  tvGroup.add(
+    place(mesh(roundedBox(Tv.width + 0.3, 0.14, Tv.height + 0.3, 0.12), tc(Palette.ink)), rot: euler(math.pi / 2)),
+  );
   final tvMat = flat('#1b1d2e');
   final tvNode = mesh(planeXY(Tv.width, Tv.height), tvMat, 0, 0, 0.08, false);
   tvGroup.add(tvNode);
@@ -503,10 +584,11 @@ Office buildOffice({required LabelHub labels}) {
   final plantLeaves = mergeByMaterial(leaves);
   group.add(plantLeaves);
 
-  // Ceiling lamps (floating cartoon pendants).
+  // Ceiling lamps (cartoon pendants), hung on long cords down from the high ceiling.
+  const lampY = 4.05;
   for (final (x, z) in const [(-10.5, -4.0), (-1.5, -4.0), (-10.5, 4.0), (-1.5, 4.0), (13.0, 0.0)]) {
-    decor.add(place(pendant(), x: x, y: wallHeight - 0.15, z: z, scale: 0.8));
-    night.halos.add(Halo(at: vm.Vector3(x, wallHeight - 0.27, z), size: 1.3, color: '#ffe08a'));
+    decor.add(place(pendant(wallHeight - lampY), x: x, y: lampY, z: z, scale: 0.8));
+    night.halos.add(Halo(at: vm.Vector3(x, lampY - 0.12, z), size: 1.3, color: '#ffe08a'));
   }
 
   final bossScreen = buildLoft(group, interactables, looks);
@@ -540,21 +622,25 @@ Office buildOffice({required LabelHub labels}) {
   group.add(mergeByMaterial(decor));
   looks.paintPlanks(floorPalettes[0]);
   return Office._(
-    fixtures,
-    looks,
-    doors,
-    beanbags,
-    group: group,
-    colliders: officeColliders(elevator: elevator.colliders),
-    interactables: interactables,
-    desks: desks,
-    boardMeshes: boardMeshes,
-    tvScreen: Face(tvNode, tvMat, Tv.width, Tv.height),
-    bossScreen: bossScreen,
-    elevator: elevator,
-    gong: gong,
-    jukebox: jukebox,
-    whiteboard: whiteboard,
-    night: night,
-  )..plantLeaves = plantLeaves;
+      fixtures,
+      looks,
+      doors,
+      beanbags,
+      group: group,
+      colliders: colliders..insertAll(0, officeColliders(elevator: elevator.colliders, ground: groundCs)),
+      interactables: interactables,
+      desks: desks,
+      boardMeshes: boardMeshes,
+      tvScreen: Face(tvNode, tvMat, Tv.width, Tv.height),
+      bossScreen: bossScreen,
+      elevator: elevator,
+      gong: gong,
+      jukebox: jukebox,
+      whiteboard: whiteboard,
+      night: night,
+      stack: stack,
+      level: _Level(ground, [for (final c in groundCs) (c, c.top, c.bottom ?? 0)], exit.door, plug, tower),
+    )
+    ..plantLeaves = plantLeaves
+    ..setLevel(0, 1);
 }

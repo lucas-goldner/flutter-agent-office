@@ -6,6 +6,7 @@ import 'dart:math' as math;
 
 import 'package:office_shared/layout.dart' as lay;
 import 'package:office_shared/layout.dart' hide Elevator, Gong, Jukebox, Whiteboard;
+
 import '../collider.dart';
 import 'rooms_colliders.dart';
 
@@ -38,27 +39,29 @@ class WallsPlan {
   final List<Collider> colliders = [];
 }
 
+/// Walls throw shade only this far up: any higher and a low sun's shadow would fill the room.
+const double shadeHeight = 4.2;
+
 final List<Opening> officeOpenings = [...windows, exitDoor, balconyDoor];
 
 WallsPlan wallsPlan([List<Opening>? openings]) {
   openings ??= officeOpenings;
   final plan = WallsPlan();
   const t = wallT;
-  const loftTop = Loft.y + Loft.height + 0.2;
   final walls = <(Side, double, List<(double, double, double)>)>[
     (Side.north, Floor.minZ - t / 2, [(Floor.minX - t, Floor.maxX + t, wallHeight)]),
-    (Side.south, Floor.maxZ + t / 2, [(Floor.minX - t, Loft.minX, wallHeight), (Loft.minX, Floor.maxX + t, loftTop)]),
+    (Side.south, Floor.maxZ + t / 2, [(Floor.minX - t, Floor.maxX + t, wallHeight)]),
     (Side.west, Floor.minX - t / 2, [(Floor.minZ, Floor.maxZ, wallHeight)]),
-    (Side.east, Floor.maxX + t / 2, [(Floor.minZ, Loft.minZ, wallHeight), (Loft.minZ, Floor.maxZ, loftTop)]),
+    (Side.east, Floor.maxX + t / 2, [(Floor.minZ, Floor.maxZ, wallHeight)]),
   ];
   for (final (side, at, spans) in walls) {
     final alongX = side == Side.north || side == Side.south;
     void piece(double u0, double u1, double y0, double y1) {
       if (u1 - u0 < 0.001 || y1 - y0 < 0.001) return;
-      // Up past the ceiling downstairs the sun shines through, as it does through the loft's roof.
-      if (y0 < wallHeight && y1 > wallHeight) {
-        piece(u0, u1, y0, wallHeight);
-        piece(u0, u1, wallHeight, y1);
+      // Up high the sun shines through, as it does through the ceiling and the loft's roof.
+      if (y0 < shadeHeight && y1 > shadeHeight) {
+        piece(u0, u1, y0, shadeHeight);
+        piece(u0, u1, shadeHeight, y1);
         return;
       }
       plan.pieces.add(WallPiece(side, at, u0, u1, y0, y1));
@@ -110,15 +113,42 @@ List<Collider> exitStairsColliders() {
   const treads = s - 1;
   const run = ExitStairs.run;
   final out = <Collider>[
-    Collider(minX: ExitStairs.minX, maxX: ExitStairs.maxX, minZ: ExitStairs.landingZ0, maxZ: ExitStairs.landingZ1, bottom: streetY, top: 0),
+    Collider(
+      minX: ExitStairs.minX,
+      maxX: ExitStairs.maxX,
+      minZ: ExitStairs.landingZ0,
+      maxZ: ExitStairs.landingZ1,
+      bottom: streetY,
+      top: 0,
+    ),
   ];
   for (var i = 1; i <= treads; i++) {
     final z0 = ExitStairs.landingZ1 + (i - 1) * run;
-    out.add(Collider(minX: ExitStairs.minX, maxX: ExitStairs.maxX, minZ: z0, maxZ: z0 + run, bottom: streetY, top: -i * rise));
+    out.add(
+      Collider(minX: ExitStairs.minX, maxX: ExitStairs.maxX, minZ: z0, maxZ: z0 + run, bottom: streetY, top: -i * rise),
+    );
   }
   const bottomZ = ExitStairs.landingZ1 + (treads - 0.5) * run;
-  out.add(Collider(minX: ExitStairs.minX - 0.05, maxX: ExitStairs.minX + 0.1, minZ: ExitStairs.landingZ0, maxZ: bottomZ, bottom: streetY, top: 99));
-  out.add(Collider(minX: ExitStairs.minX, maxX: ExitStairs.maxX, minZ: ExitStairs.landingZ0 - 0.05, maxZ: ExitStairs.landingZ0 + 0.1, bottom: streetY, top: 99));
+  out.add(
+    Collider(
+      minX: ExitStairs.minX - 0.05,
+      maxX: ExitStairs.minX + 0.1,
+      minZ: ExitStairs.landingZ0,
+      maxZ: bottomZ,
+      bottom: streetY,
+      top: 99,
+    ),
+  );
+  out.add(
+    Collider(
+      minX: ExitStairs.minX,
+      maxX: ExitStairs.maxX,
+      minZ: ExitStairs.landingZ0 - 0.05,
+      maxZ: ExitStairs.landingZ0 + 0.1,
+      bottom: streetY,
+      top: 99,
+    ),
+  );
   return out;
 }
 
@@ -140,15 +170,32 @@ const List<(double, double, double)> balconyPlants = [
 
 Collider _plant(double x, double z, double s, [double floor = 0]) {
   final r = 0.3 * s;
-  return Collider(minX: x - r, maxX: x + r, minZ: z - r, maxZ: z + r, bottom: floor == 0 ? null : floor, top: floor + 0.5 * s);
+  return Collider(
+    minX: x - r,
+    maxX: x + r,
+    minZ: z - r,
+    maxZ: z + r,
+    bottom: floor == 0 ? null : floor,
+    top: floor + 0.5 * s,
+  );
 }
+
+/// The posts under the bottom floor's balcony, down to the street (see buildBalconyPosts).
+List<Collider> balconyPostColliders() => [
+  for (final x in [Balcony.minX + 0.25, Balcony.maxX - 0.25])
+    Collider(
+      minX: x - 0.14,
+      maxX: x + 0.14,
+      minZ: Balcony.maxZ - 0.39,
+      maxZ: Balcony.maxZ - 0.11,
+      bottom: streetY,
+      top: -slab,
+    ),
+];
 
 List<Collider> balconyColliders() {
   const minX = Balcony.minX, maxX = Balcony.maxX, minZ = Balcony.minZ, maxZ = Balcony.maxZ;
   final out = <Collider>[Collider(minX: minX, maxX: maxX, minZ: minZ, maxZ: maxZ, bottom: -slab, top: 0)];
-  for (final x in [minX + 0.25, maxX - 0.25]) {
-    out.add(Collider(minX: x - 0.14, maxX: x + 0.14, minZ: maxZ - 0.39, maxZ: maxZ - 0.11, bottom: streetY, top: -slab));
-  }
   for (final (x0, z0, x1, z1) in balconySides) {
     out.add(
       Collider(
@@ -237,7 +284,13 @@ List<Collider> carColliders(ParkedCar car) {
   }
 
   return [
-    rect(-CarSize.width / 2 + 0.08, CarSize.width / 2 - 0.08, -CarSize.length / 2 + 0.08, CarSize.length / 2 - 0.08, CarSize.body),
+    rect(
+      -CarSize.width / 2 + 0.08,
+      CarSize.width / 2 - 0.08,
+      -CarSize.length / 2 + 0.08,
+      CarSize.length / 2 - 0.08,
+      CarSize.body,
+    ),
     rect(-0.6, 0.6, -1.3, 0.1, CarSize.roof),
   ];
 }
@@ -256,11 +309,11 @@ final List<(double, double)> garageColumns = [
   (Bldg.maxX - 0.25, Bldg.minZ + 0.25),
 ];
 
+/// The garage's walls, columns and cars. The slab over it, which is the office's floor, is
+/// stack_plan.dart's: holes go through it to the floor below.
 List<Collider> garageColliders() {
   const ceiling = -slab;
-  final out = <Collider>[
-    Collider(minX: Bldg.minX, maxX: Bldg.maxX, minZ: Bldg.minZ, maxZ: Bldg.maxZ, bottom: ceiling, top: 0),
-  ];
+  final out = <Collider>[];
   for (final (x0, x1, z0, z1) in garageWalls) {
     out.add(Collider(minX: x0, maxX: x1, minZ: z0, maxZ: z1, bottom: streetY, top: ceiling));
   }
@@ -281,8 +334,17 @@ final List<(double, double, double)> streetLamps = [
 const double streetLampHeight = 5;
 
 List<Collider> streetColliders() => [
+  // What you stand on anywhere out there, the lot and the road and the grass alike.
+  Collider(minX: -200, maxX: 200, minZ: -200, maxZ: 200, bottom: streetY - 1, top: streetY),
   for (final (x, z, _) in streetLamps)
-    Collider(minX: x - 0.2, maxX: x + 0.2, minZ: z - 0.2, maxZ: z + 0.2, bottom: streetY, top: streetY + streetLampHeight),
+    Collider(
+      minX: x - 0.2,
+      maxX: x + 0.2,
+      minZ: z - 0.2,
+      maxZ: z + 0.2,
+      bottom: streetY,
+      top: streetY + streetLampHeight,
+    ),
 ];
 
 // ---------------------------------------------------------------------------------------------
@@ -315,7 +377,13 @@ Collider beanbagCollider(DeskDef def) {
     for (final lx in [BeanbagBox.minX, BeanbagBox.maxX])
       for (final lz in [BeanbagBox.minZ, BeanbagBox.maxZ]) def.z - lx * s + lz * c,
   ];
-  return Collider(minX: xs.reduce(math.min), maxX: xs.reduce(math.max), minZ: zs.reduce(math.min), maxZ: zs.reduce(math.max), top: BeanbagBox.top);
+  return Collider(
+    minX: xs.reduce(math.min),
+    maxX: xs.reduce(math.max),
+    minZ: zs.reduce(math.min),
+    maxZ: zs.reduce(math.max),
+    top: BeanbagBox.top,
+  );
 }
 
 /// The lounge's two beanbags (colour, x, z).
@@ -335,7 +403,8 @@ Collider jukeboxCollider() {
 List<Collider> loungeColliders() => [
   Collider(minX: 10, maxX: 11, minZ: -2.2, maxZ: 2.2, top: 0.55),
   Collider(minX: 12.2, maxX: 13.8, minZ: -0.8, maxZ: 0.8, top: 0.46),
-  for (final (_, x, z) in loungeBeanbags) Collider(minX: x - 0.5, maxX: x + 0.5, minZ: z - 0.5, maxZ: z + 0.5, top: 0.6),
+  for (final (_, x, z) in loungeBeanbags)
+    Collider(minX: x - 0.5, maxX: x + 0.5, minZ: z - 0.5, maxZ: z + 0.5, top: 0.6),
   jukeboxCollider(),
 ];
 
@@ -362,7 +431,10 @@ abstract final class LoftPlan {
   static const double doorTop = Loft.y + 2.3;
   static const double deskX = cx + 0.5;
   static const double deskZ = cz - 0.3;
-  static const List<(double, double, double)> plants = [(Loft.maxX - 0.6, Loft.minZ + 0.6, 1), (Loft.maxX - 0.6, Loft.maxZ - 0.6, 1.2)];
+  static const List<(double, double, double)> plants = [
+    (Loft.maxX - 0.6, Loft.minZ + 0.6, 1),
+    (Loft.maxX - 0.6, Loft.maxZ - 0.6, 1.2),
+  ];
 }
 
 List<Collider> loftColliders() {
@@ -372,7 +444,9 @@ List<Collider> loftColliders() {
     Collider(minX: minX, maxX: maxX, minZ: minZ, maxZ: maxZ, bottom: floorY - LoftPlan.slabT, top: floorY),
   ];
   for (final x in [minX + 0.15, cx]) {
-    out.add(Collider(minX: x - 0.14, maxX: x + 0.14, minZ: minZ + 0.01, maxZ: minZ + 0.29, top: floorY - LoftPlan.slabT));
+    out.add(
+      Collider(minX: x - 0.14, maxX: x + 0.14, minZ: minZ + 0.01, maxZ: minZ + 0.29, top: floorY - LoftPlan.slabT),
+    );
   }
   out.add(Collider(minX: minX, maxX: maxX, minZ: minZ, maxZ: maxZ, bottom: roofY, top: roofY + 0.2));
   out.add(Collider(minX: minX, maxX: maxX, minZ: minZ, maxZ: minZ + t, bottom: floorY, top: 99));
@@ -382,14 +456,31 @@ List<Collider> loftColliders() {
   const run = (Stairs.toX - Stairs.fromX) / Stairs.steps;
   const rise = floorY / Stairs.steps;
   for (var i = 1; i <= Stairs.steps; i++) {
-    out.add(Collider(minX: Stairs.fromX + (i - 1) * run, maxX: Stairs.fromX + i * run, minZ: Stairs.minZ, maxZ: Stairs.maxZ, top: i * rise));
+    out.add(
+      Collider(
+        minX: Stairs.fromX + (i - 1) * run,
+        maxX: Stairs.fromX + i * run,
+        minZ: Stairs.minZ,
+        maxZ: Stairs.maxZ,
+        top: i * rise,
+      ),
+    );
   }
   // You can't step off the side of the stairs, or climb on from it.
   out.add(Collider(minX: Stairs.fromX, maxX: Stairs.toX, minZ: Stairs.minZ - 0.1, maxZ: Stairs.minZ, top: 99));
   const dx = LoftPlan.deskX, dz = LoftPlan.deskZ;
   out.add(Collider(minX: dx - 1.3, maxX: dx + 1.3, minZ: dz - 0.6, maxZ: dz + 0.6, bottom: floorY, top: floorY + 0.8));
   out.add(Collider(minX: maxX - 1.15, maxX: maxX, minZ: cz - 1.2, maxZ: cz + 1.2, bottom: floorY, top: floorY + 0.55));
-  out.add(Collider(minX: minX + 0.65, maxX: minX + 1.15, minZ: minZ + 0.65, maxZ: minZ + 1.15, bottom: floorY, top: floorY + 1.3));
+  out.add(
+    Collider(
+      minX: minX + 0.65,
+      maxX: minX + 1.15,
+      minZ: minZ + 0.65,
+      maxZ: minZ + 1.15,
+      bottom: floorY,
+      top: floorY + 1.3,
+    ),
+  );
   for (final (px, pz, s) in LoftPlan.plants) {
     out.add(_plant(px, pz, s, floorY));
   }
@@ -402,7 +493,8 @@ List<Collider> elevatorColliders() {
   const x = lay.Elevator.x, width = lay.Elevator.width, wall = lay.Elevator.wall, doorWidth = lay.Elevator.doorWidth;
   const minX = x - width / 2, maxX = x + width / 2, back = Floor.minZ, front = elevatorFront;
   return [
-    for (final sx in [minX + wall / 2, maxX - wall / 2]) Collider(minX: sx - wall / 2, maxX: sx + wall / 2, minZ: back, maxZ: front, top: 99),
+    for (final sx in [minX + wall / 2, maxX - wall / 2])
+      Collider(minX: sx - wall / 2, maxX: sx + wall / 2, minZ: back, maxZ: front, top: 99),
     for (final (x0, x1) in [(minX, x - doorWidth / 2), (x + doorWidth / 2, maxX)])
       Collider(minX: x0, maxX: x1, minZ: front - wall, maxZ: front, top: 99),
     Collider(minX: x - doorWidth / 2, maxX: x + doorWidth / 2, minZ: front - wall - 0.06, maxZ: front, top: 99),
@@ -411,24 +503,41 @@ List<Collider> elevatorColliders() {
 
 List<Collider> gongColliders() {
   const x = lay.Gong.x, z = lay.Gong.z, half = lay.Gong.width / 2;
-  return [Collider(minX: x - half - 0.12, maxX: x + half + 0.3, minZ: z - 0.3, maxZ: z + 0.3, top: lay.Gong.height + 0.1)];
+  return [
+    Collider(minX: x - half - 0.12, maxX: x + half + 0.3, minZ: z - 0.3, maxZ: z + 0.3, top: lay.Gong.height + 0.1),
+  ];
 }
 
 List<Collider> whiteboardColliders() {
   const x = lay.Whiteboard.x, z = lay.Whiteboard.z, post = lay.Whiteboard.width / 2 + 0.1;
   return [
-    Collider(minX: x - post - 0.1, maxX: x + post + 0.1, minZ: z - 0.48, maxZ: z + 0.48, top: lay.Whiteboard.bottom + lay.Whiteboard.height + 0.35),
+    Collider(
+      minX: x - post - 0.1,
+      maxX: x + post + 0.1,
+      minZ: z - 0.48,
+      maxZ: z + 0.48,
+      top: lay.Whiteboard.bottom + lay.Whiteboard.height + 0.35,
+    ),
   ];
 }
 
-/// Everything in the office you can't walk through, in the order office.ts pushes it. Pass the
-/// built elevator's colliders so its door collider is the one it opens and shuts.
-List<Collider> officeColliders({List<Collider>? elevator}) => [
-  ...wallsPlan().colliders,
+/// Down to the street, which is the bottom floor's: the steps down from its exit door, the posts
+/// under its balcony, the garage under it and the street out front. On a floor above it, all of it
+/// is that many storeys further down (see Office.setLevel).
+List<Collider> groundColliders() => [
   ...exitStairsColliders(),
-  ...balconyColliders(),
+  ...balconyPostColliders(),
   ...garageColliders(),
   ...streetColliders(),
+];
+
+/// Everything in the office you can't walk through, in the order office.ts pushes it. Pass the
+/// built elevator's colliders so its door collider is the one it opens and shuts, and the ground's
+/// so they're the ones that move down with the street.
+List<Collider> officeColliders({List<Collider>? elevator, List<Collider>? ground}) => [
+  ...wallsPlan().colliders,
+  ...balconyColliders(),
+  ...(ground ?? groundColliders()),
   for (final d in desks) deskCollider(d),
   ...loungeColliders(),
   ...kitchenColliders(),

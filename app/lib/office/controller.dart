@@ -21,6 +21,7 @@ import '../net/office_socket.dart' hide Profile;
 import '../nextup.dart';
 import '../notify.dart';
 import '../office_scope.dart';
+
 import 'package:office_shared/avatar.dart';
 import 'package:office_shared/emotes.dart';
 import 'package:office_shared/floors.dart';
@@ -30,6 +31,7 @@ import 'package:office_shared/layout.dart' as lay show Elevator;
 import 'package:office_shared/protocol.dart';
 import 'package:office_shared/rooftop.dart' show roof;
 import 'package:office_shared/status.dart';
+
 import '../state/store.dart';
 import '../ui/ask.dart';
 import '../ui/boards.dart';
@@ -66,6 +68,7 @@ import '../voice/office_voice.dart';
 import '../walkto.dart';
 import '../world/board_faces.dart';
 import '../world/character.dart';
+import '../world/climb.dart';
 import '../world/collider.dart';
 import '../world/confetti.dart';
 import '../world/dog.dart';
@@ -89,6 +92,7 @@ import 'carry.dart';
 import 'hanging.dart';
 import 'rooms_hub.dart';
 import 'roof.dart';
+import '../world/office/city.dart' show buildCity;
 
 /// How close (meters) you stop a worker jumping, and how far you go before it starts again.
 const double _holdNear = 4;
@@ -118,6 +122,8 @@ const Map<InteractKind, double> _reach = {
   InteractKind.golf: 3.5,
   InteractKind.ball: 3.2,
   InteractKind.bookshelf: 4,
+  InteractKind.ladder: 3,
+  InteractKind.pole: 3.5,
 };
 
 /// Keys that use what you're facing: at a desk, each does something else (see [_interact]).
@@ -232,6 +238,9 @@ class OfficeController implements OfficeActions {
   /// The 📝 whiteboard: its window, and the drawing on the board in the office.
   late final WhiteboardHub whiteboard;
   late final PlayerController player;
+
+  /// You on the ladder or a fire pole, between the floors (see climb.dart).
+  late final Climber climber;
   late final Person me;
   late final Hands hands;
   late final Dog dog;
@@ -276,6 +285,9 @@ class OfficeController implements OfficeActions {
   String _bootVersion = '';
   UpgradePhase? _upgradePhase;
   ({String floor, Timer timer})? _riding;
+
+  /// Up the ladder or down a pole to another floor, while it comes.
+  ({String floor, Grip how, Timer timer})? _climbing;
   int _painted = -1;
 
   Interactable? _target;
@@ -311,7 +323,12 @@ class OfficeController implements OfficeActions {
     devHands = q['hands'] != '0';
     devPerf = q['perf'] == '1';
     if (q['hour'] != null || q['weather'] != null) {
-      skyModel.show(SkyPreview(hour: double.tryParse(q['hour'] ?? ''), weather: q['weather'] == null ? null : Weather.parse(q['weather'])));
+      skyModel.show(
+        SkyPreview(
+          hour: double.tryParse(q['hour'] ?? ''),
+          weather: q['weather'] == null ? null : Weather.parse(q['weather']),
+        ),
+      );
     }
     devLabels = q['labels'] != '0';
 
@@ -348,6 +365,18 @@ class OfficeController implements OfficeActions {
     player.onStand = _gotUp;
     player.onPathEnd = _pathEnded;
     _placeInCar();
+    climber = Climber(
+      player,
+      ClimbHooks(
+        floorThere: (way) => _floorThere(way)?.name,
+        travel: _climbTravel,
+        sound: _climbSound,
+        done: (_, _) => _hintKey = 'stale',
+      ),
+    );
+    office.stack.onHatch = (_, open) {
+      if (open) sound.stepAt(Ladder.x + 0.3, Ladder.z);
+    };
     hands = Hands(store.profile.color, me.skinColor);
     root.add(hands.root);
     me.onSmoke = _myPuff;
@@ -370,6 +399,7 @@ class OfficeController implements OfficeActions {
         if (desk != null && store.workerAtDesk(deskId) == null) desk.vacancy.visible = true;
         _arrangeBeanbags();
       },
+      upstairs: () => office.stack.state.index > 0,
     );
     notifier = DesktopNotifier(enabled: () => settings.notify, openWorker: openWorkerTerminal);
     // Pictures on the walls (and the one you're hanging), and Minesweeper on the boss's monitor.
@@ -395,6 +425,8 @@ class OfficeController implements OfficeActions {
       labels: labels,
       remote: (id) => _remotes[id]?.person,
       reach: _reachOut,
+      // The same city C3's tower stands in, seen from the roof.
+      city: buildCity,
     );
     _listen(Topic.decor, () => gallery.sync(store.decor));
 
@@ -405,6 +437,7 @@ class OfficeController implements OfficeActions {
     _listen(Topic.pulls, _paintPrs);
     _listen(Topic.queue, _paintPrs);
     _listen(Topic.floors, _paintFloor);
+    _listen(Topic.floors, _syncStack);
     _listen(Topic.dog, () => dog.sync(store.dog, store.dogStart));
     _listen(Topic.jukebox, _syncJukebox);
     _listen(Topic.sky, () {
@@ -573,6 +606,13 @@ class OfficeController implements OfficeActions {
   void _devPlace() {
     final q = _query;
     if (q['view'] == 'third') player.setView(ViewMode.third);
+    // ?level=i,n stands you on floor i of a building n floors tall, for looking at the ladder and the tower.
+    final level = q['level']?.split(',').map(int.tryParse).toList();
+    if (level != null && level.length == 2 && level[0] != null && level[1] != null) {
+      final (i, n) = (level[0]!, level[1]!);
+      _devLevel = StackState(index: i, count: n, up: i < n - 1 ? 'Above' : null, down: i > 0 ? 'Below' : null);
+      _syncStack();
+    }
     final at = q['at']?.split(',').map(double.tryParse).toList();
     if (at == null || at.length < 2 || at[0] == null || at[1] == null) return;
     player.pos.setValues(at[0]!, at.length > 4 ? at[4] ?? 0 : 0, at[1]!);
@@ -849,11 +889,12 @@ class OfficeController implements OfficeActions {
   /// Rides the elevator to another floor. From outside the car, you step in while the lights are down.
   @override
   void ride(String floorId) {
-    if (_riding != null || floorId == store.floor) return;
+    if (_riding != null || _climbing != null || floorId == store.floor) return;
     // Another floor is somewhere else: a walk over to someone here ends (walkTo rides on with its own).
     if (!_walkRide) _stopWalking();
     ModalStack.instance.closeAll();
     hanger.cancel();
+    climber.abort();
     final inside = inElevator(player.pos.x, player.pos.z);
     _riding = (floor: floorId, timer: Timer(const Duration(seconds: 10), _rideFailed));
     player.enabled = false;
@@ -914,6 +955,135 @@ class OfficeController implements OfficeActions {
     player.enabled = !ModalStack.instance.open;
   }
 
+  // ---- The ladder and the fire pole ------------------------------------------------------------
+
+  /// The floors of the building from the bottom up (not the ones still being cloned: nobody can go there yet).
+  List<FloorInfo> _builtFloors() => [
+    for (final f in store.floors)
+      if (f.cloning != true) f,
+  ];
+
+  /// The floor above yours (1) or below it (-1), if there is one.
+  FloorInfo? _floorThere(Way way) {
+    final floors = _builtFloors();
+    final i = floors.indexWhere((f) => f.id == store.floor);
+    final j = i + way;
+    return i < 0 || j < 0 || j >= floors.length ? null : floors[j];
+  }
+
+  /// Through the ceiling up the ladder, or through the floor down one: the lights dip as you pass.
+  void _climbTravel(Way way, Grip how, Arrival at) {
+    final f = _floorThere(way);
+    if (f == null || _climbing != null || _riding != null) {
+      climber.abort();
+      return;
+    }
+    _climbing = (floor: f.id, how: how, timer: Timer(const Duration(seconds: 10), _climbFailed));
+    fade.value = true;
+    Timer(const Duration(milliseconds: 170), () => net.send(FloorGoCmd(f.id, at: at)));
+  }
+
+  /// The floor never came (it's gone, or the office is unreachable): back where you were.
+  void _climbFailed() {
+    if (_climbing == null) return;
+    _climbing = null;
+    fade.value = false;
+    climber.abort();
+  }
+
+  void _climbSound(String kind, double speed) {
+    switch (kind) {
+      case 'grab' || 'rung':
+        sound.step();
+      case 'bonk':
+        toast("🔝 ${store.currentFloor()?.name ?? 'This'} is the top floor — the hatch won't budge");
+      case 'land':
+        sound.step(StepKind.land);
+        _landed(speed);
+    }
+  }
+
+  /// Down the pole: dust flies, and there's the floor you're on now.
+  void _landed(double speed) {
+    for (var i = 0; i < 10; i++) {
+      final a = i / 10 * math.pi * 2;
+      smoke.exhale(
+        vm.Vector3(player.pos.x + math.sin(a) * 0.3, player.pos.y + 0.08, player.pos.z + math.cos(a) * 0.3),
+        vm.Vector3(math.sin(a), 0.15, math.cos(a)).normalized(),
+      );
+    }
+    toast('🚒 Wheee! Down to ${store.currentFloor()?.name ?? 'the floor below'}');
+  }
+
+  /// E at the ladder: onto it, facing the wall.
+  void _grabLadder() {
+    if (_riding != null || _climbing != null || climber.active) return;
+    if (_floorThere(1) == null && _floorThere(-1) == null) {
+      toast('No other floors yet — add a project in the elevator', ToastKind.warn);
+      return;
+    }
+    if (player.seat != null) standUp();
+    hanger.cancel();
+    _stopWalking();
+    climber.grabLadder();
+  }
+
+  /// E at a fire pole: down it, if there's a floor below; else (on the bottom floor) a spin round it.
+  void _usePole(int i) {
+    if (_riding != null || _climbing != null || climber.active || i < 0 || i >= poles.length) return;
+    if (player.seat != null) standUp();
+    hanger.cancel();
+    _stopWalking();
+    if (office.stack.polesGoDown()) {
+      climber.slide(poles[i]);
+    } else {
+      climber.twirl(poles[i]);
+    }
+  }
+
+  /// Set by the ?level= dev switch: the floor you're on, whatever the building says.
+  StackState? _devLevel;
+
+  /// The ladder and the pole go where there are floors to go to from this one, and the building is
+  /// as tall as there are floors.
+  void _syncStack() {
+    final floors = _builtFloors();
+    final index = floors.indexWhere((f) => f.id == store.floor);
+    // Up on the roof there's no ladder or pole to take: nothing above, nothing below.
+    final up = store.floor == roof || index < 0 || index + 1 >= floors.length ? null : floors[index + 1].name;
+    final down = index > 0 ? floors[index - 1].name : null;
+    final next =
+        _devLevel ?? StackState(index: math.max(0, index), count: index < 0 ? 1 : floors.length, up: up, down: down);
+    if (next == office.stack.state) return;
+    office.stack.set(next);
+    // The building is as tall as there are floors, with the street as far down as this one is up.
+    office.setLevel(next.index, next.count);
+    // The holiday decorations out on the street go down with it.
+    holiday.setStreetDrop(next.index * storey);
+    player.street = streetBelow(next.index);
+  }
+
+  /// What the hint says while you're on the ladder or a pole.
+  (String, List<HintPart>) _climbHint() {
+    final l = climber.ladder;
+    if (l != null) {
+      if (l.waiting || l.auto) return ('climb|auto', [const HintTitle('🪜 Climbing…')]);
+      final up = _floorThere(1)?.name, down = _floorThere(-1)?.name;
+      return (
+        'climb|$up|$down|${l.y > 0.4}',
+        [
+          const HintTitle('🪜 Ladder'),
+          if (up != null) HintKey('W', 'Up to $up') else const HintAside('top floor'),
+          if (down != null) HintKey('S', 'Down to $down') else const HintKey('S', 'Down'),
+          HintKey('E', l.y < 0.4 ? 'Step off' : 'Let go'),
+        ],
+      );
+    }
+    return climber.sliding == 'twirl'
+        ? ('twirl', [const HintTitle('🚒 Wheee!')])
+        : ('slide', [const HintTitle('🚒 Sliding down…')]);
+  }
+
   void _paintFloor() {
     final p = store.currentFloor()?.palette ?? 0;
     if (p == _painted) return;
@@ -931,7 +1101,21 @@ class OfficeController implements OfficeActions {
       _hintKey = 'stale';
     }
     _paintFloor();
+    _syncStack();
     office.setProjectName(store.project?.name ?? 'Agent Office');
+    // Up the ladder or down the pole: carry on the rest of the way on this floor.
+    final c = _climbing;
+    if (c != null) {
+      c.timer.cancel();
+      _climbing = null;
+      fade.value = false;
+      if (store.floor != null) {
+        climber.arrived();
+        return;
+      }
+    }
+    // Not a climb of yours: the floor you were on was taken off the building.
+    if (climber.active) climber.abort();
     final r = _riding;
     if (r != null) {
       r.timer.cancel();
@@ -973,16 +1157,18 @@ class OfficeController implements OfficeActions {
 
   /// Issues whose cards someone on this floor is carrying around, so they're missing from the board.
   Set<int> _offBoard() => {
-        if (_carrying != null) _carrying!.issue,
-        for (final p in store.peers.values)
-          if (p.carrying != null && p.id != store.you && store.onMyFloor(p)) p.carrying!.issue,
-      };
+    if (_carrying != null) _carrying!.issue,
+    for (final p in store.peers.values)
+      if (p.carrying != null && p.id != store.you && store.onMyFloor(p)) p.carrying!.issue,
+  };
 
   /// The issue whose note on the issues board an aim lands on, or null (bare cork, the frame, anything else).
   GhIssue? _noteUnder(({Interactable it, bool near, SceneRaycastHit hit}) aim) {
     final face = office.boardMeshes['issues'];
     final uv = aim.hit.uv;
-    if (aim.it.kind != InteractKind.issues || face == null || !identical(aim.hit.node, face.node) || uv == null) return null;
+    if (aim.it.kind != InteractKind.issues || face == null || !identical(aim.hit.node, face.node) || uv == null) {
+      return null;
+    }
     final spots = corkLayout(CorkBoardPainter.issueNumbers(store.issues, _cork.off)).spots;
     final n = corkNoteAt(spots, uv.x, uv.y);
     return n == null ? null : store.issues.items.where((i) => i.number == n).firstOrNull;
@@ -1043,7 +1229,14 @@ class OfficeController implements OfficeActions {
       if (_onQueue(card.issue)) {
         toast('#${card.issue} is already on the queue', ToastKind.warn);
       } else {
-        net.send(QueueAddCmd(prompt: prompt, title: '#${card.issue} ${card.title}', issue: card.issue, provider: rememberedProvider(store.project)));
+        net.send(
+          QueueAddCmd(
+            prompt: prompt,
+            title: '#${card.issue} ${card.title}',
+            issue: card.issue,
+            provider: rememberedProvider(store.project),
+          ),
+        );
         _putDown();
       }
       return true;
@@ -1051,20 +1244,24 @@ class OfficeController implements OfficeActions {
     final deskId = it.deskId;
     if (it.kind != InteractKind.desk || deskId == null) return false;
     final w = store.workerAtDesk(deskId);
-    final why = w != null ? cantTakeCard(w) : (hiringPaused(store.usage) ? '💸 Budget spent — hiring resumes tomorrow' : '');
+    final why = w != null
+        ? cantTakeCard(w)
+        : (hiringPaused(store.usage) ? '💸 Budget spent — hiring resumes tomorrow' : '');
     if (why.isNotEmpty) {
       toast(why, ToastKind.warn);
     } else if (w != null) {
       net.send(WorkerPromptCmd(w.id, prompt, issue: card.issue));
       _putDown();
     } else {
-      net.send(WorkerSpawnCmd(
-        deskId: deskId,
-        prompt: prompt,
-        worktree: store.project?.branch != null && worktreePref(),
-        provider: rememberedProvider(store.project),
-        issue: card.issue,
-      ));
+      net.send(
+        WorkerSpawnCmd(
+          deskId: deskId,
+          prompt: prompt,
+          worktree: store.project?.branch != null && worktreePref(),
+          provider: rememberedProvider(store.project),
+          issue: card.issue,
+        ),
+      );
       _putDown();
     }
     return true;
@@ -1072,10 +1269,16 @@ class OfficeController implements OfficeActions {
 
   /// With an issue card in your hands: what E does with it here, and how to put it back.
   (String, List<HintPart>) _carryHint(CarriedIssue card, Interactable? it) {
-    List<HintPart> parts(List<HintPart> mid) => [HintTitle('🗂️ #${card.issue} in hand'), ...mid, const HintKey('Q', 'Put it back')];
+    List<HintPart> parts(List<HintPart> mid) => [
+      HintTitle('🗂️ #${card.issue} in hand'),
+      ...mid,
+      const HintKey('Q', 'Put it back'),
+    ];
     final note = _aimedNote;
     if (it?.kind == InteractKind.issues) {
-      return note != null ? ('${note.number}', parts([HintKey('E', 'Swap it for #${note.number}')])) : ('', parts([const HintKey('E', 'Pin it back up')]));
+      return note != null
+          ? ('${note.number}', parts([HintKey('E', 'Swap it for #${note.number}')]))
+          : ('', parts([const HintKey('E', 'Pin it back up')]));
     }
     if (it?.kind == InteractKind.queue) {
       final on = _onQueue(card.issue);
@@ -1086,10 +1289,20 @@ class OfficeController implements OfficeActions {
       final w = store.workerAtDesk(deskId);
       if (w == null) {
         final paused = hiringPaused(store.usage);
-        return ('$paused', parts([paused ? const HintCost('💸 Budget spent — hiring resumes tomorrow') : const HintKey('E', 'Hire a worker for it')]));
+        return (
+          '$paused',
+          parts([
+            paused
+                ? const HintCost('💸 Budget spent — hiring resumes tomorrow')
+                : const HintKey('E', 'Hire a worker for it'),
+          ]),
+        );
       }
       final why = cantTakeCard(w);
-      return ('${w.id}${w.status}$why', parts([why.isNotEmpty ? HintAside(why) : HintKey('E', 'Hand it to ${w.name}')]));
+      return (
+        '${w.id}${w.status}$why',
+        parts([why.isNotEmpty ? HintAside(why) : HintKey('E', 'Hand it to ${w.name}')]),
+      );
     }
     // Anything else works as usual, card in hand.
     if (it != null) {
@@ -1607,16 +1820,20 @@ class OfficeController implements OfficeActions {
     final desk = w == null ? null : deskById[w.deskId];
     if (w == null || desk == null) {
       final other = store.floors.where((f) => f.id != store.floor && f.waiting > 0).firstOrNull;
-      toast(other != null
-          ? "🛗 Nobody's waiting on this floor. ${other.waiting} on the ${other.name} floor: take the elevator"
-          : '👍 Nobody is waiting on you');
+      toast(
+        other != null
+            ? "🛗 Nobody's waiting on this floor. ${other.waiting} on the ${other.name} floor: take the elevator"
+            : '👍 Nobody is waiting on you',
+      );
       return;
     }
     ModalStack.instance.closeAll();
     _standAt(desk);
     final waiting = waitingInOrder(store.workers.values);
     final of = waiting.length > 1 ? ' (${waiting.indexWhere((x) => x.id == w.id) + 1} of ${waiting.length})' : '';
-    toast('${w.status == WorkerStatus.needsInput ? '🙋 ${w.name} needs input' : '✅ ${w.name} is done'}$of. E opens its terminal');
+    toast(
+      '${w.status == WorkerStatus.needsInput ? '🙋 ${w.name} needs input' : '✅ ${w.name} is done'}$of. E opens its terminal',
+    );
   }
 
   /// The waiting worker you're standing at, if any: N skips it while anyone else is waiting.
@@ -1834,6 +2051,10 @@ class OfficeController implements OfficeActions {
         hanger.view(target.decorId!);
       case InteractKind.whiteboard:
         whiteboard.open();
+      case InteractKind.ladder:
+        _grabLadder();
+      case InteractKind.pole when target.pole != null:
+        _usePole(target.pole!);
       default:
         break;
     }
@@ -2152,6 +2373,13 @@ class OfficeController implements OfficeActions {
   }
 
   void _renderHint() {
+    if (climber.active && !ModalStack.instance.open) {
+      final (k, parts) = _climbHint();
+      if (k == _hintKey) return;
+      _hintKey = k;
+      hint.value = parts;
+      return;
+    }
     if (hanger.active && !ModalStack.instance.open) {
       final (k, parts) = hanger.hint();
       if (k == _hintKey) return;
@@ -2192,11 +2420,25 @@ class OfficeController implements OfficeActions {
       case InteractKind.issues:
         final note = _aimedNote;
         if (note != null) {
-          return ('${note.number}', [HintTitle(clip('📌 #${note.number} ${note.title}', 60)), const HintKey('E', 'Take it'), const HintKey('O', 'Read it')]);
+          return (
+            '${note.number}',
+            [
+              HintTitle(clip('📌 #${note.number} ${note.title}', 60)),
+              const HintKey('E', 'Take it'),
+              const HintKey('O', 'Read it'),
+            ],
+          );
         }
         final notes = CorkBoardPainter.issueNumbers(store.issues, _cork.off).isNotEmpty;
         return notes
-            ? ('notes', [const HintTitle('📌 Issues board'), const HintKey('E', 'Open'), const HintAside('or point at a note to take it')])
+            ? (
+                'notes',
+                [
+                  const HintTitle('📌 Issues board'),
+                  const HintKey('E', 'Open'),
+                  const HintAside('or point at a note to take it'),
+                ],
+              )
             : board('📌 Issues board');
       case InteractKind.pulls:
         return board('🔀 Pull request board');
@@ -2275,6 +2517,32 @@ class OfficeController implements OfficeActions {
         );
       case InteractKind.bar || InteractKind.dj:
         return roofHub.hintFor(it) ?? ('', []);
+      case InteractKind.ladder:
+        final up = _floorThere(1)?.name, down = _floorThere(-1)?.name;
+        final where = [if (up != null) '⬆ $up', if (down != null) '⬇ $down'].join(' · ');
+        return (
+          where,
+          [
+            const HintTitle('🪜 Ladder'),
+            HintAside(where.isEmpty ? 'no other floors yet' : where),
+            const HintKey('E', 'Climb on'),
+          ],
+        );
+      case InteractKind.pole:
+        final down = _floorThere(-1)?.name;
+        return (
+          '$down',
+          [
+            const HintTitle('🚒 Fire pole'),
+            if (down != null) ...[
+              HintAside('⬇ $down'),
+              const HintKey('E', 'Slide down'),
+            ] else ...[
+              const HintAside('bottom floor'),
+              const HintKey('E', 'Spin round it'),
+            ],
+          ],
+        );
       case InteractKind.dog:
         final doing = dog.doing(
           (id) => store.workers[id]?.name,
@@ -2374,6 +2642,11 @@ class OfficeController implements OfficeActions {
       return true;
     }
     if (hanger.key(e.physicalKey, reach: _reachOut)) return true;
+    // On the ladder, E gets you off it (and nothing else is in reach); W, S and Space climb.
+    if (climber.active && (_deskKeys.containsKey(e.physicalKey) || e.physicalKey == PhysicalKeyboardKey.keyF)) {
+      if (e.physicalKey == PhysicalKeyboardKey.keyE) climber.letGo();
+      return true;
+    }
     final deskKey = _deskKeys[e.physicalKey];
     if (deskKey != null) {
       _use(_target, deskKey);
@@ -2463,7 +2736,9 @@ class OfficeController implements OfficeActions {
     _perfTick += _perf.elapsedMicroseconds / 1000;
     _perfDt += dt;
     if (devPerf && ++_perfN == 20) {
-      debugPrint('PERF tick ${(_perfTick / _perfN).toStringAsFixed(1)} ms, frame ${(_perfDt / _perfN * 1000).toStringAsFixed(0)} ms');
+      debugPrint(
+        'PERF tick ${(_perfTick / _perfN).toStringAsFixed(1)} ms, frame ${(_perfDt / _perfN * 1000).toStringAsFixed(0)} ms',
+      );
       _perfTick = _perfDt = 0;
       _perfN = 0;
     }
@@ -2486,6 +2761,23 @@ class OfficeController implements OfficeActions {
 
     _readKeys();
     _walkTick(now);
+    // Walked into a pole's hole: down you go.
+    if (office.stack.polesGoDown() &&
+        !climber.active &&
+        _climbing == null &&
+        _riding == null &&
+        player.seat == null &&
+        player.enabled) {
+      final hole = office.stack
+          .poles()
+          .where((s) => math.sqrt(math.pow(player.pos.x - s.x, 2) + math.pow(player.pos.z - s.z, 2)) < Pole.hole - 0.15)
+          .firstOrNull;
+      if (hole != null && player.pos.y > -1.35 && player.pos.y < 0.6) {
+        // A trip down the pole ends a walk over to someone (#98).
+        _stopWalking();
+        climber.slide(hole);
+      }
+    }
     player.update(dt);
     me.root.position = vm.Vector3(player.pos.x, player.pos.y + player.stepOffset, player.pos.z);
     me.root.rotation = vm.Quaternion.axisAngle(vm.Vector3(0, 1, 0), player.facing);
@@ -2503,8 +2795,8 @@ class OfficeController implements OfficeActions {
       target: toEngine(player.camTarget + jolt * 0.5),
       up: _cameraUp(),
       fovNear: 0.1,
-      // You can see the whole city from the roof.
-      fovFar: roofHub.upTop ? 700 : 200,
+      // You can see the whole city from the roof; lower down the haze sets how far (see hazeFog).
+      fovFar: roofHub.upTop ? 700 : 320,
     );
     camera = arcade.update(camera, dt, view);
     camera = rooms.update(camera, dt, t, view);
@@ -2608,6 +2900,15 @@ class OfficeController implements OfficeActions {
       ...departures.positions(),
     ]);
     office.jukebox.update(t, dt, sound.beat());
+    office.stack.update(dt, [
+      (x: player.pos.x, y: player.pos.y, z: player.pos.z, onLadder: climber.grip == Grip.ladder),
+      for (final r in _remotes.values)
+        () {
+          final q = r.person.root.position;
+          final ground = groundAt(office.colliders, q.x, q.z, q.y);
+          return (x: q.x, y: q.y, z: q.z, onLadder: gripOf(q.x, q.y, q.z, office.stack.poles(), ground) == Grip.ladder);
+        }(),
+    ], player.camPos);
     _checkSmokeBreak(now);
     smoke.update(dt, player.camPos, player.camTarget);
     confetti.update(dt);
@@ -2618,7 +2919,7 @@ class OfficeController implements OfficeActions {
     _updateSky(dt, t);
 
     _aimedNote = null;
-    if (ModalStack.instance.open || hanger.active) {
+    if (ModalStack.instance.open || hanger.active || climber.active) {
       _target = null;
     } else if (firstPerson) {
       final aim = aimedAt(Offset(view.width / 2, view.height / 2), view);
@@ -2701,7 +3002,9 @@ class OfficeController implements OfficeActions {
     for (var i = 0; i < 8; i++) {
       if (i < lamps.length && m.lampsOn > 0.005) {
         final lamp = lamps[i];
-        l.lampPos[i].setValues(lamp.x, lamp.y, lamp.z, lamp.reach);
+        // The ones down by the street are as far down as the street is from the floor you're on.
+        final y = lamp.ground ? lamp.y + office.night.street - streetY : lamp.y;
+        l.lampPos[i].setValues(lamp.x, y, lamp.z, lamp.reach);
         final c = Rgb.hex(int.parse(lamp.color.substring(1), radix: 16)).scale(lamp.power * m.lampsOn);
         l.lampColor[i].setValues(c.r, c.g, c.b);
       } else {
@@ -2717,8 +3020,15 @@ class OfficeController implements OfficeActions {
     setToonColor(office.night.clouds, m.clouds.color);
     final fog = scene.fog;
     fog.color = m.background.vector;
-    fog.start = m.fogNear * roofHub.fogReach;
-    fog.end = m.fogFar * roofHub.fogReach;
+    if (roofHub.upTop) {
+      fog.start = m.fogNear * roofHub.fogReach;
+      fog.end = m.fogFar * roofHub.fogReach;
+    } else {
+      // The haze thins out the higher you are over the street (see hazeFog).
+      final haze = hazeFog(m.fogNear, m.fogFar, player.camPos.y, office.night.street);
+      fog.start = haze.start;
+      fog.end = haze.end;
+    }
     final bg = m.background.color;
     if (bg != sky.value) sky.value = bg;
     sound.setWeather(m.rain, 1 - m.daylight);

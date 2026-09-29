@@ -8,6 +8,7 @@ import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
 import 'package:office_shared/layout.dart' hide Elevator, Gong, Jukebox, Whiteboard;
+
 import '../text.dart';
 import '../toon.dart';
 import 'cars.dart';
@@ -22,7 +23,15 @@ const double _bay = 3.2;
 
 /// A light that throws a pool of light around it at night (see sky.ts): where, how far, and its colour.
 class Lamp {
-  const Lamp({required this.x, required this.y, required this.z, required this.reach, required this.color, required this.power});
+  const Lamp({
+    required this.x,
+    required this.y,
+    required this.z,
+    required this.reach,
+    required this.color,
+    required this.power,
+    this.ground = false,
+  });
 
   final double x;
   final double y;
@@ -32,6 +41,9 @@ class Lamp {
 
   /// How bright, at the middle of the pool.
   final double power;
+
+  /// Down by the street (a street lamp, the one over the exit): it's further down the higher your floor is.
+  final bool ground;
 }
 
 /// A bulb whose glow goes from [day] (by day) up to full at night.
@@ -48,11 +60,14 @@ class NightBulb {
 
 /// Where a bulb's soft halo goes at night, and its colour.
 class Halo {
-  const Halo({required this.at, required this.size, required this.color});
+  const Halo({required this.at, required this.size, required this.color, this.ground = false});
 
   final vm.Vector3 at;
   final double size;
   final String color;
+
+  /// Down by the street, as for a [Lamp].
+  final bool ground;
 }
 
 /// Everything that changes between day and night and with the weather, for the sky to drive.
@@ -64,6 +79,9 @@ class NightParts {
         ..baseColorFactor = vm.Vector4(1, 1, 1, 0);
 
   final List<NightBulb> bulbs = [];
+
+  /// How far below the floor you're on the street is (see streetBelow): what the `ground` lamps drop with.
+  double street = streetY;
   final List<Halo> halos = [];
   final List<Lamp> lamps = [];
 
@@ -94,7 +112,16 @@ PreprocessedMaterial bulb(NightParts night, String color, [double day = 0]) {
 }
 
 /// A flat, textured toon plane lying on the ground; its texture arrives a frame or two later.
-Node _groundPlane(double w, double d, double x, double y, double z, {Future<Texture2D>? map, String color = '#ffffff', double su = 1}) {
+Node _groundPlane(
+  double w,
+  double d,
+  double x,
+  double y,
+  double z, {
+  Future<Texture2D>? map,
+  String color = '#ffffff',
+  double su = 1,
+}) {
   final mat = Toon.create(hex(color));
   map?.then((t) => setToonTexture(mat, t));
   return mesh(groundPlane(w, d, su, 1), mat, x, y, z, false);
@@ -116,7 +143,10 @@ Future<Texture2D> _garageFloorTexture() {
       g.save();
       g.translate(cx, cz);
       g.rotate(a);
-      g.drawOval(Rect.fromCenter(center: Offset.zero, width: rx * 2, height: rz * 2), fill(blotch.withValues(alpha: 0.015 + rnd.nextDouble() * 0.025)));
+      g.drawOval(
+        Rect.fromCenter(center: Offset.zero, width: rx * 2, height: rz * 2),
+        fill(blotch.withValues(alpha: 0.015 + rnd.nextDouble() * 0.025)),
+      );
       g.restore();
     }
     double X(double x) => (x - Bldg.minX) * px;
@@ -144,7 +174,7 @@ Future<Texture2D> _garageFloorTexture() {
   });
 }
 
-/// Downstairs: the office's floor slab (the garage ceiling), and the open garage under it: concrete
+/// Downstairs: the open garage under the office's floor slab (see stack.dart): concrete
 /// walls at the back and on the west side, columns along the open front and east side, strip
 /// lights, and a row of Lambos and a row of Ferraris. Its colliders are [garageColliders].
 void buildGarage(Node group) {
@@ -154,10 +184,7 @@ void buildGarage(Node group) {
   const cz = (Bldg.minZ + Bldg.maxZ) / 2;
   const ceiling = -slab;
   final concrete = tc('#d3d6dd');
-  final band = tc('#e8a87c');
-
-  // The slab: concrete underneath, a peach band between the floors outside. Its top sits under the office floor.
-  group.add(place(boxFaces(w, slab - 0.01, d, [band, band, concrete, concrete, band, band]), x: cx, y: -slab / 2 - 0.005, z: cz));
+  // The slab over it, which is the office's floor, is stack.dart's: holes go through it to the floor below.
 
   group.add(_groundPlane(w, d, cx, _g + 0.004, cz, map: _garageFloorTexture()));
 
@@ -229,7 +256,10 @@ Node _building(double w, double h, double d, String color, NightParts night, mat
         if (rnd.nextDouble() < 0.45) continue;
         final k = rnd.nextDouble();
         final col = k < 0.15 ? '#9ec9ff' : (rnd.nextDouble() < 0.5 ? '#ffd27a' : '#ffe6b0');
-        c.drawRect(Rect.fromLTWH((i + 0.25) / n * 64, f * 64 + 70 / 256 * 64, 0.5 / n * 64, 120 / 256 * 64), fill(hex(col)));
+        c.drawRect(
+          Rect.fromLTWH((i + 0.25) / n * 64, f * 64 + 70 / 256 * 64, 0.5 / n * 64, 120 / 256 * 64),
+          fill(hex(col)),
+        );
       }
     }
   });
@@ -249,7 +279,10 @@ Node _building(double w, double h, double d, String color, NightParts night, mat
   final (fronts, frontsLit) = walls(w);
   final plain = tc(color);
   g.add(place(boxFaces(w, h, d, [sides, sides, plain, plain, fronts, fronts], repeatV: floors.toDouble()), y: h / 2));
-  final overlay = place(boxFaces(w + 0.04, h, d + 0.04, [sidesLit, sidesLit, null, null, frontsLit, frontsLit]), y: h / 2);
+  final overlay = place(
+    boxFaces(w + 0.04, h, d + 0.04, [sidesLit, sidesLit, null, null, frontsLit, frontsLit]),
+    y: h / 2,
+  );
   overlay.castsShadows = false;
   g.add(overlay);
   g.add(mesh(box(w + 0.4, 0.4, d + 0.4), tc('#fffaf3'), 0, h + 0.2, 0));
@@ -266,8 +299,8 @@ void _streetLamp(Node parts, NightParts night, Material glass, double x, double 
   final hz = z + toward * 1.2;
   parts.add(mesh(cyl(0.12, 0.42, 0.26, 12), ink, x, _g + h - 0.1, hz));
   parts.add(mesh(sphere(0.22, 12, 8), glass, x, _g + h - 0.3, hz, false));
-  night.halos.add(Halo(at: vm.Vector3(x, _g + h - 0.34, hz), size: 2.4, color: '#ffd89a'));
-  night.lamps.add(Lamp(x: x, y: _g + h - 0.6, z: hz, reach: 10, color: '#ffcf8a', power: 4));
+  night.halos.add(Halo(at: vm.Vector3(x, _g + h - 0.34, hz), size: 2.4, color: '#ffd89a', ground: true));
+  night.lamps.add(Lamp(x: x, y: _g + h - 0.6, z: hz, reach: 10, color: '#ffcf8a', power: 4, ground: true));
 }
 
 /// The neighbours' buildings: (x, z, width, height, depth, paint), across the street and further out
@@ -298,15 +331,28 @@ List<({double minX, double maxX, double minZ, double maxZ, double top})> neighbo
     }(),
 ];
 
+/// How far the grass and the road go, end to end: from the top floor the haze is up to 300 m off
+/// (see sky_view.dart), and their ends must be further than that even at the edge of the view.
+const double _reach = 1200;
+
 /// Everything outside, down on the street: grass, the lot in front of the garage, a road with
-/// sidewalks and street lamps, trees, neighbours' buildings and some clouds. Its colliders are
-/// [streetColliders].
-void buildStreet(Node group, NightParts night) {
-  group.add(mesh(groundPlane(400, 400), tc('#a7d98b'), 0, _g - 0.03, 0, false));
+/// sidewalks and street lamps, trees and neighbours' buildings, and in [sky] some clouds. Its
+/// colliders are [streetColliders].
+void buildStreet(Node group, NightParts night, Node sky) {
+  group.add(mesh(groundPlane(_reach, _reach), tc('#a7d98b'), 0, _g - 0.03, 0, false));
 
   // The lot in front of the garage, out to the sidewalk.
   group.add(_groundPlane(60, 21 - Bldg.maxZ, 0, _g - 0.01, (Bldg.maxZ + 21) / 2, color: '#9a9ea8'));
-  group.add(_groundPlane(12, Bldg.maxZ - Bldg.minZ + 6, Bldg.maxX + 6, _g - 0.012, (Bldg.minZ + Bldg.maxZ) / 2 + 1, color: '#9a9ea8'));
+  group.add(
+    _groundPlane(
+      12,
+      Bldg.maxZ - Bldg.minZ + 6,
+      Bldg.maxX + 6,
+      _g - 0.012,
+      (Bldg.minZ + Bldg.maxZ) / 2 + 1,
+      color: '#9a9ea8',
+    ),
+  );
 
   // The road: asphalt, white edge lines and a dashed yellow middle.
   final road = canvasTexture(256, 128, (g) {
@@ -316,9 +362,11 @@ void buildStreet(Node group, NightParts night) {
     g.drawRect(const Rect.fromLTWH(0, 118, 256, 4), white);
     g.drawRect(const Rect.fromLTWH(0, 61, 150, 6), fill(linColor('#ffd166')));
   });
-  group.add(_groundPlane(400, Road.maxZ - Road.minZ, 0, _g - 0.008, (Road.minZ + Road.maxZ) / 2, map: road, su: 400 / 8));
+  group.add(
+    _groundPlane(_reach, Road.maxZ - Road.minZ, 0, _g - 0.008, (Road.minZ + Road.maxZ) / 2, map: road, su: _reach / 8),
+  );
   for (final (z0, z1) in [(21.0, Road.minZ), (Road.maxZ, Road.maxZ + 2)]) {
-    group.add(mesh(box(400, 0.08, z1 - z0), tc('#e3ddd0'), 0, _g, (z0 + z1) / 2));
+    group.add(mesh(box(_reach, 0.08, z1 - z0), tc('#e3ddd0'), 0, _g, (z0 + z1) / 2));
   }
 
   // Trees along the sidewalks and around the building.
@@ -361,7 +409,7 @@ void buildStreet(Node group, NightParts night) {
   }
 
   // Puffy clouds, far off.
-  final sky = _node('clouds');
+  final puffs = _node('clouds');
   const clouds = [
     (-70.0, 34.0, -60.0, 1.3),
     (-10.0, 40.0, -90.0, 1.6),
@@ -376,7 +424,7 @@ void buildStreet(Node group, NightParts night) {
     for (final (dx, dy, r) in const [(0.0, 0.0, 5.0), (5.5, -1.0, 3.8), (-5.5, -1.2, 3.6), (2.5, 2.4, 3.4)]) {
       c.add(place(mesh(sphere(r, 14, 10), night.clouds, 0, 0, 0, false), x: dx, y: dy, scale3: vm.Vector3(1, 0.75, 1)));
     }
-    sky.add(place(c, x: x, y: y, z: z, scale: s, rot: yaw(math.atan2(-x, -z))));
+    puffs.add(place(c, x: x, y: y, z: z, scale: s, rot: yaw(math.atan2(-x, -z))));
   }
-  group.add(mergeByMaterial(sky));
+  sky.add(mergeByMaterial(puffs));
 }

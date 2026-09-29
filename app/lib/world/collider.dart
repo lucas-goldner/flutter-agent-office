@@ -4,7 +4,14 @@ import 'package:flutter_scene/scene.dart';
 
 /// A box footprint you can't walk through (or can stand on top of, up to [top]).
 class Collider {
-  Collider({required this.minX, required this.maxX, required this.minZ, required this.maxZ, required this.top, this.bottom});
+  Collider({
+    required this.minX,
+    required this.maxX,
+    required this.minZ,
+    required this.maxZ,
+    required this.top,
+    this.bottom,
+  });
 
   final double minX;
   final double maxX;
@@ -14,8 +21,9 @@ class Collider {
   /// Mutable for the elevator's doors, which stop blocking you once they're open.
   double top;
 
-  /// Underside, for things you walk beneath (the loft). Null means the floor.
-  final double? bottom;
+  /// Underside, for things you walk beneath (the loft). Null means the floor. Mutable for what's
+  /// down on the street, which is further down the higher your floor is (Office.setLevel).
+  double? bottom;
 
   @override
   String toString() => 'Collider($minX..$maxX, $minZ..$maxZ, top $top${bottom == null ? '' : ', bottom $bottom'})';
@@ -27,6 +35,8 @@ enum InteractKind {
   station, cabinet, meeting, golf, ball, bookshelf,
   // The rooftop bar (office/roof.dart).
   bar, dj,
+  // Between floors (world/climb.dart).
+  ladder, pole,
 }
 
 /// Something you can use: walk up to it and press E, or click it.
@@ -40,6 +50,7 @@ class Interactable {
     this.deskId,
     this.decorId,
     this.seatId,
+    this.pole,
     this.off = false,
   });
 
@@ -53,6 +64,9 @@ class Interactable {
   String? deskId;
   String? decorId;
   String? seatId;
+
+  /// Which of the fire poles (layout's `poles`), for a pole.
+  int? pole;
 
   /// Put away for now (a bean bag nobody needs yet): can't be used.
   bool off;
