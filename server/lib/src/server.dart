@@ -694,6 +694,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     jukebox:
         floor?.jukebox.state() ??
         JukeboxState(on: false, track: jukeboxTunes.first.id, startedAt: _now().toDouble(), elapsed: 0),
+    ball: floor?.court.state() ?? const BallState(),
     cabinet: () {
       final s = cabinetState(floor);
       return CabinetView(player: s.player, scores: s.scores, frame: floor != null ? cabinetPlayer(floor)?.frame : null);
@@ -1060,6 +1061,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
   };
 
   void decorChanged(Floor floor) => toFloor(floor, DecorMsg(floor.decor.list()));
+  void ballChanged(Floor floor) => toFloor(floor, BallMsg(floor.court.state()));
   void jukeboxChanged(Floor floor) => toFloor(floor, JukeboxMsg(floor.jukebox.state()));
   Future<void> teamChanged() async => broadcast(TeamMsg(await team.state()));
 
@@ -1075,12 +1077,15 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
   }
 
   /// Off the floor (or the roof) `c` was on, to [at] on the next one, or into its elevator car.
-  ({Floor? was, bool wasDrawing}) leave(_Client c, [_Spot? at]) {
+  ({Floor? was, bool wasDrawing, bool ballLeft}) leave(_Client c, [_Spot? at]) {
     final was = floorOf(c);
     if (was != null) {
       was.workers.detachAll(c.id);
       was.changes.unwatchAll(c.id);
     }
+    // The ball stays on its floor, back under the hoop. That floor hears so once they're off it (see
+    // arrived), or their own page would put it down before it knew they'd gone.
+    final ballLeft = was?.court.left(c.id) ?? false;
     c.attached.clear();
     c.stale.clear();
     // The whiteboard downstairs stays downstairs, and so does the arcade.
@@ -1100,12 +1105,14 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
       // An issue card belongs to the board it came off, which is on the floor they left; a drink stays at the bar.
       ..carrying = null
       ..drink = null;
-    return (was: was, wasDrawing: wasDrawing);
+    return (was: was, wasDrawing: wasDrawing, ballLeft: ballLeft);
   }
 
-  void arrived(_Client c, ({Floor? was, bool wasDrawing}) left) {
+  void arrived(_Client c, ({Floor? was, bool wasDrawing, bool ballLeft}) left) {
     broadcast(PeerUpdateMsg(c.peer.info), except: c.id);
     if (left.wasDrawing) drawingChanged(left.was);
+    final was = left.was;
+    if (left.ballLeft && was != null) ballChanged(was);
   }
 
   /// Takes `c` to another floor: everyone sees them leave and arrive, and they get the new floor's
@@ -1375,6 +1382,25 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
                 sendTo(c, FloorAddedMsg(repo, floor: floor.id));
               }),
         );
+      case 'ball.take' || 'ball.throw':
+        final floor = floorOf(c);
+        if (floor == null) break;
+        final changed = t == 'ball.take'
+            ? floor.court.take(c.id)
+            : floor.court.throwBall(c.id, (
+                x: _num(msg['x']),
+                y: _num(msg['y']),
+                z: _num(msg['z']),
+                vx: _num(msg['vx']),
+                vy: _num(msg['vy']),
+                vz: _num(msg['vz']),
+              ));
+        // Whoever didn't get it (someone else caught it first) is told where it really is.
+        if (changed) {
+          ballChanged(floor);
+        } else {
+          sendTo(c, BallMsg(floor.court.state()));
+        }
       case 'dog.pet':
         floorOf(c)?.dog.pet(c.peer.info);
       case 'dog.name':
@@ -1960,6 +1986,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
       for (final f in floors.values) {
         f.workers.detachAll(id);
         f.changes.unwatchAll(id);
+        if (f.court.left(id)) ballChanged(f);
       }
       broadcast(PeerLeaveMsg(id));
       if (account != null) accountsChanged();

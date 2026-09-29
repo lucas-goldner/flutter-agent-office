@@ -9,6 +9,7 @@ import 'agents.dart';
 import 'building.dart' show FloorDef;
 import 'changes.dart';
 import 'config.dart' show excludeFromGit;
+import 'court.dart';
 import 'decor.dart';
 import 'dog.dart';
 import 'github.dart';
@@ -213,6 +214,9 @@ class Floor {
   Changes get changes => _changes!;
   late final Decor decor;
   late final Jukebox jukebox;
+
+  /// The basketball by the hoop: who has it, or its last throw.
+  final Court court = Court();
 
   /// The whiteboard everyone on the floor draws on together.
   late final Whiteboard whiteboard;
