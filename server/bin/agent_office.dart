@@ -7,6 +7,7 @@ import 'package:agent_office_server/src/hook.dart' show runHook;
 import 'package:agent_office_server/src/prune.dart' show prune;
 import 'package:agent_office_server/src/ptyhost.dart';
 import 'package:agent_office_server/src/ptys.dart' show ptyHostCommand;
+import 'package:agent_office_server/src/queue_cmd.dart' show runQueueCommand;
 import 'package:agent_office_server/src/server.dart';
 import 'package:agent_office_server/src/upgrade.dart' show Upgrader;
 
@@ -18,6 +19,7 @@ Future<void> main(List<String> argv) async {
   if (cmd == 'hook') return _exit(await runHook(argv.sublist(1)));
   if (cmd == 'prune') return _exit(await prune(argv.sublist(1)));
   if (cmd == 'accounts') return _exit(accountsCommand(argv.sublist(1)));
+  if (cmd == 'queue') return _exit(await runQueueCommand(argv.sublist(1)));
   if (cmd == '--version') {
     // Without the environment, the upgrader only works out the version (it never checks GitHub).
     stdout.writeln(

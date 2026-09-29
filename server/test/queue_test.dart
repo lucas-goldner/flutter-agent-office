@@ -2,6 +2,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:agent_office_server/src/agents.dart' show validateWorkerEffort;
 import 'package:agent_office_server/src/queue.dart';
 import 'package:office_shared/shared.dart';
 import 'package:path/path.dart' as p;
@@ -11,11 +12,14 @@ import 'package:test/test.dart';
 WorkerInfo withStatus(WorkerInfo w, WorkerStatus status) => WorkerInfo.fromJson({...w.toJson(), 'status': status.wire});
 
 class FakeWorkers implements QueueWorkers {
-  FakeWorkers(this.defaultProvider);
+  FakeWorkers(this.defaultProvider, [this.officeDefault]);
 
   @override
   final AgentProvider defaultProvider;
+  @override
+  final AgentChoice? officeDefault;
   final List<WorkerInfo> workers = [];
+  int hired = 0;
 
   @override
   List<WorkerInfo> list() => workers;
@@ -32,13 +36,15 @@ class FakeWorkers implements QueueWorkers {
     WorkerKind kind,
     AgentProvider provider, [
     String? model,
+    AgentEffort? effort,
   ]) {
     final worker = WorkerInfo(
-      id: 'worker-${workers.length}',
+      id: 'worker-${hired++}',
       deskId: deskId,
       kind: kind,
       provider: provider,
       model: model,
+      effort: effort,
       prompt: prompt,
       name: 'Test',
       color: '#ffffff',
@@ -55,16 +61,20 @@ class FakeWorkers implements QueueWorkers {
   }
 
   @override
-  Future<({String? note, String? error})> kill(String id) async => (note: null, error: null);
+  Future<({String? note, String? error})> kill(String id) async {
+    // Gone from the desks right away, the way the real one does it (before its worktree is dealt with).
+    workers.removeWhere((w) => w.id == id);
+    return (note: null, error: null);
+  }
 
   /// Sets worker [i]'s status, as the TS test does with `f.workers[i].status = ...`.
   WorkerInfo set(int i, WorkerStatus status) => workers[i] = withStatus(workers[i], status);
 }
 
 class Fixture {
-  Fixture([AgentProvider defaultProvider = AgentProvider.claude])
+  Fixture([AgentProvider defaultProvider = AgentProvider.claude, AgentChoice? officeDefault])
     : dir = Directory.systemTemp.createTempSync('office-queue-').path,
-      manager = FakeWorkers(defaultProvider);
+      manager = FakeWorkers(defaultProvider, officeDefault);
 
   final String dir;
   final FakeWorkers manager;
@@ -73,12 +83,14 @@ class Fixture {
 
   List<WorkerInfo> get workers => manager.workers;
 
-  TaskQueue open() {
+  TaskQueue open({num Function()? room, bool worktree = false, String Function()? worktreeNote}) {
     final queue = TaskQueue(
       dir,
       manager,
-      false,
+      worktree,
       QueueEvents(
+        room: room,
+        worktreeNote: worktreeNote,
         update: (_) {},
         toast: (_, _) {},
         claimIssue: (_) async => null,
@@ -99,8 +111,8 @@ class Fixture {
   }
 }
 
-Fixture fixture([AgentProvider defaultProvider = AgentProvider.claude]) {
-  final f = Fixture(defaultProvider);
+Fixture fixture([AgentProvider defaultProvider = AgentProvider.claude, AgentChoice? officeDefault]) {
+  final f = Fixture(defaultProvider, officeDefault);
   addTearDown(f.close);
   return f;
 }
@@ -175,12 +187,12 @@ void main() {
     expect(f.workers[2].model, 'anthropic/claude-sonnet-4');
   });
 
-  test('queue rejects models unless they are valid OpenCode model ids', () {
+  test('queue rejects models unless they are valid Claude aliases or OpenCode model ids', () {
     final f = fixture();
     final q = f.open();
     expect(
       q.add('Task', 'Tester', null, null, AgentProvider.claude, 'openai/gpt-5') ?? '',
-      matches(RegExp('model|OpenCode', caseSensitive: false)),
+      matches(RegExp('model', caseSensitive: false)),
     );
     expect(
       q.add('Task', 'Tester', null, null, AgentProvider.opencode, 'gpt-5') ?? '',
@@ -218,4 +230,160 @@ void main() {
     q.remove(q.state().tasks[1].id);
     expect(f.emptied, 0);
   });
+
+  test('queue rejects reasoning effort unless the task is Claude and the level is known', () {
+    final f = fixture();
+    final q = f.open();
+    expect(
+      q.add('Task', 'Tester', null, null, AgentProvider.opencode, null, AgentEffort.high) ?? '',
+      matches(RegExp('effort|Claude', caseSensitive: false)),
+    );
+    // An unknown level ('overdrive') can't be an AgentEffort in Dart; the validator still says so.
+    expect(validateEffortText('overdrive'), matches(RegExp('effort', caseSensitive: false)));
+    expect(q.state().tasks.length, 0);
+  });
+
+  test('queue preserves a Claude model and effort through seating, retry, and restart', () {
+    final f = fixture();
+    final q = f.open();
+    expect(q.add('Fix login', 'Tester', null, null, AgentProvider.claude, 'haiku', AgentEffort.low), isNull);
+    expect(f.workers[0].model, 'haiku');
+    expect(f.workers[0].effort, AgentEffort.low);
+    expect(q.state().tasks[0].model, 'haiku');
+    expect(q.state().tasks[0].effort, AgentEffort.low);
+    q.onWorker(f.manager.set(0, WorkerStatus.done));
+    q.retry(q.state().tasks[0].id);
+    expect(f.workers[1].model, 'haiku');
+    expect(f.workers[1].effort, AgentEffort.low);
+
+    q.setLimit(0);
+    q.add('Queued', 'Tester', null, null, AgentProvider.claude, 'opus', AgentEffort.max);
+    q.shutdown();
+    final restored = f.open();
+    restored.setLimit(2);
+    expect(f.workers[2].model, 'opus');
+    expect(f.workers[2].effort, AgentEffort.max);
+  });
+
+  test('queue takes Fable and restores it from queue.json', () {
+    final f = fixture();
+    final q = f.open();
+    q.setLimit(0);
+    expect(q.add('Big task', 'Tester', null, null, AgentProvider.claude, 'fable', AgentEffort.xhigh), isNull);
+    q.shutdown();
+    final saved = jsonDecode(File(p.join(f.dir, 'queue.json')).readAsStringSync());
+    expect(saved['tasks'][0]['model'], 'fable');
+    final restored = f.open();
+    expect(restored.state().tasks[0].model, 'fable');
+    restored.setLimit(1);
+    expect(f.workers[0].model, 'fable');
+    expect(f.workers[0].effort, AgentEffort.xhigh);
+  });
+
+  test("a board agent at work does not hold one of the queue's slots", () {
+    final f = fixture();
+    f.workers.add(agent('issues-agent', 'station-issues', WorkerStatus.working));
+    final q = f.open();
+    q.setLimit(1);
+    q.add('Fix login', 'Tester');
+    expect(q.state().tasks[0].status, TaskStatus.running);
+    // Its seat is a desk, never the kiosk.
+    expect(f.workers[1].deskId, startsWith('desk-'));
+  });
+
+  test("workers hired by hand, or left at their prompt after a restart, do not hold the queue's slots", () {
+    final f = fixture();
+    // A room full of workers from before the restart, back at their prompts, and a couple at work.
+    for (var i = 1; i <= 6; i++) {
+      f.workers.add(agent('resumed-$i', 'desk-$i', i <= 4 ? WorkerStatus.idle : WorkerStatus.working));
+    }
+    final q = f.open();
+    q.setLimit(2);
+    q.add('First', 'Tester');
+    q.add('Second', 'Tester');
+    q.add('Third', 'Tester');
+    // Only the queue's own tasks count against its limit.
+    expect([for (final t in q.state().tasks) t.status], [TaskStatus.running, TaskStatus.running, TaskStatus.queued]);
+    expect([for (final w in f.workers.skip(6)) w.deskId], ['desk-7', 'desk-8']);
+    // One of its tasks finishes: the third takes the slot, whatever the other workers are up to.
+    q.onWorker(f.manager.set(6, WorkerStatus.done));
+    expect([for (final t in q.state().tasks) t.status], [TaskStatus.done, TaskStatus.running, TaskStatus.running]);
+  });
+
+  test('an office at its worker limit holds the queue, and a finished queue worker makes room', () async {
+    final f = fixture();
+    var limit = 1;
+    final q = f.open(room: () => limit - f.workers.length);
+    q.add('First', 'Tester');
+    q.add('Second', 'Tester');
+    expect([for (final t in q.state().tasks) t.status], [TaskStatus.running, TaskStatus.queued]);
+    expect(f.workers.length, 1);
+    // The first finishes: its worker goes home to make room, and the second task gets the seat.
+    q.onWorker(f.manager.set(0, WorkerStatus.done));
+    expect([for (final t in q.state().tasks) t.status], [TaskStatus.done, TaskStatus.running]);
+    expect([for (final w in f.workers) w.id], ['worker-1']);
+    // The limit lowered past who's there: nobody is sent home and nothing fails, the queue just waits.
+    q.add('Third', 'Tester');
+    limit = 0;
+    q.onWorker(f.manager.set(0, WorkerStatus.done));
+    expect(
+      [for (final t in q.state().tasks) (t.status, t.outcome)],
+      [(TaskStatus.done, TaskOutcome.done), (TaskStatus.done, TaskOutcome.done), (TaskStatus.queued, null)],
+    );
+    expect(f.workers.length, 1);
+    // Room again: it carries on.
+    limit = 2;
+    q.pump();
+    expect(q.state().tasks[2].status, TaskStatus.running);
+  });
+
+  // From tests/prompts.test.ts: the office default worker, and the worktree note.
+  test('a task nobody picked a worker for runs on the office default; one that did keeps its own', () {
+    final f = fixture(
+      AgentProvider.claude,
+      const AgentChoice(provider: AgentProvider.claude, model: 'sonnet', effort: AgentEffort.low),
+    );
+    final q = f.open();
+    expect(q.add('Fix the dog', 'Queue agent'), isNull);
+    expect(
+      [f.workers[0].provider, f.workers[0].model, f.workers[0].effort],
+      [AgentProvider.claude, 'sonnet', AgentEffort.low],
+    );
+    expect(q.add('Fix the cat', 'Ada', null, null, AgentProvider.claude, 'haiku'), isNull);
+    expect([f.workers[1].provider, f.workers[1].model, f.workers[1].effort], [AgentProvider.claude, 'haiku', null]);
+    // Without one set, it's the office's --agent on its own model.
+    final plain = fixture();
+    plain.open().add('Fix it', 'Ada');
+    expect([plain.workers[0].provider, plain.workers[0].model], [AgentProvider.claude, null]);
+  });
+
+  test('the worktree note the queue adds can be rewritten, or left off', () {
+    final standard = fixture();
+    standard.open(worktree: true).add('Fix it', 'Ada');
+    expect(standard.workers[0].prompt, 'Fix it\n\n${prompts['queue.worktree']!.text}');
+    final rewritten = fixture();
+    rewritten.open(worktree: true, worktreeNote: () => 'Push to your branch.').add('Fix it', 'Ada');
+    expect(rewritten.workers[0].prompt, 'Fix it\n\nPush to your branch.');
+    final none = fixture();
+    none.open(worktree: true, worktreeNote: () => '').add('Fix it', 'Ada');
+    expect(none.workers[0].prompt, 'Fix it');
+  });
 }
+
+String? validateEffortText(String effort) => validateWorkerEffort(WorkerKind.agent, AgentProvider.claude, effort);
+
+WorkerInfo agent(String id, String deskId, WorkerStatus status) => WorkerInfo(
+  id: id,
+  deskId: deskId,
+  kind: WorkerKind.agent,
+  provider: AgentProvider.claude,
+  name: id,
+  color: '#ffffff',
+  status: status,
+  acked: true,
+  createdBy: 'Ada',
+  createdAt: DateTime.now().millisecondsSinceEpoch,
+  cols: 80,
+  rows: 24,
+  viewers: const [],
+);

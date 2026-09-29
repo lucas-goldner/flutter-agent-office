@@ -451,6 +451,11 @@ class Upgrader {
       client.close(force: true);
     }
     _set(phase: UpgradePhase.restarting);
+    try {
+      await keepWorkersThroughRestart(_env);
+    } catch (err) {
+      stderr.writeln('agent-office: workers will be resumed after the restart, not kept running: ${_msg(err)}');
+    }
     // Give every browser a moment to hear about it, then hand over to the new version.
     Timer(_restartDelay, _restart);
   }
@@ -556,6 +561,36 @@ String _msg(Object e) => switch (e) {
   TimeoutException() => 'GitHub took too long to answer',
   _ => '$e',
 };
+
+/// systemd's default KillMode stops everything in the service once the office exits: the workers'
+/// terminal host too (see ptys.dart), so every worker would be cut off mid-turn by an upgrade. Offices
+/// provisioned before deploy/provision.sh set KillMode=process get it from a drop-in here; the
+/// install's user has passwordless sudo. Best effort: without it, workers are resumed and carry on.
+/// Only under systemd (which sets INVOCATION_ID for a service's processes).
+Future<void> keepWorkersThroughRestart(Map<String, String> env) async {
+  if (!Platform.isLinux || (env['INVOCATION_ID'] ?? '').isEmpty) return;
+  String cgroup;
+  try {
+    cgroup = File('/proc/self/cgroup').readAsStringSync();
+  } on Object {
+    return;
+  }
+  final unit = systemdUnit(cgroup);
+  if (unit == null) return;
+  if (await _run('systemctl', ['show', '--property=KillMode', '--value', unit]) == 'process') return;
+  await _run('sudo', [
+    '-n',
+    'sh',
+    '-c',
+    r'mkdir -p "$1" && printf "[Service]\nKillMode=process\n" > "$1/keep-workers.conf" && systemctl daemon-reload',
+    'sh',
+    '/etc/systemd/system/$unit.d',
+  ]);
+}
+
+/// The systemd service a process runs in, from its /proc/self/cgroup.
+String? systemdUnit(String cgroup) =>
+    RegExp(r':/system\.slice/([^/\n]+\.service)$', multiLine: true).firstMatch(cgroup)?.group(1);
 
 Future<String> _run(String cmd, List<String> args, {Duration timeout = const Duration(minutes: 2)}) async {
   final r = await Process.run(cmd, args).timeout(timeout);

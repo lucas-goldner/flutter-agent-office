@@ -81,15 +81,16 @@ const Map<StationKind, String> _job = {
       "You run the office's task queue, and adding to it is the only way you get anything done. Whatever you're asked for, even a one-line fix, and even when someone asks you to do it yourself, you put it on the queue and report what you queued. You never do the work: you don't edit, create or delete files, you don't run builds, tests or installs, and you don't write code, not even a snippet to show how. Read the code and gh issue list only as far as it takes to write a good task. Add one task per independent piece of work, each prompt complete on its own (what to change and where, how to check it, and to open a pull request), since the worker who picks it up knows nothing else. Link a task to its GitHub issue when it's for one. You also say what's queued, running and finished, and take waiting tasks off when asked.",
 };
 
-/// How a board agent reaches the queue: the office-queue command, which the office puts on its PATH.
+/// How a board agent reaches the queue: the office's own `agent-office queue` command, which the
+/// office puts on its PATH (upstream's office-queue script).
 const String _queueApi =
-    '''The task queue gives each task a fresh worker in its own git worktree, a few at a time; a task usually ends with a pull request. Use it with the office-queue command, which is on your PATH (it knows who you are, so don't call the office's HTTP API yourself):
-- See it: office-queue list (each task's id, status, title, worker and pull request)
-- Add a task: office-queue add --title "Short title" [--issue <number>], with the task's prompt on stdin in a quoted heredoc so nothing in it gets expanded. It prints the new task's id. With --issue the task is linked to that GitHub issue, which is assigned when the task starts.
-  office-queue add --title "Fix the login redirect" <<'EOF'
+    '''The task queue gives each task a fresh worker in its own git worktree, a few at a time; a task usually ends with a pull request. Use it with the agent-office queue command, which is on your PATH (it knows who you are, so don't call the office's HTTP API yourself):
+- See it: agent-office queue list (each task's id, status, title, worker and pull request)
+- Add a task: agent-office queue add --title "Short title" [--issue <number>], with the task's prompt on stdin in a quoted heredoc so nothing in it gets expanded. It prints the new task's id. With --issue the task is linked to that GitHub issue, which is assigned when the task starts.
+  agent-office queue add --title "Fix the login redirect" <<'EOF'
   …the full prompt…
   EOF
-- Take a waiting task off: office-queue remove <id>''';
+- Take a waiting task off: agent-office queue remove <id>''';
 
 /// What a board agent is told ahead of the first request typed to it.
 String _stationDefault(StationKind kind) {
