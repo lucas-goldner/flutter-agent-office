@@ -525,8 +525,9 @@ class WorkerManager implements QueueWorkers {
             : 'A meeting seats its workers at the meeting table',
       );
     }
-    if (meeting != null && (kind != WorkerKind.agent || worktree))
+    if (meeting != null && (kind != WorkerKind.agent || worktree)) {
       return fail('A meeting seats agents, in its own worktree');
+    }
     if (kind == WorkerKind.shell && provider != null) return fail('Shell workers do not have an agent provider');
     if (kind == WorkerKind.agent &&
         selectedProvider == AgentProvider.custom &&
@@ -619,8 +620,9 @@ class WorkerManager implements QueueWorkers {
       return r.worker == null ? fail(r.error!) : (info: r.worker, hired: true, error: null);
     }
     // Typed into the question it's asking, the prompt would answer it.
-    if (w.info.status == WorkerStatus.needsInput)
+    if (w.info.status == WorkerStatus.needsInput) {
       return fail('The ${w.info.name} is waiting on an answer in its terminal');
+    }
     if (w.pty == null) w.info.lastInput = LastInput(by: by, at: _now());
     final err = w.pty != null ? prompt(w.info.id, clean, by) : resume(w.info.id, clean);
     return err != null ? fail(err) : (info: w.info.view, hired: false, error: null);

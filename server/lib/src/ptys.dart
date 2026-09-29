@@ -17,8 +17,9 @@ import 'package:pty2/pty2.dart' as pty2;
 export 'headless.dart' show scrollback;
 
 /// Bump whenever the host's messages change: an office that finds another host stops it and starts
-/// its own. 1 was the Node host; 2 is the Dart one, whose snapshots come from its own serializer.
-const int ptyProtocol = 2;
+/// its own. 1 was the Node host; 2 is the Dart one, whose snapshots come from its own serializer; 3
+/// drops the mouse a full reset (ESC c) switched off from its snapshots.
+const int ptyProtocol = 3;
 
 /// The subcommand of the office's executable that runs the host (see bin/agent_office.dart).
 const String ptyHostCommand = '__ptyhost';

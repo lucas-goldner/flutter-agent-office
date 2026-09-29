@@ -103,6 +103,41 @@ void main() {
       ..usePrivateKeyBytes(utf8.encode(cfg.tls!.key));
   });
 
+  // Port of tests/config.test.ts (#88) and --max-workers (#92).
+  int exitCode(List<String> args) {
+    try {
+      loadConfig(['--home', home.path, '--password', 'x', ...args]);
+      return -1;
+    } on ConfigExit catch (e) {
+      return e.code;
+    }
+  }
+
+  test('--agent-args takes flags as its value, as the help shows', () {
+    expect(loadConfig(['--home', home.path, '--password', 'x', '--agent-args', '--model opus']).agentArgs, [
+      '--model',
+      'opus',
+    ]);
+    // ...and the flag after it is parsed as a flag again.
+    expect(
+      loadConfig(['--home', home.path, '--password', 'x', '--agent-args', '--model opus', '--port', '4999']).port,
+      4999,
+    );
+  });
+
+  test('--agent-args with nothing after it still needs a value; other flags treat a leading -- as missing', () {
+    expect(exitCode(['--agent-args']), 2);
+    expect(exitCode(['--agent', '--agent-args', 'x']), 2);
+  });
+
+  test('--max-workers is a whole number from 1 to 500', () {
+    expect(loadConfig(['--home', home.path, '--password', 'x']).maxWorkers, isNull);
+    expect(loadConfig(['--home', home.path, '--password', 'x', '--max-workers', '6']).maxWorkers, 6);
+    for (final bad in ['0', '2.5', 'six', '501']) {
+      expect(exitCode(['--max-workers', bad]), 2, reason: bad);
+    }
+  });
+
   test('splitArgs', () {
     expect(splitArgs(''), isEmpty);
     expect(splitArgs(''' a 'b c' "d e" f'''), ['a', 'b c', 'd e', 'f']);
