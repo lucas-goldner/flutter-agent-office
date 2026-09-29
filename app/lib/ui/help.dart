@@ -44,10 +44,12 @@ const List<(String, String)> helpRows = [
   ('O', 'Open a pull request for a worker on its own branch, or see the one it has'),
   ('T', 'Chat'),
   ('/', 'Search the chat and every terminal on your floor, back to before the office last restarted'),
-  ('V / M', 'Join voice / mute'),
+  ('V', 'Join voice. In voice, hold V to talk (push to talk): you’re muted once you let go. Leave voice from the ☰ menu'),
+  ('M', 'Mute or unmute your mic in voice. ⚙️ Settings can have you join muted, for push to talk'),
+  ('Tab', 'The ☰ menu, top right: every window, and what shows on screen. Pin what you use most to the top bar'),
   ('Esc', 'Close any window and get back to looking around'),
   ('Ctrl + [', 'Send Esc to a terminal (e.g. to interrupt Claude)'),
-  ('⚙️', 'Settings: switch between first and third person'),
+  ('⚙️', 'Settings (in the ☰ menu): switch between first and third person'),
 ];
 
 ModalHandle openHelp() => ModalStack.instance.show(
