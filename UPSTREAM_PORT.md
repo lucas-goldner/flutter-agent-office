@@ -1,4 +1,4 @@
-# Porting upstream's 58 commits (e41436e..upstream/main)
+# Porting upstream's 58 commits (e41436e..upstream/main) — done
 
 Upstream (AgentSystemLabs/agent-office, remote `upstream`) kept building the TypeScript office after
 this fork moved to Dart + Flutter. Its history is merged (01a19ed); its features are ported here.
@@ -42,3 +42,21 @@ rooftop drinks, holiday themes). Renames: `HolidayTheme` (TS Theme), `launchBall
 | C6 client: games & rooms | #74 minesweeper, #96 #107 cabinet + blocks, #133 hoop, #132 golf, #138 bookshelf + book, #92 machine monitor, #105 meeting room (world + ui/meeting), #76 #75 kiosks/queue board placement |
 
 Left out for now: Windows (#78, #102) — the PTY layer is Unix-only.
+
+## Where it ended up
+
+All eight groups are ported and merged (server 238 tests, office_shared 77, app 355). Known gaps, from
+the groups' reports:
+
+- Not seen on a real screen yet (this sandbox renders in software): the held issue card, compass pins,
+  holiday decorations, emote poses, golf, the hoop, the drunk screen effect.
+- Simplified visuals: Halloween's gradient sky dome, halos round pumpkins, tree and roof string lights,
+  witch-fire as spheres, cobwebs as strips; the drunk double-vision is a sway/blur/warm vignette.
+- Not done: books, balls and clubs in hands (throws and swings use the reach animation) and seeing
+  others read; golf sounds, the green's colliders, the flag; golf assumes the bottom floor
+  (`streetBelow(0)`) rather than following `Office.setLevel`; climbing sounds and hands on the
+  ladder/pole; the meeting-table cards and meeting presets from issues/PRs; the garage lamplight in the
+  toon shader on upper floors; the hiccup camera jolt.
+- `provision.sh` still needs `deploy/aws.sh` (upstream's #145 made it standalone with Caddy).
+- Windows (#78, #102): the PTY layer is Unix-only.
+- `docs/` came from upstream as-is and still describes the Node install in places.
