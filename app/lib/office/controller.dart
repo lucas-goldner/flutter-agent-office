@@ -1266,7 +1266,10 @@ class OfficeController implements OfficeActions {
         ..musicMuted = s.musicMuted
         ..notify = s.notify
         ..save();
-      if (talkChanged) voiceRoom.setMuted(settings.pushToTalk);
+      if (talkChanged) {
+        voiceRoom.setMuted(settings.pushToTalk);
+        hud.prefs.refresh();
+      }
       player.setView(settings.view);
       sound.setVolume(settings.volume, settings.muted);
       sound.setMusicVolume(settings.music, settings.musicMuted);
