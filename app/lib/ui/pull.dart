@@ -630,6 +630,9 @@ class BoardActions {
   /// Walks you to the desk a pull request came from.
   void goToDesk(String deskId) => scope.actions.goToDesk(deskId);
 
+  /// Take the issue's card off the board, to carry to a desk or the queue.
+  void pickUp(GhIssue issue) => scope.actions.pickUp(issue);
+
   /// Put an issue on the 📋 task queue; a worker is seated for it when there's room.
   void queue(String prompt, String title, int issue, {AgentProvider? provider, String? model}) =>
       scope.net.send(QueueAddCmd(prompt: prompt, title: title, issue: issue, provider: provider, model: model));
@@ -2385,6 +2388,12 @@ class _IssueWindowState extends State<_IssueWindow> {
                   label: onQueue ? (task.status == TaskStatus.running ? '🤖 ${task.workerName ?? 'A worker'} is on it' : '📋 On the queue') : '📋 Add to queue',
                   tooltip: onQueue ? null : 'A worker picks it up by itself when a desk is free and there is room under the worker limit',
                   onPressed: onQueue ? null : _addToQueue,
+                ),
+              if (isOpen)
+                OfficeButton(
+                  label: '✋ Pick it up',
+                  tooltip: 'Carry its card to an empty desk, a worker or the queue board, and press E there',
+                  onPressed: () => actions.pickUp(it),
                 ),
               OfficeButton(
                 label: '🤖 Hand to a worker',

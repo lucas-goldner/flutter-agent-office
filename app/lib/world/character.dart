@@ -17,6 +17,7 @@ import 'package:office_shared/protocol.dart';
 import 'package:office_shared/status.dart';
 import 'geo.dart';
 import 'label_widgets.dart';
+import 'card.dart';
 import 'labels.dart';
 import 'worker_pr.dart';
 import 'player.dart' show kHips;
@@ -414,8 +415,31 @@ class Person {
   /// Reach out with the right hand, as if pressing or grabbing something in front of you.
   void reach() => _reachT = 0;
 
-  /// A mug of coffee in the left hand, or not.
-  void holdMug(bool on) => _mug.visible = on;
+  /// A mug of coffee in the left hand, or not. It waits while the hands are full (a card).
+  void holdMug(bool on) {
+    _wantsMug = on;
+    _mug.visible = on && !(_card?.held ?? false);
+  }
+
+  bool _wantsMug = false;
+
+  /// An issue card off the board, held out in front in both hands (see carry).
+  HeldCard? _card;
+
+  /// Carries an issue card in both hands, or puts it down (null). The mug waits while the hands are full.
+  void carry(CarriedIssue? card) {
+    if (card == null && _card == null) return;
+    _card ??= () {
+      // Between the hands when both arms are out in front (see update), its front to whoever they walk up to.
+      final holder = Node(name: 'card-holder')
+        ..position = vm.Vector3(0, 0.8, 0.36)
+        ..rotation = euler(-0.1, 0, 0);
+      _body.add(holder);
+      return HeldCard(holder, 0.46);
+    }();
+    _card!.set(card);
+    holdMug(_wantsMug);
+  }
 
   bool get smoking => _smokeT >= 0;
 
@@ -497,6 +521,17 @@ class Person {
       }
     }
     if (_smokeT >= 0) _smokeStep(dt, moving, airborne);
+    if (_card?.held ?? false) {
+      // Both arms out in front, hands on the card's edges: it doesn't swing while they walk.
+      _armL
+        ..x = -1.25
+        ..y = 0
+        ..z = 0.3;
+      _armR
+        ..x = -1.25
+        ..y = 0
+        ..z = -0.3;
+    }
     var reach = 0.0;
     if (_reachT >= 0) {
       _reachT += dt;

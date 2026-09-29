@@ -64,6 +64,11 @@ AgentProvider _preferredProvider(List<AgentProvider> options, AgentProvider fall
   return options.contains(fallback) ? fallback : options.first;
 }
 
+/// The provider a picker would start on, for hiring without showing one (an issue card dropped on
+/// a desk or the queue board): the one last picked anywhere, else the project's default.
+AgentProvider rememberedProvider(ProjectInfo? project) =>
+    _preferredProvider(supportedProviders(project), resolvedProvider(project?.defaultProvider, project));
+
 const kModelMax = 256;
 final _badChars = RegExp(r'[\s\p{Cc}\p{Cf}]', unicode: true);
 final _modelHead = RegExp(r'^[A-Za-z0-9_.][A-Za-z0-9_.-]*$');

@@ -76,6 +76,7 @@ import '../world/sky_view.dart';
 import '../world/smoke.dart';
 import '../world/space.dart';
 import '../world/toon.dart';
+import 'carry.dart';
 import 'hanging.dart';
 
 /// How close (meters) you stop a worker jumping, and how far you go before it starts again.
@@ -405,7 +406,7 @@ class OfficeController implements OfficeActions {
       );
     }
 
-    mount('issues', CorkBoardFace(store: store, kind: CorkKind.issues));
+    mount('issues', CorkBoardFace(store: store, kind: CorkKind.issues, marks: _cork));
     mount('pulls', CorkBoardFace(store: store, kind: CorkKind.pulls));
     mount('services', ServicesBoardFace(store: store));
     mount('queue', QueueBoardFace(store: store));
@@ -441,6 +442,8 @@ class OfficeController implements OfficeActions {
           _arrive();
         }
         if (player.seat != null) net.send(SitCmd(seat: player.seat!.key));
+        final card = _carrying;
+        if (card != null) net.send(CarryCmd(issue: card.issue, title: card.title));
         // After a reconnect the office has forgotten what we're doing.
         _doingSent = null;
         _sendDoing();
@@ -455,6 +458,12 @@ class OfficeController implements OfficeActions {
       case RtcMsg m:
         voiceRoom.signal(m.from, m.data);
       case FloorEnterMsg _:
+        // The card belongs to the board downstairs (or up): the office already put it back there.
+        final card = _carrying;
+        if (card != null) {
+          toast("📌 #${card.issue} stayed behind on the other floor's board");
+          _setCarrying(null);
+        }
         _arrive();
       case ToastMsg m:
         toast(m.text, switch (m.level) {
@@ -592,6 +601,145 @@ class OfficeController implements OfficeActions {
       final w = store.workers[e.key];
       if (w != null) e.value.model.setPr(workerPr(w, store.pulls.items, store.queue.tasks));
     }
+  }
+
+  // ---- Carrying an issue card ------------------------------------------------------------------
+
+  /// The issue card in your hands, taken off this floor's issues board, or null.
+  CarriedIssue? _carrying;
+
+  /// Cards off the issues board (carried around) and the note you're reaching for (lifted).
+  final CorkMarks _cork = CorkMarks();
+
+  /// The note on the issues board under the crosshair (or, in third person, the mouse), which E takes.
+  GhIssue? _aimedNote;
+
+  /// Issues whose cards someone on this floor is carrying around, so they're missing from the board.
+  Set<int> _offBoard() => {
+        if (_carrying != null) _carrying!.issue,
+        for (final p in store.peers.values)
+          if (p.carrying != null && p.id != store.you && store.onMyFloor(p)) p.carrying!.issue,
+      };
+
+  /// The issue whose note on the issues board an aim lands on, or null (bare cork, the frame, anything else).
+  GhIssue? _noteUnder(({Interactable it, bool near, SceneRaycastHit hit}) aim) {
+    final face = office.boardMeshes['issues'];
+    final uv = aim.hit.uv;
+    if (aim.it.kind != InteractKind.issues || face == null || !identical(aim.hit.node, face.node) || uv == null) return null;
+    final spots = corkLayout(CorkBoardPainter.issueNumbers(store.issues, _cork.off)).spots;
+    final n = corkNoteAt(spots, uv.x, uv.y);
+    return n == null ? null : store.issues.items.where((i) => i.number == n).firstOrNull;
+  }
+
+  void _setCarrying(CarriedIssue? card) {
+    if ((card?.issue ?? 0) == (_carrying?.issue ?? 0)) return;
+    _carrying = card;
+    me.carry(card);
+    hands.carry(card);
+    net.send(CarryCmd(issue: card?.issue, title: card?.title));
+    _cork.off = _offBoard();
+    _hintKey = 'stale';
+  }
+
+  /// ✋ in an issue's window, or E at its note on the board: its card comes off the board and into your hands.
+  @override
+  void pickUp(GhIssue it) {
+    ModalStack.instance.closeAll();
+    if (_carrying?.issue == it.number) return;
+    if (_carrying != null) toast('📌 #${_carrying!.issue} went back on the board');
+    _setCarrying(CarriedIssue(issue: it.number, title: it.title));
+    sound.paper();
+    toast('✋ You took #${it.number} off the board: take it to an empty desk, a worker or the 📋 queue and press E');
+  }
+
+  /// Q, or E at the issues board: the card goes back where it came from.
+  void _putBack() {
+    final card = _carrying;
+    if (card == null) return;
+    toast('📌 #${card.issue} is back on the board');
+    _setCarrying(null);
+    sound.paper();
+  }
+
+  /// The card left your hands for a desk or the queue (the office says who took it).
+  void _putDown() {
+    _setCarrying(null);
+    sound.paper();
+  }
+
+  bool _onQueue(int issue) {
+    final t = store.taskForIssue(issue);
+    return t != null && t.status != TaskStatus.done;
+  }
+
+  /// E with a card in your hands: an empty desk hires a worker for the issue (with the prompt 🤖 Hand
+  /// to a worker uses), an agent at a desk gets it as its next prompt, the queue board queues it, and
+  /// the issues board takes it back (or swaps it for the [note] you point at there). False when it's
+  /// none of those, so E does what it always does there.
+  bool _dropCard(Interactable it, CarriedIssue card, GhIssue? note) {
+    if (it.kind == InteractKind.issues) {
+      note != null ? pickUp(note) : _putBack();
+      return true;
+    }
+    final prompt = cardPrompt(card, store.issues.items.where((i) => i.number == card.issue).firstOrNull);
+    if (it.kind == InteractKind.queue) {
+      if (_onQueue(card.issue)) {
+        toast('#${card.issue} is already on the queue', ToastKind.warn);
+      } else {
+        net.send(QueueAddCmd(prompt: prompt, title: '#${card.issue} ${card.title}', issue: card.issue, provider: rememberedProvider(store.project)));
+        _putDown();
+      }
+      return true;
+    }
+    final deskId = it.deskId;
+    if (it.kind != InteractKind.desk || deskId == null) return false;
+    final w = store.workerAtDesk(deskId);
+    final why = w != null ? cantTakeCard(w) : (hiringPaused(store.usage) ? '💸 Budget spent — hiring resumes tomorrow' : '');
+    if (why.isNotEmpty) {
+      toast(why, ToastKind.warn);
+    } else if (w != null) {
+      net.send(WorkerPromptCmd(w.id, prompt, issue: card.issue));
+      _putDown();
+    } else {
+      net.send(WorkerSpawnCmd(
+        deskId: deskId,
+        prompt: prompt,
+        worktree: store.project?.branch != null && worktreePref(),
+        provider: rememberedProvider(store.project),
+        issue: card.issue,
+      ));
+      _putDown();
+    }
+    return true;
+  }
+
+  /// With an issue card in your hands: what E does with it here, and how to put it back.
+  (String, List<HintPart>) _carryHint(CarriedIssue card, Interactable? it) {
+    List<HintPart> parts(List<HintPart> mid) => [HintTitle('🗂️ #${card.issue} in hand'), ...mid, const HintKey('Q', 'Put it back')];
+    final note = _aimedNote;
+    if (it?.kind == InteractKind.issues) {
+      return note != null ? ('${note.number}', parts([HintKey('E', 'Swap it for #${note.number}')])) : ('', parts([const HintKey('E', 'Pin it back up')]));
+    }
+    if (it?.kind == InteractKind.queue) {
+      final on = _onQueue(card.issue);
+      return ('$on', parts([on ? const HintAside('already on the queue') : const HintKey('E', 'Put it on the queue')]));
+    }
+    final deskId = it?.deskId;
+    if (it?.kind == InteractKind.desk && deskId != null) {
+      final w = store.workerAtDesk(deskId);
+      if (w == null) {
+        final paused = hiringPaused(store.usage);
+        return ('$paused', parts([paused ? const HintCost('💸 Budget spent — hiring resumes tomorrow') : const HintKey('E', 'Hire a worker for it')]));
+      }
+      final why = cantTakeCard(w);
+      return ('${w.id}${w.status}$why', parts([why.isNotEmpty ? HintAside(why) : HintKey('E', 'Hand it to ${w.name}')]));
+    }
+    // Anything else works as usual, card in hand.
+    if (it != null) {
+      final (k, rest) = _hintFor(it);
+      return (k, parts(rest));
+    }
+    return ('', parts([const HintAside('take it to an empty desk, a worker or the 📋 queue')]));
   }
 
   // ---- Walking over to someone, and what everyone's up to ---------------------------------------
@@ -739,7 +887,9 @@ class OfficeController implements OfficeActions {
       r.person.setSmoking(peer.smoking ?? false);
       r.person.sit(peer.seat != null ? seatAt(peer.seat!)?.hips : null);
       r.person.setDoing(whereabouts(peer));
+      r.person.carry(peer.carrying);
     }
+    _cork.off = _offBoard();
     for (final id in _remotes.keys.toList()) {
       final peer = store.peers[id];
       if (peer == null || !store.onMyFloor(peer)) {
@@ -1203,8 +1353,12 @@ class OfficeController implements OfficeActions {
     hands.setSkin(me.skinColor);
   }
 
-  void _interact(Interactable? target, DeskKey key) {
+  void _interact(Interactable? target, DeskKey key, [GhIssue? note]) {
     if (target == null) return;
+    // [note] is the issue note you're pointing at on the issues board, if any (see _aimedNote).
+    if (target.kind != InteractKind.issues) note = null;
+    final card = _carrying;
+    if (key == DeskKey.e && card != null && _dropCard(target, card, note)) return;
     if (target.kind == InteractKind.desk && target.deskId != null) {
       final deskId = target.deskId!;
       final w = store.workerAtDesk(deskId);
@@ -1226,6 +1380,12 @@ class OfficeController implements OfficeActions {
         default:
           return;
       }
+    }
+    // A note on the issues board: E takes it straight off the cork, O opens it to read first.
+    if (note != null && key == DeskKey.e) return pickUp(note);
+    if (note != null && key == DeskKey.o) {
+      openIssue(scope, note);
+      return;
     }
     if (key != DeskKey.e) return;
     switch (target.kind) {
@@ -1460,14 +1620,14 @@ class OfficeController implements OfficeActions {
   }
 
   /// What the ray through [screen] lands on first, and whether it is within reach (plus [slack] meters).
-  ({Interactable it, bool near})? aimedAt(Offset screen, Size view, [double slack = 0]) {
+  ({Interactable it, bool near, SceneRaycastHit hit})? aimedAt(Offset screen, Size view, [double slack = 0]) {
     final ray = camera.screenPointToRay(screen, view);
     final hit = scene.raycast(ray, maxDistance: 60, layerMask: ~Hands.layer);
     if (hit == null) return null;
     final it = interactableOf(hit.node);
     if (it == null) return null; // a wall, the floor, a plant… is in the way
     final eye = toEngine(vm.Vector3(player.pos.x, player.pos.y + kEyeHeight, player.pos.z));
-    return (it: it, near: hit.worldPoint.distanceTo(eye) <= _reach[it.kind]! + slack);
+    return (it: it, near: hit.worldPoint.distanceTo(eye) <= _reach[it.kind]! + slack, hit: hit);
   }
 
   /// Whether something solid stands between the camera and [point] (engine space): for labels.
@@ -1489,15 +1649,16 @@ class OfficeController implements OfficeActions {
       return;
     }
     final t = _target;
-    if (t == null || ModalStack.instance.open) {
+    final card = _carrying;
+    if ((t == null && card == null) || ModalStack.instance.open) {
       if (_hintKey.isNotEmpty) {
         hint.value = null;
         _hintKey = '';
       }
       return;
     }
-    final (k, parts) = _hintFor(t);
-    final key = '${t.kind}${t.deskId ?? ''}|$k';
+    final (k, parts) = card != null ? _carryHint(card, t) : _hintFor(t!);
+    final key = '${t?.kind}${t?.deskId ?? ''}|${card?.issue ?? ''}|$k';
     if (key == _hintKey) return;
     _hintKey = key;
     hint.value = parts;
@@ -1509,7 +1670,14 @@ class OfficeController implements OfficeActions {
       case InteractKind.desk:
         return it.deskId != null ? _deskHint(it.deskId!) : ('', []);
       case InteractKind.issues:
-        return board('📌 Issues board');
+        final note = _aimedNote;
+        if (note != null) {
+          return ('${note.number}', [HintTitle(clip('📌 #${note.number} ${note.title}', 60)), const HintKey('E', 'Take it'), const HintKey('O', 'Read it')]);
+        }
+        final notes = CorkBoardPainter.issueNumbers(store.issues, _cork.off).isNotEmpty;
+        return notes
+            ? ('notes', [const HintTitle('📌 Issues board'), const HintKey('E', 'Open'), const HintAside('or point at a note to take it')])
+            : board('📌 Issues board');
       case InteractKind.pulls:
         return board('🔀 Pull request board');
       case InteractKind.services:
@@ -1653,10 +1821,10 @@ class OfficeController implements OfficeActions {
     }
   }
 
-  void _use(Interactable? it, DeskKey key) {
+  void _use(Interactable? it, DeskKey key, [GhIssue? note]) {
     if (it == null) return;
     _reachOut();
-    _interact(it, key);
+    _interact(it, key, note ?? _aimedNote);
   }
 
   /// A key went down while the office has the keyboard. True when it was one of the office's own.
@@ -1684,6 +1852,11 @@ class OfficeController implements OfficeActions {
       goToNextWaiting();
       return true;
     }
+    if (e.physicalKey == PhysicalKeyboardKey.keyQ && _carrying != null) {
+      _reachOut();
+      _putBack();
+      return true;
+    }
     return false;
   }
 
@@ -1697,7 +1870,7 @@ class OfficeController implements OfficeActions {
     if (player.view == ViewMode.first) {
       // Reach out even at nothing, like poking the air.
       _reachOut();
-      if (_target != null) _interact(_target, DeskKey.e);
+      if (_target != null) _interact(_target, DeskKey.e, _aimedNote);
       return;
     }
     final aim = aimedAt(screen, view, 2.5);
@@ -1706,7 +1879,7 @@ class OfficeController implements OfficeActions {
       toast('Walk closer to that first');
       return;
     }
-    _use(aim.it, DeskKey.e);
+    _use(aim.it, DeskKey.e, _noteUnder(aim));
   }
 
   // ---- The frame --------------------------------------------------------------------------------
@@ -1882,14 +2055,23 @@ class OfficeController implements OfficeActions {
     hanger.update(view, locked: lockAvailable ? pointerLocked : null);
     _updateSky(dt, t);
 
+    _aimedNote = null;
     if (ModalStack.instance.open || hanger.active) {
       _target = null;
     } else if (firstPerson) {
       final aim = aimedAt(Offset(view.width / 2, view.height / 2), view);
       _target = aim != null && aim.near ? aim.it : _mySeat();
+      if (aim != null && aim.near) _aimedNote = _noteUnder(aim);
     } else {
       _target = _mySeat() ?? _pickTarget();
+      // By the issues board, the mouse points at the note you'd take.
+      final mouse = hanger.mouse;
+      if (_target?.kind == InteractKind.issues && mouse != null) {
+        final aim = aimedAt(mouse, view, 2.5);
+        if (aim != null && aim.near) _aimedNote = _noteUnder(aim);
+      }
     }
+    _cork.lifted = _aimedNote?.number;
     _renderHint();
     final show = firstPerson && !ModalStack.instance.open;
     final next = CrosshairState(show: show, on: _target != null, free: show && lockAvailable && !pointerLocked);

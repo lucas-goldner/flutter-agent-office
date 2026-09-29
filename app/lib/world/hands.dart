@@ -19,6 +19,9 @@ import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
 import 'character.dart' show cigarette, coffeeMug, dragCurve, kReachTime, kSmokeCycle, reachCurve, setEmissive;
+import 'package:office_shared/protocol.dart' show CarriedIssue;
+
+import 'card.dart';
 import 'geo.dart';
 import 'toon.dart';
 
@@ -164,8 +167,35 @@ class Hands {
   /// Reach out with the right hand.
   void reach() => _reachT = 0;
 
-  /// A mug of coffee in the left hand, or not.
-  void holdMug(bool on) => _mug.visible = on;
+  /// A mug of coffee in the left hand, or not. It waits while the hands are full (a card).
+  void holdMug(bool on) {
+    _wantsMug = on;
+    _mug.visible = on && !(_card?.held ?? false);
+  }
+
+  bool _wantsMug = false;
+
+  /// An issue card off the board, held low in front of you in both hands, tipped back so you look
+  /// down onto its front.
+  Node? _cardHolder;
+  HeldCard? _card;
+
+  /// 0 → 1 as the card comes up into view and the hands close in on it.
+  double _carryK = 0;
+
+  /// An issue card in both hands, or none (null). The mug waits while the hands are full.
+  void carry(CarriedIssue? card) {
+    if (card == null && _card == null) return;
+    _card ??= () {
+      final holder = _cardHolder = Node(name: 'card-holder')..rotation = euler(-0.35, 0, 0);
+      root.add(holder);
+      return HeldCard(holder, 0.24, onAdd: (n) => setLayers(n, layer));
+    }();
+    final was = _card!.held;
+    _card!.set(card);
+    if (!was) _carryK = 0;
+    holdMug(_wantsMug);
+  }
 
   /// Raise the mug for a sip, once the right hand is back from the coffee machine.
   void sip() => _sipT = -kReachTime * 0.6;
@@ -224,6 +254,9 @@ class Hands {
     }
     final shake = s.jitter * 0.004;
 
+    final held = _card?.held ?? false;
+    _carryK += ((held ? 1 : 0) - _carryK) * math.min(1, dt * 7);
+    final carry = _carryK;
     final pose = <int, (vm.Vector3, vm.Vector3)>{};
     for (final (arm, side) in [(_right, 1), (_left, -1)]) {
       final p = arm.base.clone();
@@ -235,8 +268,18 @@ class Hands {
       p.y += shake * math.sin(t * 131 + side * 2);
       final r = arm.baseRot.clone();
       r.x += _air * 0.2;
+      // Holding a card: both hands in on its bottom corners, palms turned toward it, so the title shows.
+      p.x -= side * 0.08 * carry;
+      p.z -= 0.03 * carry;
+      r.z += side * 0.35 * carry;
       pose[side] = (p, r);
     }
+    // The card rides along with the hands, coming up from below as you take it.
+    _cardHolder?.position = vm.Vector3(
+      _sway.x + step * 0.008,
+      _sway.y + breathe + bounce + _air * 0.05 - 0.115 - 0.3 * (1 - carry),
+      -0.5,
+    );
     // The reach: the right hand jabs out toward the crosshair, the left pulls back a little.
     final (rp, rr) = pose[1]!;
     final (lp, lr) = pose[-1]!;

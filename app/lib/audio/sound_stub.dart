@@ -29,6 +29,7 @@ class OfficeSound implements DogSounds {
   void removeTypist(String id) {}
   void step([StepKind kind = StepKind.walk]) {}
   void stepAt(double x, double z, [double y = 0]) {}
+  void paper() {}
   void coffee() {}
   @override
   void bark(double x, double z, int times) {}
