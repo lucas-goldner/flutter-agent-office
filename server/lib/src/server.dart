@@ -13,6 +13,7 @@ import 'accounts.dart';
 import 'agents.dart';
 import 'auth.dart';
 import 'building.dart';
+import 'cabinet.dart';
 import 'config.dart';
 import 'decor.dart' show ImageData, ImageError, ImageProxy;
 import 'floor.dart';
@@ -156,6 +157,12 @@ class _Client {
   /// Has the floor's whiteboard open.
   bool whiteboard = false;
   int lastWbPointerAt = 0;
+
+  /// At the arcade cabinet on their floor, playing [game] (see Arcade); [frame] is it as it looks now.
+  bool playing = false;
+  String? game;
+  CabinetFrame? frame;
+  int lastFrameAt = 0;
 
   bool get open => !ws.isClosed;
 }
@@ -412,6 +419,22 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     if (floor != null) toFloor(floor, ToastMsg(text, level ?? ToastLevel.info));
   }
 
+  // The arcade's high scores: one table for the whole building, on every floor's cabinet. The office
+  // follows every game and puts the scores up itself (see Arcade).
+  final highScores = HighScores(cfg.dataDir);
+  late final void Function(Floor? floor) cabinetChanged;
+  final arcade = Arcade(highScores, (first) {
+    for (final f in floors.values) {
+      cabinetChanged(f);
+    }
+    if (first != null) {
+      toastFloor(
+        floors[first.floor],
+        '🏆 ${first.score.name} set a new arcade high score: ${scoreText(first.score.score)}',
+      );
+    }
+  });
+
   List<FloorInfo> floorInfos() => [
     for (final f in floors.values) f.info(),
     for (final d in building.pending())
@@ -631,6 +654,32 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     if (floor != null) toFloor(floor, WbPeopleMsg(drawing(floor)));
   }
 
+  /// Who's playing the arcade cabinet on a floor.
+  _Client? cabinetPlayer(Floor floor) => clients.values.where((c) => c.playing && c.peer.floor == floor.id).firstOrNull;
+  CabinetState cabinetState(Floor? floor) {
+    final pl = floor != null ? cabinetPlayer(floor) : null;
+    return CabinetState(
+      player: pl != null ? CabinetPlayer(id: pl.id, name: pl.peer.name, game: pl.game ?? '') : null,
+      scores: highScores.top(),
+    );
+  }
+
+  cabinetChanged = (floor) {
+    if (floor != null) toFloor(floor, CabinetMsg(cabinetState(floor)));
+  };
+
+  /// `c` stepped away from the cabinet (or left the floor, or the office): their game waits, with its score so far on the table.
+  void stopPlaying(_Client c, [Floor? floor]) {
+    if (!c.playing) return;
+    floor ??= floorOf(c);
+    if (floor != null) arcade.leave(c.game, floor.id);
+    c
+      ..playing = false
+      ..game = null
+      ..frame = null;
+    cabinetChanged(floor);
+  }
+
   /// Everything on a floor, for whoever just arrived there.
   FloorView floorView(Floor? floor, [String? id]) => FloorView(
     floor: id ?? floor?.id,
@@ -645,6 +694,10 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     jukebox:
         floor?.jukebox.state() ??
         JukeboxState(on: false, track: jukeboxTunes.first.id, startedAt: _now().toDouble(), elapsed: 0),
+    cabinet: () {
+      final s = cabinetState(floor);
+      return CabinetView(player: s.player, scores: s.scores, frame: floor != null ? cabinetPlayer(floor)?.frame : null);
+    }(),
     whiteboard: WhiteboardView(
       elements: floor?.whiteboard.scene() ?? const [],
       people: floor != null ? drawing(floor) : const [],
@@ -1030,9 +1083,10 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     }
     c.attached.clear();
     c.stale.clear();
-    // The whiteboard downstairs stays downstairs.
+    // The whiteboard downstairs stays downstairs, and so does the arcade.
     final wasDrawing = c.whiteboard;
     c.whiteboard = false;
+    stopPlaying(c, was);
     final e = elevatorSpot();
     final spot = at ?? (x: e.x, y: 0.0, z: e.z, rotY: 0.0);
     c.peer
@@ -1750,6 +1804,50 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         floor.jukebox.skip(who);
         jukeboxChanged(floor);
         toastFloor(floor, '⏭️ $who skipped to “${floor.jukebox.title()}”');
+      case 'cabinet.play':
+        final floor = here();
+        final wanted = msg['game'];
+        if (floor == null || (c.playing && wanted == c.game)) break;
+        final at = cabinetPlayer(floor);
+        if (at != null && at != c) {
+          warn(c, '${at.peer.name} is on the arcade — press E there to watch');
+          sendTo(c, CabinetMsg(cabinetState(floor)));
+          break;
+        }
+        // Already at it: that game's over, and this is the next one.
+        if (c.playing) arcade.leave(c.game, floor.id);
+        final game = arcade.start(
+          Player(
+            owner: c.accountId != null ? 'account:${c.accountId}' : 'name:$who',
+            name: who,
+            color: c.peer.color,
+            connection: c.id,
+          ),
+          wanted,
+        );
+        c.game = game;
+        if (game != wanted && !arcade.counts(game)) {
+          warn(c, "🕹️ That's a lot of new games in a row, so this one won't go on the high-score table");
+        }
+        c
+          ..playing = true
+          ..frame = null;
+        cabinetChanged(floor);
+      case 'cabinet.leave':
+        stopPlaying(c);
+      case 'cabinet.frame':
+        final floor = floorOf(c);
+        final frame = checkFrame(msg['frame']);
+        if (!c.playing || floor == null || frame == null) break;
+        // Every frame counts towards the score, even one that comes too soon after the last to pass on.
+        if (arcade.frame(c.game, frame, floor.id) == Verdict.voided) {
+          warn(c, "🕹️ The office couldn't follow this game, so its score won't go on the high-score table");
+        }
+        c.frame = frame;
+        final now = _now();
+        if (now - c.lastFrameAt < 40) break;
+        c.lastFrameAt = now;
+        toNeighbors(c, CabinetFrameMsg(frame), true);
       case 'jukebox.stop':
         final floor = here();
         if (floor == null || !floor.jukebox.stop(who)) break;
@@ -1858,6 +1956,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
       closed = true;
       clients.remove(id);
       if (client.whiteboard) drawingChanged(floorOf(client));
+      stopPlaying(client);
       for (final f in floors.values) {
         f.workers.detachAll(id);
         f.changes.unwatchAll(id);
@@ -1960,6 +2059,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
   shutdown = (keep) async {
     if (down) return;
     down = true;
+    arcade.flush();
     heartbeat.cancel();
     resync.cancel();
     floorsTimer?.cancel();
