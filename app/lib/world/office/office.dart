@@ -125,6 +125,9 @@ class Office {
     return appeared;
   }
 
+  /// Another door that opens for anyone who comes up to it (the meeting room's, see meeting_room.dart).
+  void addDoor(Door d) => _doors.add(d);
+
   /// The sign over the elevator doors: which floor you're on.
   void setProjectName(String name) => elevator.setSign('🛗 $name');
 

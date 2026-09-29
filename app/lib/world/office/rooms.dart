@@ -21,6 +21,7 @@ import '../text.dart';
 import '../toon.dart';
 import 'bookshelf.dart';
 import 'geo.dart';
+import 'meeting_room.dart';
 import 'office.dart';
 import 'parts.dart';
 
@@ -36,11 +37,17 @@ const Map<StationKind, String> _kioskSign = {
 /// What [addRooms] built that the office needs to reach later.
 class RoomsView {
   RoomsView({
+    required this.meetingBoard,
+    required this.meetingSign,
     required this.cabinetScreen,
     required this.machineScreen,
     required this.idleAgentSpots,
     required this.hoop,
   });
+
+  /// The meeting room's board (its output as it's written) and the sign by its door.
+  final Face meetingBoard;
+  final Face meetingSign;
 
   /// The basketball hoop on the west wall (the ball is office/ball_play.dart's).
   final HoopView hoop;
@@ -118,7 +125,13 @@ RoomsView addRooms(Office office) {
     Hoop.board.top - Hoop.board.bottom + 0.7,
   );
 
+  // Under the loft: the meeting room.
+  final meeting = buildMeetingRoom(office);
+  fixture(Side.south, MeetingBoard.x, MeetingBoard.y, MeetingBoard.width + 0.4, MeetingBoard.height + 0.4);
+
   return RoomsView(
+    meetingBoard: meeting.board,
+    meetingSign: meeting.sign,
     hoop: hoop,
     cabinetScreen: cabinet.screen,
     machineScreen: Face(machineNode, machineMat, MachineMonitor.width, MachineMonitor.height),

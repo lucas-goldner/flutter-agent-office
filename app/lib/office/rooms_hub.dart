@@ -16,6 +16,7 @@ import '../state/store.dart' show nowMs;
 import '../ui/bookshelf.dart';
 import '../ui/bookshelf_logic.dart' show githubUrl;
 import '../ui/cabinet.dart';
+import '../ui/meeting.dart';
 import '../ui/hud_parts.dart' hide statusLabel;
 import '../ui/modal.dart';
 import '../ui/prompt.dart';
@@ -25,6 +26,7 @@ import '../ui/worker_text.dart' show statusLabel;
 import '../world/character.dart';
 import '../world/collider.dart';
 import '../world/machine.dart';
+import '../world/meeting.dart';
 import '../world/office/rooms.dart';
 import 'ball_play.dart';
 import 'controller.dart';
@@ -63,6 +65,8 @@ class RoomsHub {
   late final ArcadeCabinet cabinet;
   late final BallPlay ball;
   late final ScreenTexture _machine;
+  late final ScreenTexture _meetingBoard;
+  late final ScreenTexture _meetingSign;
   final MachinePainter _machinePainter = MachinePainter();
   final List<({Worker model, String deskId})> _idleAgents = [];
 
@@ -86,6 +90,29 @@ class RoomsHub {
     c.store.rooms.machineChanged.addListener(() {
       if (_machinePainter.changed(c.store.rooms.machine)) _machine.paint();
     });
+
+    // The meeting room's board and door sign, drawn again whenever the meeting moves on.
+    _meetingBoard = ScreenTexture(
+      view.meetingBoard,
+      boardWidth,
+      boardHeight,
+      (g) => paintMeetingBoard(g, c.store.rooms.meeting),
+      pixels: 0.8,
+    );
+    _meetingSign = ScreenTexture(
+      view.meetingSign,
+      signWidth,
+      signHeight,
+      (g) => paintMeetingSign(g, c.store.rooms.meeting),
+      pixels: 0.6,
+    );
+    void paintMeeting() {
+      _meetingBoard.paint();
+      _meetingSign.paint();
+    }
+
+    paintMeeting();
+    c.store.rooms.meetingChanged.addListener(paintMeeting);
 
     // The floor's basketball, by the hoop.
     ball = BallPlay(c, view.hoop, () => c.office.colliders);
@@ -155,6 +182,9 @@ class RoomsHub {
       case InteractKind.bookshelf:
         if (key == DeskKey.e) showBookshelf();
         return true;
+      case InteractKind.meeting:
+        if (key == DeskKey.e) showMeeting();
+        return true;
       default:
         return false;
     }
@@ -171,6 +201,15 @@ class RoomsHub {
 
   /// Something to use that's near without aiming at it: the ball at your feet.
   Interactable? nearby() => ball.atFeet();
+
+  /// E at the meeting room: how the meeting's going, or the form that calls one.
+  void showMeeting([MeetingPreset? preset]) => openMeeting(
+    store: c.store,
+    send: c.net.send,
+    openTerminal: c.openWorkerTerminal,
+    openPr: (id) => c.net.send(WorkerPrCmd(id)),
+    preset: preset,
+  );
 
   /// E at the bookshelf: the floor's project's docs, to read.
   void showBookshelf() {
@@ -220,6 +259,25 @@ class RoomsHub {
     switch (it.kind) {
       case InteractKind.ball:
         return ball.ballHint();
+      case InteractKind.meeting:
+        final m = c.store.rooms.meeting.current;
+        if (m == null) {
+          return (
+            'free',
+            [const HintTitle('🤝 Meeting room'), const HintAside('free'), const HintKey('E', 'Call a meeting')],
+          );
+        }
+        final running = m.status == MeetingStatus.running;
+        return (
+          '${m.id}|${m.status}|${m.round}',
+          [
+            const HintTitle('🤝 Meeting room'),
+            HintAside(
+              running ? '${clip(m.title, 32)} · ${meetingStage(m)}' : '${clip(m.title, 32)} · ${m.status.wire}',
+            ),
+            HintKey('E', running ? 'How it’s going' : 'See it'),
+          ],
+        );
       case InteractKind.bookshelf:
         final names = [
           for (final p in c.store.peers.values)

@@ -9,6 +9,7 @@ import 'package:office_shared/nav.dart' show deskPoint;
 import '../collider.dart';
 import '../hoop.dart' show hoopColliders;
 import 'bookshelf.dart' show bookshelfCollider;
+import 'meeting_room.dart' show meetingColliders;
 
 /// A board agent's kiosk and the agent behind it, back to the wall (they all stand by the north
 /// wall) so nobody squeezes in behind, and up over the agent's head so nobody hops on it.
@@ -41,4 +42,5 @@ List<Collider> roomsColliders() => [
   cabinetCollider(),
   bookshelfCollider(),
   ...hoopColliders(),
+  ...meetingColliders(),
 ];
