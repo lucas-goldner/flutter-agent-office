@@ -1,9 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:office_shared/shared.dart';
 import 'package:path/path.dart' as p;
+
+import 'decor.dart' show ImageData, ImageError, ImageResult;
 
 // What a worker changed, for the Changes window at its desk: the files it touched and their diff,
 // against the branch the office was opened on. While anyone has the window open, the office polls
@@ -16,6 +19,9 @@ const int _maxDiff = 200000;
 
 /// Untracked files bigger than this aren't read to count their lines.
 const int _maxCountBytes = 8 * 1024 * 1024;
+
+/// Pictures bigger than this aren't previewed.
+const int _maxImageBytes = 10 * 1024 * 1024;
 
 class ChangesTarget {
   const ChangesTarget({required this.name, required this.cwd, required this.rel, this.worktreeBase});
@@ -89,6 +95,57 @@ Future<_Result> _run(String cmd, List<String> args, String cwd, [int timeout = 3
   final r = _Result(await out, await err, code);
   if (killed) throw _GitError('$cmd ${args[0]} took more than ${(timeout / 1000).round()}s and was stopped');
   return r;
+}
+
+/// Like _run(), for output that isn't text: a file's bytes at some commit. A failing command throws.
+Future<Uint8List> _runBytes(String cmd, List<String> args, String cwd, int maxBytes, [int timeout = 30000]) async {
+  Process proc;
+  try {
+    proc = await Process.start(cmd, args, workingDirectory: cwd, environment: {'GIT_OPTIONAL_LOCKS': '0'});
+  } on ProcessException catch (e) {
+    if (e.errorCode == 2) throw _GitError('$cmd is not installed on the server');
+    throw _GitError(e.message);
+  }
+  var killed = false;
+  final timer = Timer(Duration(milliseconds: timeout), () {
+    killed = true;
+    proc.kill();
+  });
+  final out = BytesBuilder(copy: false);
+  var over = false;
+  final reading = proc.stdout.listen((chunk) {
+    if (over) return;
+    out.add(chunk);
+    if (out.length > maxBytes) {
+      over = true;
+      proc.kill();
+    }
+  }).asFuture<void>();
+  final err = proc.stderr.transform(const Utf8Decoder(allowMalformed: true)).join();
+  final code = await proc.exitCode;
+  timer.cancel();
+  await reading;
+  final r = _Result('', await err, code);
+  if (killed) throw _GitError('$cmd ${args[0]} took more than ${(timeout / 1000).round()}s and was stopped');
+  if (over) throw _GitError('$cmd ${args[0]}: output too big');
+  if (code != 0) throw _GitError(_reason(r, '$cmd ${args[0]} failed'));
+  return out.takeBytes();
+}
+
+/// Where a file of a checkout really is, or null when it's missing or leads outside the checkout
+/// (a symlink pointing elsewhere, a path with `..` in it).
+Future<String?> insideCheckout(String cwd, String file) async {
+  try {
+    final root = await Directory(cwd).resolveSymbolicLinks();
+    final abs = await File(p.normalize(p.join(root, file))).resolveSymbolicLinks();
+    final rel = p.relative(abs, from: root);
+    if (rel == '.' || rel.isEmpty || rel == '..' || rel.startsWith('..${p.separator}') || p.isAbsolute(rel)) {
+      return null;
+    }
+    return abs;
+  } catch (_) {
+    return null;
+  }
 }
 
 final RegExp _fatal = RegExp(r'^(fatal|error):', caseSensitive: false);
@@ -272,16 +329,9 @@ class Changes {
     ({String diff, bool truncated, String? error}) fail(String e) => (diff: '', truncated: false, error: e);
     final t = _target(workerId);
     if (t == null) return fail('No such worker');
-    var state = _watches[workerId]?.last;
-    if (state == null || !state.files.any((f) => f.path == filePath)) state = await _compute(workerId, t);
-    ChangedFile? file;
-    for (final f in state.files) {
-      if (f.path == filePath) {
-        file = f;
-        break;
-      }
-    }
-    if (file == null) return fail(state.error ?? 'That file has no changes');
+    final changed = await _changedFile(workerId, t, filePath);
+    if (changed.error != null) return fail(changed.error!);
+    final file = changed.file!;
     try {
       String out;
       if (file.status == ChangeStatus.untracked) {
@@ -299,6 +349,47 @@ class Changes {
       return (diff: truncated ? out.substring(0, _maxDiff) : out, truncated: truncated, error: null);
     } catch (err) {
       return fail(_errorText(err));
+    }
+  }
+
+  /// One side of a changed picture, for the preview in the Changes window: 'old' is the file at the
+  /// commit the diff is taken from, 'new' is what's in the checkout now. Only files in the worker's
+  /// list of changes are served, and only pictures.
+  Future<ImageResult> file(String workerId, String filePath, {required bool old}) async {
+    if (changedImageType(filePath) == null) return const ImageError(415, 'Only pictures can be previewed');
+    final t = _target(workerId);
+    if (t == null) return const ImageError(404, 'No such worker');
+    final changed = await _changedFile(workerId, t, filePath);
+    if (changed.error != null) return ImageError(404, changed.error!);
+    final file = changed.file!;
+    // A renamed file was something else before; its old side is only a picture if that name was one.
+    final name = old ? file.from ?? file.path : file.path;
+    final type = changedImageType(name);
+    if (type == null) return const ImageError(415, 'Only pictures can be previewed');
+    const tooBig = 'That picture is over ${_maxImageBytes ~/ 1024 ~/ 1024} MB';
+    try {
+      if (!old) {
+        if (file.status == ChangeStatus.deleted) return const ImageError(404, 'That file was deleted');
+        final abs = await insideCheckout(t.cwd, name);
+        if (abs == null) return const ImageError(404, 'That file is not in the checkout');
+        final s = await FileStat.stat(abs);
+        if (s.type != FileSystemEntityType.file) return const ImageError(404, 'That is not a file');
+        if (s.size > _maxImageBytes) return const ImageError(413, tooBig);
+        return ImageData(type, await File(abs).readAsBytes());
+      }
+      if (file.status == ChangeStatus.untracked || file.status == ChangeStatus.added) {
+        return const ImageError(404, 'That file is new');
+      }
+      // `cat-file`, not `show`: show would run the file through any textconv filter the repo sets.
+      final object = '${(await _baseCommit(t)).commit}:$name';
+      final size = int.tryParse((await _git(['cat-file', '-s', object], t.cwd)).trim()) ?? 0;
+      if (size > _maxImageBytes) return const ImageError(413, tooBig);
+      return ImageData(type, await _runBytes('git', ['cat-file', 'blob', object], t.cwd, _maxImageBytes + 1));
+    } on PathNotFoundException {
+      // It went away between the last poll and this request.
+      return const ImageError(404, 'That file is gone');
+    } catch (err) {
+      return ImageError(500, _errorText(err));
     }
   }
 
@@ -383,6 +474,16 @@ class Changes {
   }
 
   // ---------------------------------------------------------------------------
+
+  /// A file in the worker's list of changes, looking again when it isn't in the last one.
+  Future<({ChangedFile? file, String? error})> _changedFile(String workerId, ChangesTarget t, String filePath) async {
+    var state = _watches[workerId]?.last;
+    if (state == null || !state.files.any((f) => f.path == filePath)) state = await _compute(workerId, t);
+    for (final f in state.files) {
+      if (f.path == filePath) return (file: f, error: null);
+    }
+    return (file: null, error: state.error ?? 'That file has no changes');
+  }
 
   void _drop(String workerId) {
     final w = _watches.remove(workerId);

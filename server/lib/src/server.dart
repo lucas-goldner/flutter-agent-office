@@ -15,7 +15,8 @@ import 'auth.dart';
 import 'building.dart';
 import 'cabinet.dart';
 import 'config.dart';
-import 'decor.dart' show ImageData, ImageError, ImageProxy;
+import 'decor.dart' show ImageData, ImageError, ImageProxy, ImageResult;
+import 'docs.dart' show DocFailed, DocFound;
 import 'floor.dart';
 import 'headless.dart' show ScreenFrame;
 import 'history.dart';
@@ -244,6 +245,33 @@ Response _send(int status, Object? body, [Map<String, String> headers = const {}
   }),
   body: Body.fromString(_json(body), mimeType: MimeType.json),
 );
+
+/// A picture from a worker's checkout or the project (see changes.dart and docs.dart): never cached,
+/// and opened on its own (an SVG, say) it still can't run anything on the office's origin.
+Response _pictureResponse(ImageResult r) {
+  switch (r) {
+    case ImageError(:final status, :final error):
+      return _send(status, {'error': error});
+    case ImageData(:final type, :final body):
+      MimeType mime;
+      try {
+        mime = MimeType.parse(type);
+      } catch (_) {
+        mime = MimeType.octetStream;
+      }
+      return Response(
+        200,
+        headers: Headers.build((h) {
+          // The worker may change it again any moment.
+          h['cache-control'] = ['no-store'];
+          h['x-content-type-options'] = ['nosniff'];
+          h['content-security-policy'] = ["default-src 'none'; style-src 'unsafe-inline'; sandbox"];
+          h['cross-origin-resource-policy'] = ['same-origin'];
+        }),
+        body: Body.fromData(body, mimeType: mime),
+      );
+  }
+}
 
 Response _notFoundText() => Response(404, body: Body.fromString('Not found', mimeType: MimeType.plainText));
 
@@ -990,6 +1018,34 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
       }
       final error = floor.whiteboard.addFile(body);
       return error != null ? _send(400, {'error': error}) : _send(200, {'ok': true});
+    }
+    if (path == '/api/changes/file') {
+      // A changed picture in the Changes window at a desk: before (old) or after (new) the worker's edits.
+      if (method != Method.get) return _send(405, {'error': 'Method not allowed'});
+      final workerId = _str(_query(url, 'worker'), 32);
+      final file = _str(_query(url, 'path'), 4096);
+      final side = _query(url, 'side');
+      if (workerId.isEmpty || file.isEmpty || (side != 'old' && side != 'new')) {
+        return _send(400, {'error': 'Bad request'});
+      }
+      if (floor == null) return _send(404, {'error': 'No such floor'});
+      if (floor.workers.get(workerId) == null) return _send(404, {'error': 'No such worker'});
+      return _pictureResponse(await floor.changes.file(workerId, file, old: side == 'old'));
+    }
+    if (path.startsWith('/api/docs') && method == Method.get) {
+      // The bookshelf: the project's Markdown files, one to read, and the pictures in it (see docs.dart).
+      if (floor == null) return _send(404, {'error': 'No such floor'});
+      if (path == '/api/docs') return _send(200, (await floor.docs.list()).toJson());
+      final file = _str(_query(url, 'path'), 4096);
+      if (file.isEmpty) return _send(400, {'error': 'Bad request'});
+      if (path == '/api/docs/file') {
+        return switch (await floor.docs.read(file)) {
+          DocFound(:final doc) => _send(200, doc.toJson()),
+          DocFailed(:final status, :final error) => _send(status, {'error': error}),
+        };
+      }
+      if (path == '/api/docs/picture') return _pictureResponse(await floor.docs.picture(file));
+      return _send(404, {'error': 'Not found'});
     }
     if (path == '/api/search' && method == Method.get) {
       return _send(200, search(_query(url, 'q') ?? '', floor).toJson());

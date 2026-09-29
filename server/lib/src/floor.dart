@@ -11,6 +11,7 @@ import 'changes.dart';
 import 'config.dart' show excludeFromGit;
 import 'court.dart';
 import 'decor.dart';
+import 'docs.dart';
 import 'dog.dart';
 import 'github.dart';
 import 'jukebox.dart';
@@ -217,6 +218,9 @@ class Floor {
 
   /// The basketball by the hoop: who has it, or its last throw.
   final Court court = Court();
+
+  /// The bookshelf: the project's Markdown files.
+  late final Docs docs = Docs(dir);
 
   /// The whiteboard everyone on the floor draws on together.
   late final Whiteboard whiteboard;
