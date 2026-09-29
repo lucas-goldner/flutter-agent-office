@@ -206,7 +206,7 @@ class ArcadeCabinet {
       backdropCloses: false,
       clear: true,
       onClose: _closed,
-    );
+    )..doing = mode == _Mode.play ? '🕹️ playing $cabinetGame' : '👀 watching $_watching play $cabinetGame';
     _dirty = true;
   }
 

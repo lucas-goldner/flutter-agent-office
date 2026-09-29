@@ -247,8 +247,6 @@ class RoomsHub {
       floor: floor,
       project: c.store.project?.name,
       repoUrl: githubUrl(c.store.project?.remote),
-      // What you're reading goes under your name tag for everyone on the floor.
-      onReading: (what) => c.net.send(DoingCmd(what: what, reading: what != null)),
     );
   }
 

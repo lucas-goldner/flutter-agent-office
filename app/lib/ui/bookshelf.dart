@@ -50,17 +50,28 @@ ModalHandle openBookshelf({
   String? repoUrl,
   void Function()? onTurn,
   void Function(String? what)? onReading,
-}) => ModalStack.instance.show(
-  (modal) => _Bookshelf(
-    modal: modal,
-    floor: floor,
-    project: project,
-    repoUrl: repoUrl,
-    onTurn: onTurn ?? () {},
-    onReading: onReading ?? (_) {},
-  ),
-  onClose: () => onReading?.call(null),
-);
+}) {
+  late final ModalHandle handle;
+  handle = ModalStack.instance.show(
+    (modal) => _Bookshelf(
+      modal: modal,
+      floor: floor,
+      project: project,
+      repoUrl: repoUrl,
+      onTurn: onTurn ?? () {},
+      // What you're reading goes under your name tag, through the window's doing.
+      onReading: (what) {
+        handle.doing = what;
+        onReading?.call(what);
+      },
+    ),
+    onClose: () => onReading?.call(null),
+  );
+  handle
+    ..doing = '📚 at the bookshelf'
+    ..reading = true;
+  return handle;
+}
 
 class _Bookshelf extends StatefulWidget {
   const _Bookshelf({

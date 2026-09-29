@@ -324,6 +324,13 @@ class OfficeSound implements DogSounds {
     _count(kind == StepKind.land ? 'land' : 'step');
   }
 
+  /// An issue card in your hands: taken off the board, or put down on a desk.
+  void paper() {
+    if (_ctx == null) return;
+    _play(_buf.rustle, gain: 0.5, rate: _rand(1.1, 1.3));
+    _count('paper');
+  }
+
   /// Someone else's footstep, on the office floor unless `y` says where else.
   void stepAt(double x, double z, [double y = 0]) {
     if (_ctx == null) return;

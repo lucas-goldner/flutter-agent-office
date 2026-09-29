@@ -283,7 +283,7 @@ class Arcade {
         game.hover = game.pressed = -1;
         changed();
       },
-    );
+    )..doing = '💣 playing Minesweeper';
     changed();
   }
 

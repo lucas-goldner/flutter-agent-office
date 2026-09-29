@@ -35,7 +35,19 @@ export 'whiteboard.dart' show WhiteboardStand;
 
 /// A desk or a bean bag: somewhere a worker sits.
 class DeskView {
-  DeskView({required this.def, required this.group, required this.laptopAnchor, required this.seatAnchor, required this.chair, required this.vacancy, required this.vacancyY});
+  DeskView({
+    required this.def,
+    required this.group,
+    required this.laptopAnchor,
+    required this.seatAnchor,
+    required this.chair,
+    required this.vacancy,
+    required this.vacancyY,
+    Node? stage,
+  }) : stage = stage ?? Node(name: 'stage');
+
+  /// Where the worker gets up to dance when a pull request merges: its feet, and the way it faces.
+  final Node stage;
 
   final DeskDef def;
   final Node group;
@@ -96,6 +108,10 @@ class Office {
 
   /// Lights, windows and glass for the sky to change with the time of day and the weather.
   final NightParts night;
+
+  /// The potted plants' leaves (their pots are merged with the decor): hidden while holiday.dart
+  /// turns the plants into Christmas trees.
+  late final Node plantLeaves;
 
   final List<WallRect> _fixtures;
   final Looks _looks;
@@ -209,13 +225,26 @@ DeskView _buildDesk(DeskDef def, int index, Material trimMat) {
   final seatAnchor = place(Node(name: 'seat-anchor'), y: 0.4, z: 0.93, rot: yaw(math.pi), scale: 0.82);
   group.add(seatAnchor);
 
+  // Up on the desk beside the laptop, clear of the mug or books at the back, facing the chair.
+  final stage = place(Node(name: 'stage'), x: 0.72, y: height - 0.07, z: 0.18);
+  group.add(stage);
+
   final ch = place(chair(Palette.chairs[index % Palette.chairs.length]), z: 0.9);
   group.add(ch);
 
   const vacancyY = height + 0.55;
   final vacancy = vacancyMarker(vacancyY);
   group.add(vacancy);
-  return DeskView(def: def, group: group, laptopAnchor: laptopAnchor, seatAnchor: seatAnchor, chair: ch, vacancy: vacancy, vacancyY: vacancyY);
+  return DeskView(
+    def: def,
+    group: group,
+    laptopAnchor: laptopAnchor,
+    seatAnchor: seatAnchor,
+    chair: ch,
+    vacancy: vacancy,
+    vacancyY: vacancyY,
+    stage: stage,
+  );
 }
 
 const _beanbagColors = ['#ff6b6b', '#4ecdc4', '#9b5de5', '#ffd166', '#f15bb5', '#00bbf9', '#06d6a0', '#fb8500'];
@@ -246,10 +275,28 @@ DeskView _buildBeanbag(DeskDef def, int index) {
   final seatAnchor = place(Node(name: 'seat-anchor'), y: 0.32, z: 0.04, rot: yaw(math.pi), scale: 0.82);
   group.add(seatAnchor);
 
+  // Standing up on the bag, sunk in a little.
+  final stage = place(
+    Node(name: 'stage'),
+    y: BeanbagBox.top - 0.1,
+    z: -0.05,
+    rot: yaw(math.pi),
+  );
+  group.add(stage);
+
   const vacancyY = 1.25;
   final vacancy = vacancyMarker(vacancyY);
   group.add(vacancy);
-  return DeskView(def: def, group: group, laptopAnchor: laptopAnchor, seatAnchor: seatAnchor, chair: chairNode, vacancy: vacancy, vacancyY: vacancyY);
+  return DeskView(
+    def: def,
+    group: group,
+    laptopAnchor: laptopAnchor,
+    seatAnchor: seatAnchor,
+    chair: chairNode,
+    vacancy: vacancy,
+    vacancyY: vacancyY,
+    stage: stage,
+  );
 }
 
 /// A framed board on a wall; the face shows the board later (cork, chalk or whiteboard).
@@ -440,10 +487,21 @@ Office buildOffice({required LabelHub labels}) {
   fixture(Side.south, -15.7, 0.9, 0.6, 1.8);
   fixture(Side.south, -11.3, 1.1, 1.1, 2.2);
 
-  // Plants around the room.
+  // Plants around the room: the pots with the decor, the leaves on their own, so holiday.dart can
+  // trim them into Christmas trees.
+  final leaves = Node(name: 'plant-leaves');
   for (final (x, z, s) in roomPlants) {
-    decor.add(place(plant(s), x: x, z: z, scale: s));
+    final pot = place(plant(s), x: x, z: z, scale: s);
+    final leaf = place(plant(s), x: x, z: z, scale: s);
+    for (final c in pot.children.skip(1).toList()) {
+      c.detach();
+    }
+    leaf.children.first.detach();
+    decor.add(pot);
+    leaves.add(leaf);
   }
+  final plantLeaves = mergeByMaterial(leaves);
+  group.add(plantLeaves);
 
   // Ceiling lamps (floating cartoon pendants).
   for (final (x, z) in const [(-10.5, -4.0), (-1.5, -4.0), (-10.5, 4.0), (-1.5, 4.0), (13.0, 0.0)]) {
@@ -498,5 +556,5 @@ Office buildOffice({required LabelHub labels}) {
     jukebox: jukebox,
     whiteboard: whiteboard,
     night: night,
-  );
+  )..plantLeaves = plantLeaves;
 }

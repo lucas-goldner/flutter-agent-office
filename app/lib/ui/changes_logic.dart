@@ -118,3 +118,19 @@ List<({String text, String? tip})> summaryBits(ChangesState s) {
   }
   return bits;
 }
+
+// ---- Changed pictures ------------------------------------------------------------------------------
+
+/// Which sides of a changed picture there are to show: new and deleted files only have the one.
+List<String> pictureSides(ChangedFile f) => switch (f.status) {
+      ChangeStatus.untracked || ChangeStatus.added => const ['new'],
+      ChangeStatus.deleted => const ['old'],
+      _ => const ['old', 'new'],
+    };
+
+/// Where one side of a changed picture loads from (GET /api/changes/file, which serves only pictures
+/// in the worker's list of changes). The file's signature makes a new URL whenever it changes.
+String pictureUrl(String? floor, String workerId, ChangedFile f, String side) {
+  final q = Uri(queryParameters: {'floor': floor ?? '', 'worker': workerId, 'path': f.path, 'side': side, 'v': f.sig}).query;
+  return '/api/changes/file?$q';
+}

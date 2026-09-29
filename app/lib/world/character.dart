@@ -8,18 +8,25 @@
 import 'dart:math' as math;
 import 'dart:ui' show Color;
 
-import 'package:flutter/widgets.dart' show Alignment;
+import 'package:flutter/widgets.dart' show Alignment, HSLColor;
 import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
 import 'package:office_shared/avatar.dart';
+import 'package:office_shared/emotes.dart';
 import 'package:office_shared/protocol.dart';
 import 'package:office_shared/status.dart';
+
+import 'costumes.dart';
+import 'emoji_pop.dart';
 import 'geo.dart';
 import 'label_widgets.dart';
+import 'card.dart';
 import 'labels.dart';
+import 'worker_pr.dart';
 import 'player.dart' show kHips;
 import 'toon.dart';
+import 'worker_acts.dart';
 
 enum Pose { stand, walk, sit, type }
 
@@ -36,6 +43,18 @@ double reachCurve(double p) {
   if (p < 0.5) return 1;
   final u = (p - 0.5) / 0.5;
   return 1 - u * u * (3 - 2 * u);
+}
+
+/// 0 → 1 → 0 over an emote [t] seconds into it: eased in quickly, out a little slower at the end.
+double emoteEnvelope(double t, double seconds) {
+  final k = math.min(t / 0.18, (seconds - t) / 0.3).clamp(0.0, 1.0);
+  return k * k * (3 - 2 * k);
+}
+
+/// Overshoots 1 a little on the way there (p = 0..1), for things that pop in.
+double popCurve(double p) {
+  final u = math.min(1.0, p) - 1;
+  return 1 + 2.7 * u * u * u + 1.7 * u * u;
 }
 
 /// On a smoke break, one drag every this many seconds.
@@ -221,6 +240,14 @@ class Person {
     _cig.position = vm.Vector3(0, -0.38, 0) + along * 0.07;
     _cig.visible = false;
     _armL.add(_cig);
+    // Along the arm (the fist's -y) the finger points; the thumb sticks out of the front of the fist,
+    // which is up once the arm is out in front.
+    _thumb = mesh(capsuleData(0.035, 0.07, 4, 8).rotateX(math.pi / 2).build(), skin, 0, -0.38, 0.1, false);
+    _finger = mesh(capsule(0.03, 0.09, 4, 8), skin, 0, -0.5, 0.02, false);
+    for (final m in [_thumb, _finger]) {
+      m.visible = false;
+      _armL.add(m);
+    }
 
     // Little mic icon that pops up while speaking
     _mic = mesh(sphere(0.09, 10, 8), toon(hex('#7cf29a'), emissive: hex('#2a9d4b')), 0, 2.25, 0, false);
@@ -271,6 +298,20 @@ class Person {
   /// in the space of [root]'s parent (the office), not the engine's (mirrored) world space.
   void Function(Puff kind, vm.Vector3 at, vm.Vector3 dir)? onSmoke;
 
+  /// The emote being played, how far into it (seconds), and its emoji over their head.
+  ({Emote emote, WorldLabel pop})? _emoting;
+  double _emoteT = 0;
+
+  /// A thumb up and a pointing finger on the right hand, out only for those emotes.
+  late final Node _thumb, _finger;
+
+  /// How much higher (meters) an emote's emoji pops up, to clear a chat bubble over their head.
+  double emojiLift = 0;
+
+  /// Dressed up for a holiday (see [setCostume]): a warlock's hat and undead skin, or a Santa hat.
+  HolidayTheme? _costume;
+  Node? _hat;
+
   /// Hips this high above the feet while sitting (on the seat), or null on their feet.
   double? _hips;
 
@@ -291,9 +332,35 @@ class Person {
   void setLook(Look look) {
     final restyle = look.style != _look.style;
     _look = look;
-    setToonColor(_skin, hex(skinTones[look.skin]));
     setToonColor(_hairMat, hex(hairColors[look.hair]));
     if (restyle) _buildHair();
+    _dress();
+  }
+
+  HolidayTheme? get costume => _costume;
+
+  /// Dresses up for a holiday: a crooked warlock's hat and undead skin for Halloween, a Santa hat for
+  /// Christmas. Null takes it off.
+  void setCostume(HolidayTheme? theme) {
+    if (theme == _costume) return;
+    _costume = theme;
+    _hat?.detach();
+    _hat = switch (theme) {
+      HolidayTheme.halloween => warlockHat(),
+      HolidayTheme.christmas => santaHat(),
+      null => null,
+    };
+    if (_hat != null) _head.add(_hat!);
+    _dress();
+  }
+
+  /// The skin and hair under the costume: hair that would poke through a hat's crown hides under it.
+  void _dress() {
+    var skin = hex(skinTones[_look.skin]);
+    if (_costume == HolidayTheme.halloween) skin = mixColor(skin, kUndeadSkin, 0.7);
+    setToonColor(_skin, skin);
+    final style = hairStyles[_look.style];
+    _hair.visible = _costume == null || !(style == 'Spiky' || style == 'Bun' || style == 'Curly');
   }
 
   /// Hair is a set of shapes on the head (whose center is 0,0,0; the face looks down +z).
@@ -358,11 +425,44 @@ class Person {
     _label = _labels.add(
       WorldLabel(
         anchor: root,
-        offset: vm.Vector3(0, 2.0, 0),
+        offset: vm.Vector3(0, 2.0 + _doingLift, 0),
         alignment: Alignment.center,
         child: TagPill('$name$suffix', bg: '#fffaf3', size: 40),
       ),
     );
+  }
+
+  // ---- The line under the name tag: what they have open, or where they are (see whereabouts) ----
+
+  WorldLabel? _doing;
+  String _doingText = '';
+
+  /// How far the line under the name tag lifts the name tag (and the mic badge, and chat bubbles).
+  double get _doingLift => _doing != null ? 0.25 : 0;
+
+  /// Where a chat bubble goes: over the name tag, however high it sits.
+  double get bubbleY => 2.45 + _doingLift;
+
+  /// Puts a smaller line under the name tag, like "💻 in Pixel's terminal"; null (or '') takes it away.
+  void setDoing(String? text) {
+    text ??= '';
+    if (text == _doingText) return;
+    _doingText = text;
+    _labels.remove(_doing);
+    _doing = null;
+    if (text.isNotEmpty) {
+      _doing = _labels.add(
+        WorldLabel(
+          anchor: root,
+          offset: vm.Vector3(0, 1.95, 0),
+          alignment: Alignment.center,
+          child: TagPill(text, bg: '#e9ecef', size: 26),
+        )..visible = _label?.visible ?? true,
+      );
+    }
+    // The name tag and the mic badge move up out of the way of the line under them.
+    _label?.offset = vm.Vector3(0, 2.0 + _doingLift, 0);
+    _mic.position = vm.Vector3(_mic.position.x, 2.25 + _doingLift, _mic.position.z);
   }
 
   /// How loud this person is talking right now (0 when silent); drives the mic badge and the mouth.
@@ -372,13 +472,133 @@ class Person {
     _mic.visible = _speaking;
   }
 
-  void showLabel(bool v) => _label?.visible = v;
+  void showLabel(bool v) {
+    _label?.visible = v;
+    _doing?.visible = v;
+  }
 
   /// Reach out with the right hand, as if pressing or grabbing something in front of you.
   void reach() => _reachT = 0;
 
-  /// A mug of coffee in the left hand, or not.
-  void holdMug(bool on) => _mug.visible = on;
+  /// A mug of coffee in the left hand, or not. It waits while the hands are full (a card).
+  void holdMug(bool on) {
+    _wantsMug = on;
+    _mug.visible = on && !(_card?.held ?? false);
+  }
+
+  bool _wantsMug = false;
+
+  /// An issue card off the board, held out in front in both hands (see carry).
+  HeldCard? _card;
+
+  /// Carries an issue card in both hands, or puts it down (null). The mug waits while the hands are full.
+  void carry(CarriedIssue? card) {
+    if (card == null && _card == null) return;
+    _card ??= () {
+      // Between the hands when both arms are out in front (see update), its front to whoever they walk up to.
+      final holder = Node(name: 'card-holder')
+        ..position = vm.Vector3(0, 0.8, 0.36)
+        ..rotation = euler(-0.1, 0, 0);
+      _body.add(holder);
+      return HeldCard(holder, 0.46);
+    }();
+    _card!.set(card);
+    holdMug(_wantsMug);
+  }
+
+  /// Waves, gives a thumbs up, claps…: the gesture, with its emoji popping up over their head.
+  void emote(Emote e) {
+    _endEmote();
+    final pop = _labels.add(
+      WorldLabel(
+        anchor: root,
+        offset: vm.Vector3(0, 2.42 + emojiLift, 0),
+        alignment: Alignment.center,
+        child: EmojiPop(e.emoji, scale: 0.001),
+        priority: 1,
+      ),
+    );
+    _emoting = (emote: e, pop: pop);
+    _emoteT = 0;
+    _thumb.visible = e == Emote.thumbs;
+    _finger.visible = e == Emote.point;
+  }
+
+  /// The emote playing now, if any.
+  Emote? get emoting => _emoting?.emote;
+
+  void _endEmote() {
+    final e = _emoting;
+    if (e == null) return;
+    _labels.remove(e.pop);
+    _emoting = null;
+    _thumb.visible = _finger.visible = false;
+  }
+
+  /// Poses the emote over whatever the arms were doing (walking, sitting, a drag on a cigarette),
+  /// `k` of the way. The dance's bounce and steps only happen with both feet on the floor ([still]).
+  void _emoteStep(double dt, double still) {
+    final e = _emoting!;
+    _emoteT += dt;
+    final seconds = e.emote.seconds;
+    final u = _emoteT;
+    if (u >= seconds) return _endEmote();
+    final k = emoteEnvelope(u, seconds);
+    void pose(Pivot arm, double x, double z) {
+      arm.x = _lerp(arm.x, x, k);
+      arm.z = _lerp(arm.z, z, k);
+    }
+
+    var lift = 0.0;
+    // Forward is +z, so the character's right arm is the one on -x (armL), as in reach.
+    switch (e.emote) {
+      case Emote.wave:
+        pose(_armL, -0.35, -2.55 + math.sin(u * 12) * 0.35);
+        _head.z = -0.1 * k;
+      case Emote.thumbs:
+        // Out in front, with a little pump that settles.
+        pose(_armL, -1.75 - math.exp(-u * 3) * math.sin(u * 14) * 0.25, 0.2);
+        _head.z = -0.08 * k;
+      case Emote.clap:
+        // Both hands out in front, meeting in the middle about three times a second.
+        final c = 0.5 - 0.5 * math.cos(u * 19);
+        pose(_armL, -1.25, 0.3 + 0.42 * c);
+        pose(_armR, -1.25, -0.3 - 0.42 * c);
+        lift = math.sin(u * 9.5).abs() * 0.02 * k * still;
+      case Emote.dance:
+        // Two beats a second: arms up by turns, a hop on every beat, hips swaying, a knee up.
+        final b = u * math.pi * 2;
+        final s = math.sin(b);
+        pose(_armL, -0.3, _lerp(-0.35, -2.7, (s + 1) / 2));
+        pose(_armR, -0.3, _lerp(0.35, 2.7, (1 - s) / 2));
+        final m = k * still;
+        lift = math.sin(b).abs() * 0.08 * m;
+        _body.z = s * 0.12 * m;
+        _body.y = math.sin(b / 2) * 0.45 * m;
+        _legL.x = _lerp(_legL.x, -math.max(0, s) * 0.7, m);
+        _legR.x = _lerp(_legR.x, -math.max(0, -s) * 0.7, m);
+        _head.z = -s * 0.1 * k;
+      case Emote.point:
+        // Arm straight out at whatever you face, with a jab to start.
+        pose(_armL, -1.6 - math.exp(-u * 4) * math.sin(u * 16) * 0.15, 0.05);
+      case Emote.facepalm:
+        // Hand to the face, head down and shaking slowly.
+        pose(_armL, -2.4, 0.62);
+        _body.x += 0.1 * k;
+        _head.x += 0.3 * k;
+        _head.y = math.sin(u * 5) * 0.15 * k;
+    }
+    if (lift != 0) _body.node.position = _body.node.position + vm.Vector3(0, lift, 0);
+    // The emoji pops in over their head, rises a little, wobbles, and fades at the end.
+    e.pop
+      ..offset = vm.Vector3(0, 2.42 + emojiLift + math.min(u, 1.5) * 0.12, 0)
+      ..child = EmojiPop(
+        e.emote.emoji,
+        scale: popCurve(u / 0.3),
+        angle: math.sin(u * 7) * 0.12,
+        opacity: ((seconds - u) / 0.4).clamp(0.0, 1.0),
+      );
+  }
 
   bool get smoking => _smokeT >= 0;
 
@@ -460,6 +680,17 @@ class Person {
       }
     }
     if (_smokeT >= 0) _smokeStep(dt, moving, airborne);
+    if (_card?.held ?? false) {
+      // Both arms out in front, hands on the card's edges: it doesn't swing while they walk.
+      _armL
+        ..x = -1.25
+        ..y = 0
+        ..z = 0.3;
+      _armR
+        ..x = -1.25
+        ..y = 0
+        ..z = -0.3;
+    }
     var reach = 0.0;
     if (_reachT >= 0) {
       _reachT += dt;
@@ -487,6 +718,9 @@ class Person {
     _mouth.visible = talking;
     if (talking) _mouth.scale = vm.Vector3(0.07 * (1 - _mouthOpen * 0.2), 0.01 + _mouthOpen * 0.045, 0.05);
     _head.x = -_mouthOpen * 0.08;
+    _head.y = _head.z = 0;
+    _body.y = _body.z = 0;
+    if (_emoting != null) _emoteStep(dt, moving || airborne ? 0 : 1 - sit);
     for (final p in [_body, _head, _legL, _legR, _armL, _armR]) {
       p.apply();
     }
@@ -494,8 +728,11 @@ class Person {
 
   /// Takes the name tag down. Call when the person leaves.
   void dispose() {
+    _endEmote();
     _labels.remove(_label);
     _label = null;
+    _labels.remove(_doing);
+    _doing = null;
   }
 }
 
@@ -550,10 +787,96 @@ class _Leaving {
   double stride = 0;
 }
 
+/// A stack of papers held up to read, bound at the top; its top sheet flips over. The sheets face -z.
+({Node group, Node page}) _papersProp() {
+  final group = Node(name: 'papers');
+  const w = 0.34, h = 0.44;
+  final ink = toon(hex('#8d99ae'));
+  const shades = ['#f1ece2', '#f7f3ea', '#fffaf3'];
+  for (var i = 0; i < 3; i++) {
+    group.add(
+      mesh(box(w, h, 0.008), toon(hex(shades[i])), (i - 1) * 0.012, -h / 2 - i * 0.006, 0.02 - i * 0.012, false)
+        ..rotation = euler(0, 0, (i - 1) * 0.04),
+    );
+  }
+  void lines(Node on, double z) {
+    for (var i = 0; i < 6; i++) {
+      final short = i % 3 == 2;
+      on.add(
+        mesh(box(w * (short ? 0.45 : 0.72), 0.018, 0.004), ink, short ? -w * 0.135 : 0, -0.07 - i * 0.055, z, false),
+      );
+    }
+  }
+
+  lines(group, -0.01);
+  // The top sheet hangs from the binding, so it flips up over the top.
+  final page = Node(name: 'page');
+  page.add(mesh(box(w, h, 0.008), toon(hex('#fffaf3')), 0, -h / 2, -0.016, false));
+  lines(page, -0.022);
+  group.add(page);
+  group.add(mesh(box(w * 0.5, 0.05, 0.05), toon(hex('#adb5bd')), 0, 0, 0, false));
+  return (group: group, page: page);
+}
+
+/// A little globe: blue sea, green blobs of land and a gold ring round its middle.
+({Node group, Node ball, Node ring}) _globeProp() {
+  final group = Node(name: 'globe');
+  final ball = Node(name: 'ball');
+  const r = 0.26;
+  ball.add(mesh(sphere(r, 20, 14), toon(hex('#4cc9f0')), 0, 0, 0, false));
+  final land = toon(hex('#6fcf6a'));
+  for (final (lat, lon, size) in const [
+    (0.5, 0.2, 0.5),
+    (0.1, 0.9, 0.4),
+    (-0.4, 0.5, 0.45),
+    (0.3, 2.4, 0.6),
+    (-0.2, 3.3, 0.4),
+    (0.6, 4.4, 0.45),
+    (-0.5, 5.2, 0.35),
+  ]) {
+    ball.add(
+      mesh(
+        sphere(size * r, 10, 8),
+        land,
+        math.cos(lat) * math.sin(lon) * r * 0.86,
+        math.sin(lat) * r * 0.86,
+        math.cos(lat) * math.cos(lon) * r * 0.86,
+        false,
+      )..scale = vm.Vector3(1.2, 0.8, 1.2),
+    );
+  }
+  group.add(ball);
+  final ring = mesh(torus(r * 1.35, 0.016, 6, 32), toon(hex('#ffd166'), emissive: hex('#7a5b00')), 0, 0, 0, false);
+  group.add(ring);
+  return (group: group, ball: ball, ring: ring);
+}
+
+/// Where a worker climbs up to dance, in the frame of the seat it sits in (see DeskView.stage).
+class Stage {
+  const Stage(this.pos, this.yaw);
+  final vm.Vector3 pos;
+
+  /// Which way it faces up there, turned from the way it faces in its seat.
+  final double yaw;
+}
+
+/// Where [stage] is from [seat], both anywhere under the same root: the transform between them.
+Stage stageFrom(Node seat, Node stage) {
+  final m = vm.Matrix4.inverted(seat.globalTransform) * stage.globalTransform as vm.Matrix4;
+  final ahead = m.rotated3(vm.Vector3(0, 0, 1));
+  return Stage(m.getTranslation(), math.atan2(ahead.x, ahead.z));
+}
+
+class _Dance {
+  _Dance(this.stage);
+  Stage stage;
+  double t = 0;
+}
+
 /// The little Claude worker that sits at a desk. Forward is +z.
 class Worker {
-  Worker(String name, String color, this._labels) {
-    final skin = toonUnique(hex(color));
+  Worker(String name, String color, this._labels) : _color = hex(color) {
+    final skin = _skin = toonUnique(_color);
     final white = toon(hex('#ffffff'));
     final ink = toon(hex('#1d1d1d'));
     final dark = toon(hex('#2b2d42'));
@@ -598,12 +921,25 @@ class Worker {
       _body.add(foot);
       _feet.add(foot);
     }
+
+    // What it acts out with: papers in its hands, and a globe beside its laptop.
+    _papers = _papersProp();
+    _papers.group
+      ..position = vm.Vector3(0, 0.86, 0.4)
+      ..rotation = euler(0.35, 0);
+    _body.add(_papers.group);
+    _globe = _globeProp();
+    _papers.group.visible = _globe.group.visible = false;
+    root.add(_globe.group);
+
     _blink(0);
     setName(name);
   }
 
   final Node root = Node(name: 'worker');
   final LabelHub _labels;
+  final Color _color;
+  late final PreprocessedMaterial _skin;
   final Pivot _body = Pivot();
   late final PreprocessedMaterial _bulb;
   late final Node _bulbMesh;
@@ -633,8 +969,38 @@ class Worker {
   final List<Node> _feet = [];
   _Leaving? _leaving;
 
-  /// Sent home and on its way out: it waddles along instead of standing.
+  /// Up on its desk dancing (a pull request merged): where, and how many seconds in.
+  _Dance? _dancing;
+
+  /// On its way out (sent home) or in (called to a meeting): it waddles along instead of standing.
   bool walking = false;
+
+  /// What its latest tool call was (see [setAction]), and what it's acting out right now.
+  final ActionTimer _actions = ActionTimer();
+  final StanceBlend _blend = StanceBlend();
+
+  /// Seconds it has been waiting on you, for the jump / tap-its-foot cycle.
+  double _waitT = 0;
+  double _turnY = 0;
+
+  /// Seconds into its finishing spin, or -1.
+  double _twirlT = -1;
+  double _flipT = 0;
+  late final ({Node group, Node page}) _papers;
+  late final ({Node group, Node ball, Node ring}) _globe;
+
+  /// Beside its laptop, where the globe floats (see [setPropSpot]).
+  vm.Vector3 _spot = vm.Vector3(-1, 1.1, 1.3);
+
+  /// Dressed up for a holiday (see [setCostume]), and what it's wearing.
+  HolidayTheme? _costume;
+  final List<Node> _outfit = [];
+
+  /// Where it is in its own shamble, so a room full of zombies doesn't sway in step.
+  final double _phase = _rng.nextDouble() * math.pi * 2;
+
+  /// How far through its stride it is, walking in.
+  double _stride = 0;
 
   void setName(String name) {
     _labels.remove(_nameTag);
@@ -648,17 +1014,92 @@ class Worker {
     );
   }
 
+  /// Where the globe floats, in its own space: beside its laptop, where the card over its head doesn't hide it.
+  void setPropSpot(vm.Vector3 at) => _spot = at.clone();
+
+  /// What its latest tool call was, to act out while it's working.
+  void setAction(WorkerAction? action) => _actions.next = action;
+
+  /// What it's acting out right now (its latest tool call, held a moment so quick ones don't flicker).
+  WorkerAction? get action => _actions.current;
+
+  /// Just finished: a quick spin and a hop.
+  void celebrate() {
+    _twirlT = 0;
+    cheer(1.2);
+  }
+
+  HolidayTheme? get costume => _costume;
+
+  /// Dresses it up for a holiday (a zombie for Halloween, an elf for Christmas), or back in its own skin (null).
+  void setCostume(HolidayTheme? theme) {
+    if (theme == _costume) return;
+    _costume = theme;
+    _undress();
+    void wear(Node parent, Node o) {
+      parent.add(o);
+      _outfit.add(o);
+    }
+
+    var c = _color;
+    if (theme == HolidayTheme.halloween) c = scaleColor(mixColor(c, kZombie, 0.6), 0.85);
+    setToonColor(_skin, c);
+    if (theme == HolidayTheme.halloween) {
+      wear(_body.node, zombieWorker(_skin));
+    } else if (theme == HolidayTheme.christmas) {
+      wear(_body.node, elfHat());
+      wear(_body.node, elfWorker(_skin));
+      for (final f in _feet) {
+        wear(f, elfBoot());
+      }
+    }
+  }
+
+  void _undress() {
+    for (final o in _outfit) {
+      o.detach();
+    }
+    _outfit.clear();
+  }
+
   void setStatus(WorkerStatus status, bool bounce) {
     this.status = status;
     bouncing = bounce;
+    if (_dancing == null) _paintBulb();
+    _drawBubble();
+  }
+
+  void _paintBulb() {
     final c = hex(statusBulb[status] ?? '#adb5bd');
     setToonColor(_bulb, c);
     setEmissive(_bulb, c, 0.7);
-    _drawBubble();
   }
 
   /// Jumps for joy, arms up, for a few seconds.
   void cheer([double seconds = 3]) => _cheerT = seconds;
+
+  /// Hops up on to [stage] (its desk), dances for a few seconds with its light flashing like a disco
+  /// ball, and hops back down into its seat. Asked again mid-dance, it stays up and dances on.
+  void dance(Stage stage) {
+    if (_leaving != null) return;
+    final d = _dancing;
+    if (d == null) {
+      _dancing = _Dance(stage);
+      // The dance has a twirl of its own, so a finishing spin it cut into doesn't play after it.
+      _twirlT = -1;
+    } else {
+      d.t = danceAgain(d.t);
+    }
+  }
+
+  bool get isDancing => _dancing != null;
+
+  /// Back in its seat at once, mid-dance or not (it's being sent home).
+  void stopDancing() {
+    if (_dancing == null) return;
+    _dancing = null;
+    _settle();
+  }
 
   /// What it's working on, shown on a card over its head in place of the status bubble.
   void setTask(WorkerTask? task) {
@@ -675,6 +1116,16 @@ class Worker {
     bouncing = false;
     _cheerT = 0;
     _bounceT = 0;
+    _twirlT = -1;
+    _papers.group.visible = _globe.group.visible = false;
+    _armL.position = vm.Vector3(-0.3, 0.55, 0.05);
+    _armR.position = vm.Vector3(0.3, 0.55, 0.05);
+    for (var i = 0; i < _feet.length; i++) {
+      _feet[i].position = vm.Vector3(i > 0 ? 0.12 : -0.12, 0.2, 0.05);
+    }
+    for (final p in _pupils) {
+      p.position = vm.Vector3(p.position.x, 0.7, p.position.z);
+    }
     setToonColor(_bulb, hex(statusBulb[WorkerStatus.exited]!));
     setEmissive(_bulb, const Color(0xFF000000));
     _labels.remove(_bubble);
@@ -707,11 +1158,25 @@ class Worker {
 
   bool get isLeaving => _leaving != null;
 
+  /// Its pull request, open or merged: its bubble is outlined (and labelled, while it rests) to match.
+  WorkerPr? _pr;
+
+  void setPr(WorkerPr? pr) {
+    if (pr == _pr) return;
+    _pr = pr;
+    _drawBubble();
+  }
+
   void _drawBubble() {
     if (_leaving != null) return;
     final task = _task;
     final b = workerBubble(status, bouncing);
-    final key = task != null ? '${status.wire}|$bouncing|${task.name}|${task.summary}' : b.text;
+    final pr = _pr;
+    final border = pr != null ? prInk[pr.state] : null;
+    // Not working on or waiting for something more: its pull request in place of ready / done / asleep.
+    final prText = prLabel(pr, status);
+    final text = prText ?? b.text;
+    final key = '$border|$prText|${task != null ? '${status.wire}|$bouncing|${task.name}|${task.summary}' : text}';
     if (key == _bubbleKey) return;
     _bubbleKey = key;
     _labels.remove(_bubble);
@@ -723,18 +1188,19 @@ class Worker {
         offset: vm.Vector3(0, 1.74, 0),
         alignment: Alignment.bottomCenter,
         child: TaskCard(
-          chip: taskChip[status] ?? taskChip[WorkerStatus.idle],
+          chip: prText != null ? CardChip(prText.toUpperCase(), border!, '#ffffff') : taskChip[status] ?? taskChip[WorkerStatus.idle],
           title: task.name,
           body: task.summary,
           bg: isAsleep(status) ? '#e9ecef' : b.bg,
+          border: border,
         ),
       );
-    } else if (b.text.isNotEmpty) {
+    } else if (text.isNotEmpty) {
       _bubble = WorldLabel(
         anchor: root,
         offset: vm.Vector3(0, 1.95, 0),
         alignment: Alignment.center,
-        child: TagPill(b.text, bg: b.bg, size: 38),
+        child: TagPill(text, bg: b.bg, size: 38, border: border ?? '#2b2d42'),
       );
     }
     if (_bubble != null) _labels.add(_bubble!);
@@ -743,50 +1209,123 @@ class Worker {
   void update(double dt, double t) {
     final l = _leaving;
     if (l != null) return _carry(l, dt, t);
+    final d = _dancing;
+    if (d != null) return _boogie(d, dt, t);
     _cheerT = math.max(0, _cheerT - dt);
-    // Jump up and down when done / waiting on a human (except while held), or cheering.
+    // Waiting on you: a couple of seconds of jumping, then arms crossed and a tapping foot, and round again.
+    _waitT = status == WorkerStatus.needsInput ? _waitT + dt : 0;
+    final tapping = status == WorkerStatus.needsInput && (held || _waitT % kWaitCycle >= kWaitHops);
+    // Jump up and down when done / waiting on a human (except while held or tapping), or cheering.
     if (bouncing || _cheerT > 0) {
       final landAt = (_bounceT / math.pi).ceil() * math.pi;
       _bounceT += dt * 7;
-      if (held && _cheerT == 0 && _bounceT >= landAt) _bounceT = 0;
+      if ((held || tapping) && _cheerT == 0 && _bounceT >= landAt) _bounceT = 0;
     } else {
       _bounceT = 0;
     }
     final hopping = _bounceT > 0;
-    final working = status == WorkerStatus.working && !hopping;
     // Pop-in when hired
     _spawnT = math.min(1, _spawnT + dt * 2.5);
     final pop = _spawnT < 1 ? 1 + math.sin(_spawnT * math.pi) * 0.35 : 1.0;
-    // Typing arms
-    if (working) {
-      _armL.x = -1.2 + math.sin(t * 22) * 0.25;
-      _armR.x = -1.2 + math.sin(t * 22 + 1.7) * 0.25;
-    } else {
-      _armL.x = _lerp(_armL.x, hopping || bouncing ? -2.6 : -0.3, 0.2);
-      _armR.x = _lerp(_armR.x, hopping || bouncing ? -2.6 : -0.3, 0.2);
+
+    final action = _actions.step(dt);
+    final act = pickAct(status: status, hopping: hopping, bouncing: bouncing, action: action);
+    final s = _blend.pose(act, dt, t);
+    // A zombie at rest stands with its arms out in front of it, groping, listing to one side and swaying.
+    final shamble = _costume == HolidayTheme.halloween ? math.min(1.0, _blend.weight(Act.rest)) : 0.0;
+    if (shamble > 0) {
+      s.armLx += (-1.4 + math.sin(t * 1.6 + _phase) * 0.12 - s.armLx) * shamble;
+      s.armRx += (-1.4 + math.sin(t * 1.6 + _phase + 1.3) * 0.12 - s.armRx) * shamble;
+      s.roll += (0.09 + math.sin(t * 1.1 + _phase) * 0.05) * shamble;
+    }
+
+    _armL
+      ..x = s.armLx
+      ..y = 0
+      ..z = s.armLz;
+    _armR
+      ..x = s.armRx
+      ..y = 0
+      ..z = s.armRz;
+    _armL.position = vm.Vector3(-0.3 + s.reach * 0.07, 0.55 - s.drop, 0.05 + s.reach * 0.12);
+    _armR.position = vm.Vector3(0.3 - s.reach * 0.07, 0.55 - s.drop + s.reach * 0.04, 0.05 + s.reach * 0.14);
+    for (var i = 0; i < _feet.length; i++) {
+      final r = i > 0;
+      _feet[i].position = vm.Vector3(
+        r ? 0.12 : -0.12,
+        0.2 + (r ? s.tap * 0.07 : 0),
+        0.05 + s.kick + (r ? s.tap * 0.03 : 0),
+      );
+    }
+    for (final p in _pupils) {
+      p.position = vm.Vector3(p.position.x, 0.7 + s.look, p.position.z);
+    }
+    _body.x = s.lean;
+    var twirl = 0.0;
+    if (_twirlT >= 0) {
+      _twirlT += dt;
+      twirl = easeInOut(math.min(1, _twirlT / kTwirlTime)) * math.pi * 2;
+      if (_twirlT >= kTwirlTime) _twirlT = -1;
     }
     var bodyY = 0.0;
     if (hopping) {
-      final s = math.sin(_bounceT).abs();
-      bodyY = s * 0.55;
-      final squash = s < 0.15 ? 1 - (0.15 - s) * 1.6 : 1.0;
+      final h = math.sin(_bounceT).abs();
+      bodyY = h * 0.55;
+      final squash = h < 0.15 ? 1 - (0.15 - h) * 1.6 : 1.0;
       _body.node.scale = vm.Vector3(pop * (2 - squash), pop * squash, pop * (2 - squash));
-      _body.y = math.sin(_bounceT * 0.5) * 0.3;
+      _turnY = math.sin(_bounceT * 0.5) * 0.3;
     } else {
-      bodyY = working ? math.sin(t * 11).abs() * 0.02 : math.sin(t * 2) * 0.015;
+      bodyY = s.lift;
       _body.node.scale = vm.Vector3.all(pop);
-      _body.y = _lerp(_body.y, 0, 0.1);
+      _turnY += (s.turn - _turnY) * math.min(1, dt * 6);
     }
-    _body.node.position = vm.Vector3(0, bodyY, 0);
-    _blink(dt);
+    _body.y = _turnY + twirl;
+    _body.z = isAsleep(status) ? math.sin(t * 1.5) * 0.08 : s.roll;
+    _props(dt, t);
+    _blink(dt, s.lid);
     _bulbMesh.scale = vm.Vector3.all(status == WorkerStatus.needsInput ? 1 + math.sin(t * 8).abs() * 0.5 : 1);
-    if (isAsleep(status)) _body.z = math.sin(t * 1.5) * 0.08;
-    _body.apply();
-    _armL.apply();
-    _armR.apply();
     final lift = hopping ? bodyY : 0.0;
     _bubble?.offset = vm.Vector3(0, (_bubbleIsCard ? 1.74 : 1.95) + lift + math.sin(t * 3) * 0.03, 0);
     _nameTag?.offset = vm.Vector3(0, 1.55 + lift, 0);
+    // Walking in to a meeting: the same waddle as on the way out, without the box.
+    if (walking || _stride != 0) {
+      _stride = walking ? _stride + dt * 9 : 0;
+      final w = math.sin(_stride);
+      for (var i = 0; i < _feet.length; i++) {
+        final step = i > 0 ? -w : w;
+        final f = _feet[i];
+        f.position = vm.Vector3(f.position.x, 0.2 + math.max(0, step) * 0.05, 0.05 + step * 0.08);
+      }
+      bodyY += w.abs() * 0.05;
+      _body.z = w * 0.1;
+    }
+    _body.node.position = vm.Vector3(0, bodyY, 0);
+    _body.apply();
+    _armL.apply();
+    _armR.apply();
+  }
+
+  /// The papers and the globe come and go with the act they belong to.
+  void _props(double dt, double t) {
+    bool show(Node prop, Act act) {
+      final w = _blend.weight(act);
+      prop.visible = w > 0.02;
+      if (prop.visible) prop.scale = vm.Vector3.all(math.max(0.001, popIn(w)));
+      return prop.visible;
+    }
+
+    if (show(_papers.group, Act.read)) {
+      // A page every second or so, flipped up and over the top.
+      _flipT = (_flipT + dt) % 1.1;
+      final f = math.min(1.0, _flipT / 0.45);
+      _papers.page.rotation = euler(-easeInOut(f) * math.pi * 1.1, 0);
+      _papers.page.visible = f < 1;
+    }
+    if (show(_globe.group, Act.web)) {
+      _globe.group.position = _spot + vm.Vector3(0, math.sin(t * 2) * 0.03, 0);
+      _globe.ball.rotation = euler(0, t * 2.2, 0.41);
+      _globe.ring.rotation = euler(math.pi / 2 - 0.2, 0, t * 0.6);
+    }
   }
 
   /// Sent home: head hung, the box in its arms, waddling along while [walking].
@@ -821,12 +1360,88 @@ class Worker {
     _nameTag?.offset = vm.Vector3(0, 1.55, 0);
   }
 
-  void _blink(double dt) {
+  /// Up on the desk dancing: hop up, groove side to side, twirl, jump twice, hop back down.
+  void _boogie(_Dance d, double dt, double t) {
+    d.t += dt;
+    if (d.t >= kDanceTime) {
+      _dancing = null;
+      _settle();
+      return update(0, t);
+    }
+    final m = danceAt(d.t);
+    // Between the seat (0) and the stage (1), with a hop's arc over the line between them.
+    final e = easeInOut(m.on);
+    final pos = d.stage.pos;
+    root.position = vm.Vector3(pos.x * e, pos.y * m.on + m.arc, pos.z * e);
+    root.rotation = euler(0, d.stage.yaw * e);
+
+    // Whatever it was acting out waits: shoulders back in place, eyes ahead, the papers and globe put away.
+    _armL.position = vm.Vector3(-0.3, 0.55, 0.05);
+    _armR.position = vm.Vector3(0.3, 0.55, 0.05);
+    for (final p in _pupils) {
+      p.position = vm.Vector3(p.position.x, 0.7, p.position.z);
+    }
+    _papers.group.visible = _globe.group.visible = false;
+    final k = 1 - math.exp(-dt * 18);
+    for (final (i, a) in [_armL, _armR].indexed) {
+      a.x += (m.armX[i] - a.x) * k;
+      a.z += (m.armZ[i] - a.z) * k;
+    }
+    _body.node.position = vm.Vector3(m.sway * 0.3, m.lift, 0);
+    _body
+      ..x = 0
+      ..y = m.twist
+      ..z = m.sway;
+    // Squashed a little as it lands.
+    final squash = m.beat >= 0 && m.lift < 0.03 ? 1 - (0.03 - m.lift) * 3 : 1.0;
+    _body.node.scale = vm.Vector3(2 - squash, squash, 2 - squash);
+    for (var i = 0; i < _feet.length; i++) {
+      final f = _feet[i];
+      f.position = vm.Vector3(f.position.x, 0.2 + math.max(0, i > 0 ? -m.step : m.step) * 0.07, 0.05);
+    }
+    // Its light flashes through the colours like a disco ball.
+    final disco = HSLColor.fromAHSL(1, (t * 1.3) % 1 * 360, 1, 0.5).toColor();
+    setToonColor(_bulb, disco);
+    setEmissive(_bulb, disco, 0.5);
+    _bulbMesh.scale = vm.Vector3.all(1 + math.sin(t * 12).abs() * 0.3);
+    _blink(dt);
+    _body.apply();
+    _armL.apply();
+    _armR.apply();
+    _bubble?.offset = vm.Vector3(0, (_bubbleIsCard ? 1.74 : 1.95) + m.lift + math.sin(t * 3) * 0.03, 0);
+    _nameTag?.offset = vm.Vector3(0, 1.55 + m.lift, 0);
+  }
+
+  /// Back in its seat, standing straight, its light showing its status again.
+  void _settle() {
+    root.position = vm.Vector3.zero();
+    root.rotation = vm.Quaternion.identity();
+    _body.node.position = vm.Vector3.zero();
+    _body
+      ..x = 0
+      ..y = 0
+      ..z = 0
+      ..apply();
+    _body.node.scale = vm.Vector3.all(1);
+    for (final a in [_armL, _armR]) {
+      a
+        ..z = 0
+        ..apply();
+    }
+    for (final f in _feet) {
+      f.position = vm.Vector3(f.position.x, 0.2, 0.05);
+    }
+    _bulbMesh.scale = vm.Vector3.all(1);
+    _paintBulb();
+  }
+
+  /// [lid] narrows the eyes (1 = wide open) between blinks.
+  void _blink(double dt, [double lid = 1]) {
     _blinkAt -= dt;
     final blinking = _blinkAt < 0.12 && _blinkAt > 0;
     if (_blinkAt < 0) _blinkAt = 2 + _rng.nextDouble() * 4;
     for (final (e, z) in _eyes) {
-      e.scale = vm.Vector3(1, blinking ? 0.1 : 1, z);
+      e.scale = vm.Vector3(1, blinking ? 0.1 : lid, z);
     }
   }
 
@@ -835,5 +1450,6 @@ class Worker {
     _labels.remove(_bubble);
     _labels.remove(_nameTag);
     _bubble = _nameTag = null;
+    _undress();
   }
 }

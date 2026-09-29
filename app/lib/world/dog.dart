@@ -10,7 +10,11 @@ import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
 import 'package:office_shared/dog.dart';
+import 'package:office_shared/protocol.dart' show HolidayTheme;
+
+import 'character.dart' show setEmissive;
 import 'collider.dart';
+import 'costumes.dart';
 import 'geo.dart';
 import 'label_widgets.dart';
 import 'labels.dart';
@@ -122,10 +126,10 @@ final Stopwatch _clock = Stopwatch()..start();
 /// performance.now(): milliseconds on a steady clock. [Dog.sync]'s `start` is on this clock unless
 /// the dog is given another.
 double performanceNow() => _clock.elapsedMicroseconds / 1000;
-
 class Dog {
   Dog(
     this._sounds,
+
     /// Someone already has this worker's terminal open, so there's no one to bark for.
     this._hushed,
     this._labels, {
@@ -175,6 +179,46 @@ class Dog {
   double _t = 0;
   bool _placed = false;
   double _heading = 0;
+  late final Node _nose;
+
+  /// Dressed up for a holiday (see [setCostume]): what it's wearing, its bat wings, and Rudolph's nose.
+  HolidayTheme? _costume;
+  final List<Node> _outfit = [];
+  List<Pivot> _wings = const [];
+  PreprocessedMaterial? _rudolph;
+
+  HolidayTheme? get costume => _costume;
+
+  /// Dresses it up for a holiday: bat wings and a little witch's hat for Halloween, reindeer antlers,
+  /// a glowing red nose and a scarf for Christmas. Null takes it all off.
+  void setCostume(HolidayTheme? theme) {
+    if (theme == _costume) return;
+    _costume = theme;
+    for (final o in _outfit) {
+      o.detach();
+    }
+    _outfit.clear();
+    _wings = const [];
+    _rudolph = null;
+    void wear(Node parent, Node o) {
+      parent.add(o);
+      _outfit.add(o);
+    }
+
+    if (theme == HolidayTheme.halloween) {
+      final bat = dogBatWings();
+      wear(_torso.node, bat.group);
+      _wings = bat.wings;
+      wear(_head.node, dogWitchHat());
+    } else if (theme == HolidayTheme.christmas) {
+      wear(_head.node, dogAntlers());
+      wear(_head.node, dogScarf());
+      final red = dogRedNose();
+      wear(_head.node, red.nose);
+      _rudolph = red.glow;
+    }
+    _nose.visible = theme != HolidayTheme.christmas;
+  }
 
   /// Nothing to pet in a building without floors.
   List<Interactable> get interactables => _state != null ? [interactable] : const [];
@@ -290,7 +334,8 @@ class Dog {
     _torso.add(_head.node);
     _head.add(mesh(sphere(0.14, 18, 14), fur));
     _head.add(mesh(sphere(0.075, 14, 10), light, 0, -0.035, 0.12)..scale = vm.Vector3(1, 0.85, 1.35));
-    _head.add(mesh(sphere(0.032, 10, 8), ink, 0, -0.005, 0.22, false));
+    _nose = mesh(sphere(0.032, 10, 8), ink, 0, -0.005, 0.22, false);
+    _head.add(_nose);
     for (final sx in [-1.0, 1.0]) {
       final eye = mesh(sphere(0.026, 10, 8), ink, sx * 0.062, 0.035, 0.115, false);
       _eyes.add(eye);
@@ -426,6 +471,17 @@ class Dog {
     _hips.y = act == DogMotion.wag ? math.sin(t * 11) * 0.1 : 0;
     // Breathing, asleep.
     _torso.node.scale = vm.Vector3.all(act == DogMotion.nap ? 1 + math.sin(t * 2.2) * 0.02 : 1);
+    // Bat wings flap (fast when it runs or is happy, folded while it naps); Rudolph's nose glows.
+    final flap = act == DogMotion.nap ? 0.0 : (walking || act == DogMotion.wag || act == DogMotion.bark ? 1.0 : 0.35);
+    for (final (i, w) in _wings.indexed) {
+      final sx = i > 0 ? 1 : -1;
+      w
+        ..z = sx * (0.75 + (act == DogMotion.nap ? -0.6 : math.sin(t * (6 + 10 * flap)) * 0.45 * flap))
+        ..y = sx * 0.25
+        ..apply();
+    }
+    final nose = _rudolph;
+    if (nose != null) setEmissive(nose, hex('#ff1a1a'), 0.7 + math.sin(t * 3) * 0.3);
     for (final j in [_hips, _torso, _head, _jaw, _tail, ..._front, ..._rear, ..._ears]) {
       j.apply();
     }

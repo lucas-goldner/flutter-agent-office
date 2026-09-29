@@ -93,7 +93,7 @@ ModalHandle openMeeting({
     openPr: openPr,
     preset: preset,
   ),
-);
+)..doing = '🤝 at the meeting room';
 
 class _MeetingWindow extends StatefulWidget {
   const _MeetingWindow({

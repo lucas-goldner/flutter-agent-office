@@ -9,6 +9,8 @@ import 'interop/pointer_lock.dart';
 import 'office/controller.dart';
 import 'office_scope.dart';
 import 'ui/arcade.dart';
+import 'ui/compass.dart';
+import 'ui/emote_wheel.dart';
 import 'ui/shot_meter.dart';
 import 'ui/hud.dart';
 import 'ui/modal.dart';
@@ -28,6 +30,8 @@ class _OfficePageState extends State<OfficePage> {
   final FocusNode _focus = FocusNode(debugLabel: 'office');
   late final PointerLock _lock = PointerLock(
     onMove: (dx, dy) {
+      // While the emote wheel is open, the mouse points at an emote instead of looking around.
+      if (c.emoteWheel.isOpen) return c.emoteWheel.move(dx, dy);
       if (c.player.enabled) c.player.look(dx * kLookSpeed, dy * kLookSpeed);
     },
     onChange: (locked) {
@@ -65,6 +69,7 @@ class _OfficePageState extends State<OfficePage> {
     c.player.enabled = !open;
     c.player.input.clear();
     if (open) {
+      c.emoteWheel.close();
       if (_lock.locked) _relook = true;
       _lock.unlock();
     } else {
@@ -86,6 +91,8 @@ class _OfficePageState extends State<OfficePage> {
     final mouse = e.kind == PointerDeviceKind.mouse;
     if (c.player.view == ViewMode.first && mouse && _lock.canLock) {
       if (_lock.locked) {
+        // No cursor while it's captured: a click picks what the emote wheel points at.
+        if (c.emoteWheel.isOpen) return c.emoteWheel.click();
         if (e.buttons == kPrimaryMouseButton) c.onClick(Offset(_view.width / 2, _view.height / 2), _view);
         return;
       }
@@ -177,6 +184,14 @@ class _OfficePageState extends State<OfficePage> {
                   child: LabelLayer(hub: c.labels, camera: () => c.camera, blocked: c.labelBlocked),
                 ),
                 Positioned.fill(
+                  child: CompassLayer(
+                    camera: () => c.camera,
+                    bearings: c.waitingBearings,
+                    waiting: c.waitingChip,
+                    onNext: c.goToNextWaiting,
+                  ),
+                ),
+                Positioned.fill(
                   child: IgnorePointer(
                     child: ValueListenableBuilder<bool>(
                       valueListenable: c.fade,
@@ -221,6 +236,8 @@ class _OfficePageState extends State<OfficePage> {
                     clock: () => c.clockSeconds,
                   ),
                 ),
+                Positioned.fill(child: EmotePop(pop: c.emotePop)),
+                Positioned.fill(child: EmoteWheelView(wheel: c.emoteWheel)),
               ],
             ],
           ),

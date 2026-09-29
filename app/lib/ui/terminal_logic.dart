@@ -127,3 +127,41 @@ String? urlAt(BufferLike buf, int row, int col) {
   }
   return null;
 }
+
+// ---- Who's in the terminal ---------------------------------------------------------------------
+
+/// How long someone shows as typing after the last word from their keyboard (they send one about every second).
+const int kTypingShowsMs = 2500;
+
+/// "Sam is typing…", "Sam and Ada are typing…", "Sam and 2 others are typing…".
+String typingLine(List<String> names) {
+  if (names.length == 1) return '${names[0]} is typing…';
+  if (names.length == 2) return '${names[0]} and ${names[1]} are typing…';
+  return '${names[0]} and ${names.length - 1} others are typing…';
+}
+
+/// Up to two letters for someone's face: "Sam" -> "S", "Ada Lovelace" -> "AL".
+String initials(String name) {
+  final words = name.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+  String first(String? w) => w == null || w.isEmpty ? '' : String.fromCharCode(w.runes.first).toUpperCase();
+  final s = words.isEmpty ? '' : first(words.first) + (words.length > 1 ? first(words.last) : '');
+  return s.isEmpty ? '?' : s;
+}
+
+/// One face in the terminal's header.
+typedef TermViewer = ({String name, String color, bool you, bool typing});
+
+/// Everyone in the terminal, one face per person however many windows they have it open in, you
+/// first. [typing] holds the viewer ids typing now.
+List<TermViewer> viewersOf(List<String> viewerIds, Map<String, PeerInfo> peers, String? you, Set<String> typing) {
+  final byName = <String, TermViewer>{};
+  for (final id in viewerIds) {
+    final p = peers[id];
+    if (p == null) continue;
+    final v = byName[p.name] ?? (name: p.name, color: p.color, you: false, typing: false);
+    byName[p.name] = (name: v.name, color: v.color, you: v.you || id == you, typing: v.typing || typing.contains(id));
+  }
+  final list = byName.values.toList();
+  // A stable sort: you first, the rest in the order they came.
+  return [...list.where((v) => v.you), ...list.where((v) => !v.you)];
+}
