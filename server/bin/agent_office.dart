@@ -47,10 +47,13 @@ Future<void> main(List<String> argv) async {
   if (cfg.project == null && atTerminal) await welcome(cfg);
 
   // Last line of defense: one bad request must never take down every running worker.
-  runZonedGuarded(() => _serve(cfg), (err, st) => stderr.writeln('agent-office: unhandled error $err\n$st'));
+  runZonedGuarded(
+    () => _serve(cfg, atTerminal),
+    (err, st) => stderr.writeln('agent-office: unhandled error $err\n$st'),
+  );
 }
 
-Future<void> _serve(Config cfg) async {
+Future<void> _serve(Config cfg, bool atTerminal) async {
   var closing = false;
   late final Office office;
 
@@ -89,15 +92,17 @@ Future<void> _serve(Config cfg) async {
   }
 
   final scheme = cfg.tls != null ? 'https' : 'http';
-  final urls = <String>{'$scheme://localhost:${cfg.port}'};
-  if (cfg.host == '0.0.0.0' || cfg.host == '::') {
+  final everywhere = cfg.host == '0.0.0.0' || cfg.host == '::';
+  final loopback = cfg.host == 'localhost' || cfg.host == '::1' || cfg.host.startsWith('127.');
+  // Where this machine's browser finds the office: localhost, unless it's bound to one other address.
+  final here = '$scheme://${everywhere || loopback ? 'localhost' : cfg.host}:${cfg.port}';
+  final urls = <String>{here};
+  if (everywhere) {
     for (final ni in await NetworkInterface.list(type: InternetAddressType.IPv4)) {
       for (final a in ni.addresses) {
         if (!a.isLoopback) urls.add('$scheme://${a.address}:${cfg.port}');
       }
     }
-  } else {
-    urls.add('$scheme://${cfg.host}:${cfg.port}');
   }
 
   String floorsLine() {
@@ -121,6 +126,16 @@ Future<void> _serve(Config cfg) async {
     return cfg.password!;
   }
 
+  // Someone started it in a terminal: a link that signs them in once, opened in their browser, so
+  // there's no password to copy. Not for an office that's claimed from a link (deploy/provision.sh)
+  // or signed in to with accounts only.
+  var signIn = '';
+  var opened = false;
+  if (atTerminal && office.accounts.sharedPassword && (cfg.claimToken ?? '').isEmpty) {
+    signIn = here + office.signInLink();
+    if (cfg.open) opened = _openBrowser(signIn);
+  }
+
   final agent = office.resolvedAgent;
   // Started in a project that's still one of the floors (it can be taken off like any other).
   final local = cfg.project != null && office.floors().any((f) => p.normalize(p.absolute(f.def.dir)) == cfg.project);
@@ -131,16 +146,32 @@ Future<void> _serve(Config cfg) async {
 
   ${floorsLine()}
 
-  ${urls.join('\n  ')}
-
+  ${urls.join('\n  ')}${loopback ? '\n  (only this computer can open it: --host 0.0.0.0 lets your network in)' : ''}
+${signIn.isNotEmpty ? '\n  sign in: $signIn\n           ${opened ? 'opened in your browser; ' : ''}the link works once\n' : ''}
   password: ${passwordLine()}
   default agent: ${[agent ?? '${cfg.agentCmd} (via login shell)', ...cfg.agentArgs].join(' ')}
   choose Claude Code or OpenCode when hiring or queueing a task
-${cfg.tls != null ? '' : '\n  tip: voice & screen share need https off localhost — use a reverse proxy or --self-signed\n'}''',
+${cfg.tls != null || loopback ? '' : '\n  tip: voice & screen share need https off localhost — use a reverse proxy or --self-signed\n'}''',
   );
 
   ProcessSignal.sigint.watch().listen((s) => unawaited(stop(s)));
   if (!Platform.isWindows) ProcessSignal.sigterm.watch().listen((s) => unawaited(stop(s)));
+}
+
+/// Opens the office in this computer's browser. Not over SSH, in CI, or on a Linux box without a
+/// desktop: nobody would see it there.
+bool _openBrowser(String url) {
+  final env = Platform.environment;
+  bool set(String k) => (env[k] ?? '').isNotEmpty;
+  if (set('SSH_CONNECTION') || set('SSH_TTY') || set('CI')) return false;
+  if (Platform.isLinux && !set('DISPLAY') && !set('WAYLAND_DISPLAY')) return false;
+  final (cmd, args) = Platform.isMacOS
+      ? ('open', [url])
+      : Platform.isWindows
+      ? ('rundll32', ['url.dll,FileProtocolHandler', url])
+      : ('xdg-open', [url]);
+  unawaited(Process.start(cmd, args, mode: ProcessStartMode.detached).then((_) {}, onError: (Object _) {}));
+  return true;
 }
 
 /// Exits once what was printed is out: dart:io's `exit` doesn't wait for piped output.

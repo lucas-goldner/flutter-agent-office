@@ -31,6 +31,7 @@ class Config {
     this.projects,
     this.project,
     required this.host,
+    this.open = true,
     required this.port,
     this.password,
     required this.passwordGenerated,
@@ -67,6 +68,9 @@ class Config {
   final String? project;
   final String host;
   final int port;
+
+  /// Open the office in a browser, signed in, when it's started in a terminal (--no-open: don't).
+  final bool open;
 
   /// Plaintext password, only when known: from --password, or generated and not yet claimed.
   String? password;
@@ -148,7 +152,8 @@ Options:
                           (default ~/agent-office, env AGENT_OFFICE_PROJECTS).
                           Also settable from ⚙️ Settings in the office
   -p, --port <n>          Port to listen on (default 4600, env PORT)
-  -H, --host <addr>       Address to bind (default 0.0.0.0)
+  -H, --host <addr>       Address to bind (default 127.0.0.1: only this machine).
+                          0.0.0.0 lets other computers on your network in
       --password <pw>     Office password (env AGENT_OFFICE_PASSWORD).
                           Without one, a random password is generated once and
                           saved in <dir>/.agent-office/config.json
@@ -157,6 +162,8 @@ Options:
                           is kept and the password is never displayed again.
       --reset-password    Forget the generated password (a new one is made on the
                           next start) and exit
+      --no-open           Don't open the office in your browser when it starts
+                          (env AGENT_OFFICE_NO_OPEN=1)
       --agent <cmd>       Default agent command (default "claude", env AGENT_OFFICE_AGENT)
       --agent-args <str>  Extra args for the configured agent, e.g. "--model opus"
                           Workers can also select Claude Code, OpenCode or Codex in the UI
@@ -183,6 +190,10 @@ Options:
                           fog (env AGENT_OFFICE_WEATHER)
       --version           Print the office's version
   -h, --help              Show this help
+
+Started in a terminal, the office opens in your browser already signed in, with
+a link that works once. Only this machine can reach it unless you pass --host.
+To run it on a server for your team, see deploy/provision.sh.
 
 Voice and screen sharing need a secure context: use https (a reverse proxy,
 --tls-cert/--tls-key or --self-signed) unless everyone is on localhost.
@@ -269,7 +280,10 @@ Config loadConfig(List<String> argv) {
   var projects = _env('AGENT_OFFICE_PROJECTS') != null ? _resolve(_env('AGENT_OFFICE_PROJECTS')!) : '';
   final envPort = _jsNumber(_env('PORT'));
   var port = envPort.isNaN || envPort == 0 ? 4600.0 : envPort;
-  var host = '0.0.0.0';
+  // Loopback unless asked: an office lets whoever signs in run commands on this machine.
+  var host = '127.0.0.1';
+  final noOpen = _env('AGENT_OFFICE_NO_OPEN');
+  var open = noOpen == null || noOpen == '0';
   var password = _env('AGENT_OFFICE_PASSWORD') ?? '';
   var agentCmd = _env('AGENT_OFFICE_AGENT') ?? 'claude';
   var agentArgs = splitArgs(_env('AGENT_OFFICE_AGENT_ARGS') ?? '');
@@ -303,6 +317,8 @@ Config loadConfig(List<String> argv) {
       case '-H':
       case '--host':
         host = _takeValue(argv, i++, a);
+      case '--no-open':
+        open = false;
       case '--password':
         password = _takeValue(argv, i++, a);
       case '--agent':
@@ -442,6 +458,7 @@ Config loadConfig(List<String> argv) {
     projects: projects.isEmpty ? null : projects,
     project: project.isEmpty ? null : project,
     host: host,
+    open: open,
     port: port.toInt(),
     password: password.isEmpty ? null : password,
     passwordGenerated: passwordGenerated,

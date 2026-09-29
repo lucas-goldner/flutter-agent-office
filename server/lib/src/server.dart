@@ -348,7 +348,9 @@ class Office {
     this._floors,
     this.resolvedAgent, {
     required String Function() projectsDir,
-  }) : _projectsDir = projectsDir;
+    required String Function() signInLink,
+  }) : _projectsDir = projectsDir,
+       _signInLink = signInLink;
 
   final RelicServer _server;
   final Future<void> Function(bool keep) _shutdown;
@@ -357,6 +359,10 @@ class Office {
   final int hookPort;
   final Map<String, Floor> _floors;
   final String Function() _projectsDir;
+  final String Function() _signInLink;
+
+  /// A link (path and fragment) that signs one browser in, once; see Auth.linkKey.
+  String signInLink() => _signInLink();
 
   /// Where new floors are cloned now (⚙️ Settings can move it).
   String projectsDir() => _projectsDir();
@@ -945,6 +951,17 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
       auth.recordSuccess(guess.ip);
       stdout.writeln('  the office password was claimed — it will not be shown again');
       return _send(200, {'password': password}, signedIn(req));
+    }
+    // A sign-in link the office printed in its terminal (/login#key=…), traded for a session once.
+    if (path == '/api/link' && method == Method.post) {
+      Response? answered;
+      final guess = await readGuess(req, (r) => answered = r);
+      if (guess == null) return answered!;
+      if (!accounts.sharedPassword || !auth.useLinkKey(_str(guess.body['key'], 128))) {
+        return _send(410, {'error': 'That sign-in link was already used. Sign in with the office password.'});
+      }
+      auth.recordSuccess(guess.ip);
+      return _send(200, {'ok': true}, signedIn(req));
     }
     if (path == '/api/logout' && method == Method.post) {
       return _send(200, {'ok': true}, {'set-cookie': auth.clearCookie(req.headers)});
@@ -2272,6 +2289,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     floors,
     resolveCommand(cfg.agentCmd),
     projectsDir: () => building.projectsDir,
+    signInLink: () => '/login#key=${auth.linkKey()}',
   );
 }
 
