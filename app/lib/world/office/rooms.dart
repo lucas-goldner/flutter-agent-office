@@ -19,6 +19,7 @@ import '../collider.dart';
 import '../hoop.dart';
 import '../text.dart';
 import '../toon.dart';
+import 'bookshelf.dart';
 import 'geo.dart';
 import 'office.dart';
 import 'parts.dart';
@@ -99,6 +100,12 @@ RoomsView addRooms(Office office) {
   group.add(cabinet.group);
   office.interactables.add(cabinet.interactable);
   fixture(Side.east, Cabinet.z, Cabinet.height / 2, Cabinet.width + 0.1, Cabinet.height);
+
+  // The bookshelf of the project's docs, on the south wall between the middle window and the balcony doors.
+  final shelf = buildBookshelf();
+  group.add(shelf.group);
+  office.interactables.add(shelf.interactable);
+  fixture(Side.south, Bookshelf.x, (Bookshelf.height + 0.55) / 2, Bookshelf.width + 0.2, Bookshelf.height + 0.55);
 
   // The basketball hoop, on the west wall between the exit door and the kitchen.
   final hoop = buildHoop();

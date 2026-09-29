@@ -13,6 +13,8 @@ import 'package:office_shared/status.dart';
 
 import '../ui/arcade.dart' show ScreenTexture;
 import '../state/store.dart' show nowMs;
+import '../ui/bookshelf.dart';
+import '../ui/bookshelf_logic.dart' show githubUrl;
 import '../ui/cabinet.dart';
 import '../ui/hud_parts.dart' hide statusLabel;
 import '../ui/modal.dart';
@@ -150,6 +152,9 @@ class RoomsHub {
       case InteractKind.ball:
         if (key == DeskKey.e) ball.take();
         return true;
+      case InteractKind.bookshelf:
+        if (key == DeskKey.e) showBookshelf();
+        return true;
       default:
         return false;
     }
@@ -166,6 +171,19 @@ class RoomsHub {
 
   /// Something to use that's near without aiming at it: the ball at your feet.
   Interactable? nearby() => ball.atFeet();
+
+  /// E at the bookshelf: the floor's project's docs, to read.
+  void showBookshelf() {
+    final floor = c.store.floor;
+    if (floor == null) return toast('Take the elevator to a floor first');
+    openBookshelf(
+      floor: floor,
+      project: c.store.project?.name,
+      repoUrl: githubUrl(c.store.project?.remote),
+      // What you're reading goes under your name tag for everyone on the floor.
+      onReading: (what) => c.net.send(DoingCmd(what: what, reading: what != null)),
+    );
+  }
 
   /// E at a board agent: type it a request. It's hired with it when nobody is there yet.
   void _askStation(String deskId) {
@@ -202,6 +220,19 @@ class RoomsHub {
     switch (it.kind) {
       case InteractKind.ball:
         return ball.ballHint();
+      case InteractKind.bookshelf:
+        final names = [
+          for (final p in c.store.peers.values)
+            if (p.reading == true && p.id != c.store.you && c.store.onMyFloor(p)) p.name,
+        ].join(', ');
+        return (
+          names,
+          [
+            const HintTitle('📚 Bookshelf'),
+            HintAside(names.isNotEmpty ? '📖 ${clip(names, 40)} reading' : "the project's docs"),
+            const HintKey('E', 'Read the docs'),
+          ],
+        );
       case InteractKind.station:
         return it.deskId == null ? ('', const []) : _stationHint(it.deskId!);
       case InteractKind.cabinet:
