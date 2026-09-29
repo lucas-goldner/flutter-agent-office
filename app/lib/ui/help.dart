@@ -28,7 +28,7 @@ const List<(String, String)> helpRows = [
   ),
   (
     '🎉',
-    'The gong next to the PR board rings, and confetti flies over the desk, whenever a pull request merges. Walk up and press E to bang it yourself',
+    'Whenever a pull request merges, the gong next to the PR board rings, confetti rains down all over the floor and every worker gets up on its desk for a quick dance. Walk up to the gong and press E to bang it yourself',
   ),
   ('Drag / wheel', 'Orbit and zoom the camera in third person'),
   ('P', 'Prompt: give a task to a new or existing worker at the desk you face'),
@@ -36,6 +36,9 @@ const List<(String, String)> helpRows = [
   ('B', 'Open a shared shell (dev servers, git, tests) at an empty desk'),
   ('R', 'Resume a sleeping worker'),
   ('X', 'Send a worker home (frees the desk)'),
+  ('👥', 'Click someone under "In the office" to walk over to them (on another floor, you ride the elevator first). The line under their name says what they have open or where they are'),
+  ('N', "Next worker that needs you: go to whoever has waited longest (needs input, or done and nobody's looked), and again for the next one. Arrows at the edge of the screen point to the ones out of sight"),
+  ('Q', 'Put back the issue card in your hands (E at a note on the issues board, or ✋ Pick it up in an issue; then E at an empty desk, a worker or the queue board)'),
   ('F', 'Hang a picture from the web on a wall. Look at a picture and press E to move, edit or take it down'),
   (
     '🐶',
@@ -43,6 +46,10 @@ const List<(String, String)> helpRows = [
   ),
   ('O', 'Open a pull request for a worker on its own branch, or see the one it has'),
   ('T', 'Chat'),
+  (
+    'G / 1–6',
+    'Emote: hold G, point at one and let go (or tap G and click one), or press 1–6: wave, thumbs up, clap, dance, point, facepalm. Everyone on your floor sees it',
+  ),
   ('/', 'Search the chat and every terminal on your floor, back to before the office last restarted'),
   ('V', 'Join voice. In voice, hold V to talk (push to talk): you’re muted once you let go. Leave voice from the ☰ menu'),
   ('M', 'Mute or unmute your mic in voice. ⚙️ Settings can have you join muted, for push to talk'),

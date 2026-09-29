@@ -80,18 +80,6 @@ void main() {
       expect(workersTitle([worker('1')]), '1 worker on this floor');
     });
 
-    test('who is waiting, longest first, and how the top bar says it', () {
-      final ws = [
-        worker('a', status: 'done', acked: false, since: 30),
-        worker('b', status: 'needs_input', since: 10),
-        worker('c', status: 'done', acked: true),
-        worker('d', status: 'needs_input', at: 5),
-      ];
-      expect(waitingInOrder(ws).map((w) => w.id), ['d', 'b', 'a']);
-      expect(waitingLabel(waitingInOrder(ws)), '🙋 2 waiting · ✅ 1 done');
-      expect(waitingLabel([ws[0]]), '✅ 1 done');
-    });
-
     test('the People chip shows once you are not alone', () {
       final s = Settings();
       expect(peopleChipShown(1, s), isFalse);

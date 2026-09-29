@@ -20,6 +20,10 @@ class ModalHandle {
   /// The window's keyboard focus, handed back to it when the window over it closes.
   FocusScopeNode? _focus;
 
+  /// What having it open says you're doing, under your name tag (see PeerInfo.doing), like
+  /// "🔀 reading PR #12".
+  String? doing;
+
   bool get closed => _closed;
 
   void close() {
@@ -46,6 +50,10 @@ class ModalStack {
   final ValueNotifier<bool> changes = ValueNotifier(false);
 
   bool get open => _stack.isNotEmpty;
+
+  /// What the open windows say you're doing: the topmost one that says anything (a merge dialog
+  /// over a PR is still "reading PR #12").
+  String? get doingNow => _stack.reversed.map((m) => m.doing).nonNulls.firstOrNull;
 
   /// Where windows go: the office page's overlay. Set once by the page.
   void attach(OverlayState overlay) => _overlay = overlay;

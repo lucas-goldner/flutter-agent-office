@@ -23,6 +23,7 @@ import 'provider.dart';
 import 'theme.dart';
 import 'title.dart';
 import 'usage.dart';
+import 'whereabouts.dart';
 
 export 'hud_parts.dart' show CrosshairState, HintAside, HintCost, HintKey, HintPart, HintTitle;
 export 'menu.dart' show HudAction, HudPrefs, HudSection, HudTone;
@@ -73,6 +74,7 @@ class HudCallbacks {
     required this.onEditProfile,
     this.onFloors,
     this.onTalk,
+    this.onWalkTo,
   });
 
   final VoidCallback onElevator;
@@ -103,6 +105,8 @@ class HudCallbacks {
 
   /// V in voice is push to talk: held down it's true, let go it's false. Without it V toggles voice.
   final bool Function(bool down)? onTalk;
+  /// Clicking anyone else there: walk over to them (riding the elevator first if they're on another floor).
+  final void Function(String peerId)? onWalkTo;
 }
 
 /// The HUD's keyboard: the office page calls these.
@@ -452,7 +456,12 @@ class _SidePanels extends StatelessWidget {
         final panels = <Widget>[
           if (prefs.panel(HudPanel.people))
             Flexible(
-              child: _PeoplePanel(prefs: prefs, onEditProfile: callbacks.onEditProfile, speaking: speaking),
+              child: _PeoplePanel(
+                prefs: prefs,
+                onEditProfile: callbacks.onEditProfile,
+                onWalkTo: callbacks.onWalkTo,
+                speaking: speaking,
+              ),
             ),
           if (prefs.panel(HudPanel.workers)) Flexible(child: _WorkersPanel(prefs: prefs, onOpen: callbacks.onOpenWorker)),
           if (prefs.panel(HudPanel.spend)) _SpendPanel(prefs: prefs),
@@ -526,10 +535,11 @@ class _SidePanel extends StatelessWidget {
 
 /// "In the office": you first, then everyone by name.
 class _PeoplePanel extends StatelessWidget {
-  const _PeoplePanel({required this.prefs, required this.onEditProfile, this.speaking});
+  const _PeoplePanel({required this.prefs, required this.onEditProfile, this.onWalkTo, this.speaking});
 
   final HudPrefs prefs;
   final VoidCallback onEditProfile;
+  final void Function(String peerId)? onWalkTo;
   final ValueListenable<Set<String>>? speaking;
 
   @override
@@ -560,7 +570,7 @@ class _PeoplePanel extends StatelessWidget {
             for (final (i, p) in peers.indexed)
               Padding(
                 padding: EdgeInsets.only(top: i == 0 ? 0 : 4),
-                child: _PersonRow(p, store: store, speaking: talking.contains(p.id), onEditProfile: onEditProfile),
+                child: _PersonRow(p, store: store, speaking: talking.contains(p.id), onEditProfile: onEditProfile, onWalkTo: onWalkTo),
               ),
           ],
         );
@@ -570,12 +580,13 @@ class _PeoplePanel extends StatelessWidget {
 }
 
 class _PersonRow extends StatelessWidget {
-  const _PersonRow(this.p, {required this.store, required this.speaking, required this.onEditProfile});
+  const _PersonRow(this.p, {required this.store, required this.speaking, required this.onEditProfile, this.onWalkTo});
 
   final PeerInfo p;
   final Store store;
   final bool speaking;
   final VoidCallback onEditProfile;
+  final void Function(String peerId)? onWalkTo;
 
   @override
   Widget build(BuildContext context) {
@@ -593,6 +604,7 @@ class _PersonRow extends StatelessWidget {
       }
     }
     final color = speaking ? Swatch.good : Swatch.ink;
+    final sub = you ? null : whereabouts(p);
     Widget row = Container(
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
       child: Row(
@@ -600,11 +612,19 @@ class _PersonRow extends StatelessWidget {
           Dot(cssColor(p.color)),
           const SizedBox(width: 8),
           Flexible(
-            child: Text(
-              p.name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: heavy(14, color: color, weight: FontWeight.w700),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  p.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: heavy(14, color: color, weight: FontWeight.w700),
+                ),
+                // What they have open, or where they are (see whereabouts).
+                if (sub != null) Text(sub, maxLines: 1, overflow: TextOverflow.ellipsis, style: heavy(11, color: Swatch.muted, weight: FontWeight.w700)),
+              ],
             ),
           ),
           if (p.account == true) ...[
@@ -644,7 +664,18 @@ class _PersonRow extends StatelessWidget {
         ],
       ),
     );
-    if (!you) return Tooltip(message: p.name, child: row);
+    if (!you) {
+      final walk = onWalkTo;
+      final tip = '${store.onMyFloor(p) ? 'Walk over to' : 'Take the elevator to'} ${p.name}${sub != null ? ' ($sub)' : ''}';
+      if (walk == null) return Tooltip(message: p.name, child: row);
+      return Tooltip(
+        message: tip,
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: GestureDetector(behavior: HitTestBehavior.opaque, onTap: () => walk(p.id), child: row),
+        ),
+      );
+    }
     return Tooltip(
       message: 'Change your character',
       child: MouseRegion(

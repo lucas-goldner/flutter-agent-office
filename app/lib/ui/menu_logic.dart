@@ -150,21 +150,3 @@ String workersTitle(Iterable<WorkerInfo> workers) {
 
 /// The People chip shows once you're not alone, or while its panel is on.
 bool peopleChipShown(int people, Settings s) => people > 1 || panelOn(s, HudPanel.people);
-
-/// Workers waiting on someone, whoever has waited longest first.
-List<WorkerInfo> waitingInOrder(Iterable<WorkerInfo> workers) {
-  int since(WorkerInfo w) => w.waitingSince ?? w.createdAt;
-  return workers.where(waitingOnSomeone).toList()..sort((a, b) {
-    final d = since(a).compareTo(since(b));
-    if (d != 0) return d;
-    final c = a.createdAt.compareTo(b.createdAt);
-    return c != 0 ? c : a.id.compareTo(b.id);
-  });
-}
-
-/// "🙋 2 waiting · ✅ 1 done": the ones that need input, then the ones that finished.
-String waitingLabel(List<WorkerInfo> waiting) {
-  final needs = waiting.where((w) => w.status == WorkerStatus.needsInput).length;
-  final done = waiting.length - needs;
-  return [if (needs > 0) '🙋 $needs waiting', if (done > 0) '✅ $done done'].join(' · ');
-}

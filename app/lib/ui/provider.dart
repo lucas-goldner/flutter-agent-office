@@ -5,6 +5,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../interop/portable.dart';
 import 'window_parts.dart' show SmallButton;
 import '../net/api.dart';
 
@@ -96,6 +97,19 @@ String providerUsageNote(AgentProvider provider) => switch (provider) {
   AgentProvider.opencode =>
     'OpenCode reports model/provider estimates; they are not billing, and arrive after the first report.',
 };
+
+AgentProvider _preferredProvider(List<AgentProvider> options, AgentProvider fallback) {
+  final saved = AgentProvider.tryParse(storageGet(_providerKey));
+  if (saved != null && options.contains(saved)) return saved;
+  return options.contains(fallback) ? fallback : options.first;
+}
+
+/// The provider a picker would start on, for hiring without showing one (an issue card dropped on
+/// a desk or the queue board): the one last picked anywhere, else the project's default.
+AgentProvider rememberedProvider(ProjectInfo? project) =>
+    _preferredProvider(supportedProviders(project), resolvedProvider(project?.defaultProvider, project));
+
+const _providerKey = 'agent-office.provider';
 
 const kModelMax = 256;
 final _badChars = RegExp(r'[\s\p{Cc}\p{Cf}]', unicode: true);
@@ -194,6 +208,8 @@ class ProviderPickerController extends ChangeNotifier {
   set selected(AgentProvider p) {
     _selected = p;
     _editing = true;
+    // Remembered for hiring without a picker (rememberedProvider: a card dropped on a desk).
+    if (options.contains(p)) storageSet(_providerKey, p.wire);
     notifyListeners();
   }
 
