@@ -12,7 +12,7 @@ import 'package:office_shared/protocol.dart';
 import 'package:office_shared/status.dart';
 
 import '../ui/arcade.dart' show ScreenTexture;
-import '../state/store.dart' show nowMs;
+import '../state/store.dart' show Topic, nowMs;
 import '../ui/bookshelf.dart';
 import '../ui/bookshelf_logic.dart' show githubUrl;
 import '../ui/cabinet.dart';
@@ -127,6 +127,14 @@ class RoomsHub {
     // Golf off the balcony.
     golf = GolfPlay(c, view.teeBall);
     c.office.group.add(golf.balls.group);
+    // Off to another floor: the balls stay behind, and so does the club.
+    var floor = c.store.floor;
+    c.store.topic(Topic.floor).addListener(() {
+      if (c.store.floor == floor) return;
+      floor = c.store.floor;
+      golf.stop();
+      golf.balls.clear();
+    });
 
     // The board agents waiting by their boards before anyone has asked them anything.
     for (final def in stations) {
