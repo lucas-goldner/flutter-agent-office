@@ -329,8 +329,9 @@ class _BookshelfState extends State<_Bookshelf> {
     if (_listError != null) {
       return Text("Couldn't look along the shelves: $_listError", style: heavy(13, color: Swatch.muted));
     }
-    if (_loaded && _files.isEmpty)
+    if (_loaded && _files.isEmpty) {
       return Text('No Markdown files in this project yet.', style: heavy(13, color: Swatch.muted));
+    }
     if (_loaded && _shown.isEmpty) return Text('No doc matches that.', style: heavy(13, color: Swatch.muted));
     return ListView.builder(
       controller: _list,
