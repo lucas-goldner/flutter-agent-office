@@ -2,6 +2,7 @@
 // pull.ts): which column a card goes in, whether a PR can merge, and the prompts workers get.
 // Pure Dart, so it is tested on the VM.
 
+import 'dart:convert';
 import 'dart:ui' show Color;
 
 import 'package:office_shared/protocol.dart';
@@ -14,9 +15,15 @@ String issuePrompt(GhIssue it) =>
     'Work on GitHub issue #${it.number}: "${it.title}".\n\nRead it first with `gh issue view ${it.number} --comments`. Create a new branch, implement the change, verify it, then open a pull request that closes #${it.number}.';
 
 class BoardColumn<T> {
-  const BoardColumn(this.title, this.items);
+  const BoardColumn(this.key, this.title, this.items, {this.max});
+
+  /// Names the column in your saved label filters.
+  final String key;
   final String title;
   final List<T> items;
+
+  /// Shows at most this many (after the label filter).
+  final int? max;
 }
 
 final _progress = RegExp('progress|doing|wip|started', caseSensitive: false);
@@ -29,19 +36,116 @@ List<BoardColumn<GhIssue>> issueColumns(List<GhIssue> items, QueueTask? Function
       .where((i) => i.assignees.isNotEmpty || i.labels.any((l) => _progress.hasMatch(l.name)) || taskForIssue(i.number)?.status == TaskStatus.running)
       .toList();
   final todo = open.where((i) => !inProgress.contains(i)).toList();
-  final closed = (items.where((i) => i.state != 'OPEN').toList()..sort(_byUpdatedDesc)).take(40).toList();
-  return [BoardColumn('📥 Open', todo), BoardColumn('🚧 In progress', inProgress), BoardColumn('✅ Closed', closed)];
+  final closed = items.where((i) => i.state != 'OPEN').toList()..sort(_byUpdatedDesc);
+  return [
+    BoardColumn('open', '📥 Open', todo),
+    BoardColumn('progress', '🚧 In progress', inProgress),
+    BoardColumn('closed', '✅ Closed', closed, max: 40),
+  ];
 }
 
 List<BoardColumn<GhPull>> pullColumns(List<GhPull> items) {
   final open = items.where((p) => p.state == 'OPEN');
   return [
-    BoardColumn('✏️ Draft', open.where((p) => p.isDraft).toList()),
-    BoardColumn('👀 In review', open.where((p) => !p.isDraft && p.reviewDecision != 'APPROVED').toList()),
-    BoardColumn('👍 Approved', open.where((p) => !p.isDraft && p.reviewDecision == 'APPROVED').toList()),
-    BoardColumn('🎉 Merged', (items.where((p) => p.state == 'MERGED').toList()..sort(_byUpdatedDesc)).take(30).toList()),
-    BoardColumn('🗑️ Closed', (items.where((p) => p.state == 'CLOSED').toList()..sort(_byUpdatedDesc)).take(20).toList()),
+    BoardColumn('draft', '✏️ Draft', open.where((p) => p.isDraft).toList()),
+    BoardColumn('review', '👀 In review', open.where((p) => !p.isDraft && p.reviewDecision != 'APPROVED').toList()),
+    BoardColumn('approved', '👍 Approved', open.where((p) => !p.isDraft && p.reviewDecision == 'APPROVED').toList()),
+    BoardColumn('merged', '🎉 Merged', items.where((p) => p.state == 'MERGED').toList()..sort(_byUpdatedDesc), max: 30),
+    BoardColumn('closed', '🗑️ Closed', items.where((p) => p.state == 'CLOSED').toList()..sort(_byUpdatedDesc), max: 20),
   ];
+}
+
+// ---- Label filters ----------------------------------------------------------------------------------
+
+/// The labels an issue or PR carries.
+List<GhLabel> labelsOf(Object it) => switch (it) {
+      GhIssue i => i.labels,
+      GhPull p => p.labels,
+      _ => const [],
+    };
+
+/// A column's cards after its label filter: the ones with any of [picked] (every one when none
+/// is), capped at the column's max, and its count ("shown / total" while a filter is on).
+({List<T> shown, String count}) filterColumn<T extends Object>(BoardColumn<T> col, List<String> picked) {
+  List<T> cap(List<T> xs) => col.max == null ? xs : xs.take(col.max!).toList();
+  final matching = picked.isEmpty ? col.items : col.items.where((it) => labelsOf(it).any((l) => picked.contains(l.name))).toList();
+  final shown = cap(matching);
+  return (shown: shown, count: picked.isEmpty ? '${shown.length}' : '${shown.length} / ${cap(col.items).length}');
+}
+
+/// Every label on the board's cards, by name (first colour seen), for the column filters.
+Map<String, String> boardLabels(Iterable<Object> items) {
+  final all = <String, String>{};
+  for (final it in items) {
+    for (final l in labelsOf(it)) {
+      all.putIfAbsent(l.name, () => l.color);
+    }
+  }
+  return all;
+}
+
+int _byNameCi(String a, String b) {
+  final c = a.toLowerCase().compareTo(b.toLowerCase());
+  return c != 0 ? c : a.compareTo(b);
+}
+
+/// The labels a column's picker offers, A to Z: every one on the board and any picked earlier that
+/// no card carries now; with how many of the column's cards carry each.
+List<({String name, int count})> pickerLabels<T extends Object>(BoardColumn<T> col, Map<String, String> all, List<String> picked) {
+  final names = {...all.keys, ...picked}.toList()..sort(_byNameCi);
+  return [
+    for (final name in names) (name: name, count: col.items.where((it) => labelsOf(it).any((l) => l.name == name)).length),
+  ];
+}
+
+/// Where a board's label filters are kept, per floor (or project) and board.
+String labelFiltersKey(String? floor, String? projectDir, String kind) => 'agent-office.board-labels.${floor ?? projectDir ?? ''}.$kind';
+
+/// The saved filters (column key → label names), ignoring anything garbled.
+Map<String, List<String>> parseLabelFilters(String? saved) {
+  final out = <String, List<String>>{};
+  try {
+    final j = jsonDecode(saved ?? 'null');
+    if (j is Map) {
+      for (final e in j.entries) {
+        final v = e.value;
+        if (e.key is String && v is List && v.isNotEmpty) out[e.key as String] = v.whereType<String>().toList();
+      }
+    }
+  } catch (_) {
+    // garbled
+  }
+  return out;
+}
+
+// ---- The label picker -------------------------------------------------------------------------------
+
+/// What saving the picker would do: the labels to put on and to take off.
+({List<String> add, List<String> remove}) labelChanges(Set<String> had, Set<String> on) =>
+    (add: on.where((n) => !had.contains(n)).toList(), remove: had.where((n) => !on.contains(n)).toList());
+
+/// The picker's footer: the changes (+a −b), or how many labels it has.
+String labelSummary(Set<String> had, Set<String> on) {
+  final c = labelChanges(had, on);
+  if (c.add.isEmpty && c.remove.isEmpty) return '${on.length} label${on.length == 1 ? '' : 's'} on it';
+  return [...c.add.map((l) => '+$l'), ...c.remove.map((l) => '−$l')].join('  ');
+}
+
+/// The picker's rows: the labels it has first, then the rest of the repo's, each A to Z. Worked out
+/// once, so a row never jumps away from the pointer.
+List<GhLabel> labelRows(List<GhLabel> has, List<GhLabel>? repo) {
+  final known = {for (final l in repo ?? const <GhLabel>[]) l.name: l};
+  final hadNames = has.map((l) => l.name).toSet();
+  int byName(GhLabel a, GhLabel b) => _byNameCi(a.name, b.name);
+  final mine = has.map((l) => known[l.name] ?? l).toList()..sort(byName);
+  final rest = (repo ?? const <GhLabel>[]).where((l) => !hadNames.contains(l.name)).toList()..sort(byName);
+  return [...mine, ...rest];
+}
+
+/// Whether a label row matches the picker's filter (its name or description).
+bool labelMatches(GhLabel l, String query) {
+  final q = query.trim().toLowerCase();
+  return q.isEmpty || '${l.name}\n${l.description ?? ''}'.toLowerCase().contains(q);
 }
 
 const checkIcon = {GhChecks.pass: '🟢', GhChecks.fail: '🔴', GhChecks.pending: '🟡', GhChecks.none: ''};
