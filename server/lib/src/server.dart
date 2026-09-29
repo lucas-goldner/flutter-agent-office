@@ -13,8 +13,10 @@ import 'accounts.dart';
 import 'agents.dart';
 import 'auth.dart';
 import 'building.dart';
+import 'cabinet.dart';
 import 'config.dart';
-import 'decor.dart' show ImageData, ImageError, ImageProxy;
+import 'decor.dart' show ImageData, ImageError, ImageProxy, ImageResult;
+import 'docs.dart' show DocFailed, DocFound;
 import 'floor.dart';
 import 'headless.dart' show ScreenFrame;
 import 'history.dart';
@@ -26,6 +28,7 @@ import 'services.dart';
 import 'sky.dart';
 import 'static.dart';
 import 'team.dart';
+import 'theme.dart';
 import 'upgrade.dart';
 import 'usage.dart';
 import 'webhook.dart';
@@ -87,9 +90,14 @@ class _Peer {
   bool muted = true;
   bool sharing = false;
   bool? smoking;
+  bool? golfing;
   String? seat;
+  CarriedIssue? carrying;
+  DrinkId? drink;
   final bool? account;
   String? floor;
+  String? doing;
+  bool? reading;
 
   PeerInfo get info => PeerInfo(
     id: id,
@@ -105,9 +113,14 @@ class _Peer {
     muted: muted,
     sharing: sharing,
     smoking: smoking,
+    golfing: golfing,
     seat: seat,
+    carrying: carrying,
+    drink: drink,
     account: account,
     floor: floor,
+    doing: doing,
+    reading: reading,
   );
 }
 
@@ -133,9 +146,24 @@ class _Client {
   int lastActAt = 0;
   int lastGongAt = 0;
 
+  /// When they last hit a golf ball off the balcony.
+  int lastGolfAt = 0;
+
+  /// When they last blew the DJ's air horn on the roof.
+  int lastHornAt = 0;
+
+  /// A little more lenient than the page's own, so emotes it let through aren't dropped for arriving bunched up.
+  final EmoteBucket emotes = EmoteBucket(emoteEvery * 0.8);
+
   /// Has the floor's whiteboard open.
   bool whiteboard = false;
   int lastWbPointerAt = 0;
+
+  /// At the arcade cabinet on their floor, playing [game] (see Arcade); [frame] is it as it looks now.
+  bool playing = false;
+  String? game;
+  CabinetFrame? frame;
+  int lastFrameAt = 0;
 
   bool get open => !ws.isClosed;
 }
@@ -149,13 +177,6 @@ const _maxPayload = 2 * 1024 * 1024;
 /// this is always 0: nobody is ever skipped as slow, and a slow client's socket buffers instead.
 /// Kept as the one place the Node server's `bufferedAmount` checks go through.
 int _buffered(_Client c) => 0;
-
-/// A path under the home folder as ~/…, for showing people.
-String _tildify(String path) {
-  final home = Platform.environment['HOME'] ?? '';
-  if (home.isEmpty) return path;
-  return path == home || path.startsWith('$home${p.separator}') ? '~${path.substring(home.length)}' : path;
-}
 
 String _clientIp(Request req, bool trustProxy) {
   if (trustProxy) {
@@ -218,6 +239,33 @@ Response _send(int status, Object? body, [Map<String, String> headers = const {}
   body: Body.fromString(_json(body), mimeType: MimeType.json),
 );
 
+/// A picture from a worker's checkout or the project (see changes.dart and docs.dart): never cached,
+/// and opened on its own (an SVG, say) it still can't run anything on the office's origin.
+Response _pictureResponse(ImageResult r) {
+  switch (r) {
+    case ImageError(:final status, :final error):
+      return _send(status, {'error': error});
+    case ImageData(:final type, :final body):
+      MimeType mime;
+      try {
+        mime = MimeType.parse(type);
+      } catch (_) {
+        mime = MimeType.octetStream;
+      }
+      return Response(
+        200,
+        headers: Headers.build((h) {
+          // The worker may change it again any moment.
+          h['cache-control'] = ['no-store'];
+          h['x-content-type-options'] = ['nosniff'];
+          h['content-security-policy'] = ["default-src 'none'; style-src 'unsafe-inline'; sandbox"];
+          h['cross-origin-resource-policy'] = ['same-origin'];
+        }),
+        body: Body.fromData(body, mimeType: mime),
+      );
+  }
+}
+
 Response _notFoundText() => Response(404, body: Body.fromString('Not found', mimeType: MimeType.plainText));
 
 /// A string field, cut to [max]; anything else is ''.
@@ -230,6 +278,25 @@ double _num(Object? v) => v is num && v.isFinite ? v.toDouble() : 0;
 bool _truthy(Object? v) => v != null && v != false && v != '' && !(v is num && (v == 0 || v.isNaN));
 
 bool _isSafeInteger(double n) => n == n.truncateToDouble() && n.abs() <= 9007199254740991;
+
+/// A spot someone stands on, facing `rotY`.
+typedef _Spot = ({double x, double y, double z, double rotY});
+
+/// Where someone going to another floor says they arrive (see `floor.go`): on the grounds, or nowhere (the elevator).
+_Spot? _arrivalSpot(Object? at) {
+  if (at is! Map) return null;
+  double clamp(Object? v, double lo, double hi) => _num(v).clamp(lo, hi).toDouble();
+  // Down on the street from a floor high up, the street is a long way down.
+  return (
+    x: clamp(at['x'], -60, 60),
+    y: clamp(at['y'], streetBelow(maxFloors - 1), 10),
+    z: clamp(at['z'], -60, 60),
+    rotY: _num(at['rotY']),
+  );
+}
+
+/// A GitHub issue number, else null.
+int? _issueNumber(Object? v) => v is num && v.isFinite && v == v.truncate() && v > 0 ? v.toInt() : null;
 
 final _colorRe = RegExp(r'^#[0-9a-fA-F]{6}$');
 bool _isColor(Object? v) => v is String && _colorRe.hasMatch(v);
@@ -279,8 +346,11 @@ class Office {
     this.publicDir,
     this.hookPort,
     this._floors,
-    this.resolvedAgent,
-  );
+    this.resolvedAgent, {
+    required String Function() projectsDir,
+    required String Function() signInLink,
+  }) : _projectsDir = projectsDir,
+       _signInLink = signInLink;
 
   final RelicServer _server;
   final Future<void> Function(bool keep) _shutdown;
@@ -288,6 +358,14 @@ class Office {
   final String publicDir;
   final int hookPort;
   final Map<String, Floor> _floors;
+  final String Function() _projectsDir;
+  final String Function() _signInLink;
+
+  /// A link (path and fragment) that signs one browser in, once; see Auth.linkKey.
+  String signInLink() => _signInLink();
+
+  /// Where new floors are cloned now (⚙️ Settings can move it).
+  String projectsDir() => _projectsDir();
 
   /// The configured agent's full path, or null when only the login shell can find it.
   final String? resolvedAgent;
@@ -348,6 +426,10 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
 
   // --- The building: a floor per project, each with its own workers, boards and queue -----------
   final building = Building(cfg.dataDir, cfg.projectsDir);
+  if (cfg.projects != null) {
+    final err = building.setProjectsDir(cfg.projects!, 'the command line');
+    if (err != null) stderr.writeln('agent-office: --projects: $err');
+  }
   final floors = <String, Floor>{};
   Floor? floorOf(_Client c) => c.peer.floor != null ? floors[c.peer.floor] : null;
 
@@ -373,8 +455,24 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     if (floor != null) toFloor(floor, ToastMsg(text, level ?? ToastLevel.info));
   }
 
+  // The arcade's high scores: one table for the whole building, on every floor's cabinet. The office
+  // follows every game and puts the scores up itself (see Arcade).
+  final highScores = HighScores(cfg.dataDir);
+  late final void Function(Floor? floor) cabinetChanged;
+  final arcade = Arcade(highScores, (first) {
+    for (final f in floors.values) {
+      cabinetChanged(f);
+    }
+    if (first != null) {
+      toastFloor(
+        floors[first.floor],
+        '🏆 ${first.score.name} set a new arcade high score: ${scoreText(first.score.score)}',
+      );
+    }
+  });
+
   List<FloorInfo> floorInfos() => [
-    for (final f in floors.values) f.info(),
+    for (final f in floors.values) building.isLocal(f.id) ? f.info(local: true) : f.info(),
     for (final d in building.pending())
       FloorInfo(
         id: d.id,
@@ -467,6 +565,9 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
 
   // Day, night and the weather outside the windows, the same for everyone.
   final sky = Sky(city: cfg.city, weather: cfg.weather, onChange: (state) => broadcast(SkyMsg(state)))..start();
+  // Halloween or Christmas all over the building, the same for everyone (⚙️ Settings). On 'auto' it
+  // goes by the calendar at the office, the sky's clock.
+  final themes = Themes(cfg.dataDir, () => sky.state.utcOffset, (state) => broadcast(ThemeMsg(state)))..start();
 
   // What the workers spend, all time and today, with the optional daily budget.
   final ledger = Ledger(
@@ -589,9 +690,35 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     if (floor != null) toFloor(floor, WbPeopleMsg(drawing(floor)));
   }
 
+  /// Who's playing the arcade cabinet on a floor.
+  _Client? cabinetPlayer(Floor floor) => clients.values.where((c) => c.playing && c.peer.floor == floor.id).firstOrNull;
+  CabinetState cabinetState(Floor? floor) {
+    final pl = floor != null ? cabinetPlayer(floor) : null;
+    return CabinetState(
+      player: pl != null ? CabinetPlayer(id: pl.id, name: pl.peer.name, game: pl.game ?? '') : null,
+      scores: highScores.top(),
+    );
+  }
+
+  cabinetChanged = (floor) {
+    if (floor != null) toFloor(floor, CabinetMsg(cabinetState(floor)));
+  };
+
+  /// `c` stepped away from the cabinet (or left the floor, or the office): their game waits, with its score so far on the table.
+  void stopPlaying(_Client c, [Floor? floor]) {
+    if (!c.playing) return;
+    floor ??= floorOf(c);
+    if (floor != null) arcade.leave(c.game, floor.id);
+    c
+      ..playing = false
+      ..game = null
+      ..frame = null;
+    cabinetChanged(floor);
+  }
+
   /// Everything on a floor, for whoever just arrived there.
-  FloorView floorView(Floor? floor) => FloorView(
-    floor: floor?.id,
+  FloorView floorView(Floor? floor, [String? id]) => FloorView(
+    floor: id ?? floor?.id,
     project: floor?.project,
     workers: floor?.workers.list() ?? const [],
     issues: floor?.github.issues ?? const GhState(items: [], fetchedAt: 0, loading: false),
@@ -603,11 +730,19 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     jukebox:
         floor?.jukebox.state() ??
         JukeboxState(on: false, track: jukeboxTunes.first.id, startedAt: _now().toDouble(), elapsed: 0),
+    ball: floor?.court.state() ?? const BallState(),
+    cabinet: () {
+      final s = cabinetState(floor);
+      return CabinetView(player: s.player, scores: s.scores, frame: floor != null ? cabinetPlayer(floor)?.frame : null);
+    }(),
     whiteboard: WhiteboardView(
       elements: floor?.whiteboard.scene() ?? const [],
       people: floor != null ? drawing(floor) : const [],
     ),
   );
+
+  /// The rooftop bar: nobody works up there, so it has none of a floor's things.
+  FloorView roofView() => floorView(null, roof);
   void screensOf(_Client c, Floor? floor) {
     for (final (:workerId, :frame)
         in floor?.workers.fullScreens() ?? const <({String workerId, ScreenFrame frame})>[]) {
@@ -817,6 +952,17 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
       stdout.writeln('  the office password was claimed — it will not be shown again');
       return _send(200, {'password': password}, signedIn(req));
     }
+    // A sign-in link the office printed in its terminal (/login#key=…), traded for a session once.
+    if (path == '/api/link' && method == Method.post) {
+      Response? answered;
+      final guess = await readGuess(req, (r) => answered = r);
+      if (guess == null) return answered!;
+      if (!accounts.sharedPassword || !auth.useLinkKey(_str(guess.body['key'], 128))) {
+        return _send(410, {'error': 'That sign-in link was already used. Sign in with the office password.'});
+      }
+      auth.recordSuccess(guess.ip);
+      return _send(200, {'ok': true}, signedIn(req));
+    }
     if (path == '/api/logout' && method == Method.post) {
       return _send(200, {'ok': true}, {'set-cookie': auth.clearCookie(req.headers)});
     }
@@ -892,17 +1038,49 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
       final error = floor.whiteboard.addFile(body);
       return error != null ? _send(400, {'error': error}) : _send(200, {'ok': true});
     }
+    if (path == '/api/changes/file') {
+      // A changed picture in the Changes window at a desk: before (old) or after (new) the worker's edits.
+      if (method != Method.get) return _send(405, {'error': 'Method not allowed'});
+      final workerId = _str(_query(url, 'worker'), 32);
+      final file = _str(_query(url, 'path'), 4096);
+      final side = _query(url, 'side');
+      if (workerId.isEmpty || file.isEmpty || (side != 'old' && side != 'new')) {
+        return _send(400, {'error': 'Bad request'});
+      }
+      if (floor == null) return _send(404, {'error': 'No such floor'});
+      if (floor.workers.get(workerId) == null) return _send(404, {'error': 'No such worker'});
+      return _pictureResponse(await floor.changes.file(workerId, file, old: side == 'old'));
+    }
+    if (path.startsWith('/api/docs') && method == Method.get) {
+      // The bookshelf: the project's Markdown files, one to read, and the pictures in it (see docs.dart).
+      if (floor == null) return _send(404, {'error': 'No such floor'});
+      if (path == '/api/docs') return _send(200, (await floor.docs.list()).toJson());
+      final file = _str(_query(url, 'path'), 4096);
+      if (file.isEmpty) return _send(400, {'error': 'Bad request'});
+      if (path == '/api/docs/file') {
+        return switch (await floor.docs.read(file)) {
+          DocFound(:final doc) => _send(200, doc.toJson()),
+          DocFailed(:final status, :final error) => _send(status, {'error': error}),
+        };
+      }
+      if (path == '/api/docs/picture') return _pictureResponse(await floor.docs.picture(file));
+      return _send(404, {'error': 'Not found'});
+    }
     if (path == '/api/search' && method == Method.get) {
       return _send(200, search(_query(url, 'q') ?? '', floor).toJson());
     }
     if (path.startsWith('/api/gh/') && method == Method.get) {
       // What the issue and PR windows show beyond the board cards (see github.dart).
       final raw = _query(url, 'number');
-      final n = raw == null ? null : num.tryParse(raw.trim().isEmpty ? '0' : raw.trim());
-      if (n == null || !_isSafeInteger(n.toDouble()) || n <= 0) return _send(400, {'error': 'Bad number'});
+      final parsed = raw == null ? null : num.tryParse(raw.trim().isEmpty ? '0' : raw.trim());
+      // The repo's labels (for the label picker) are the one thing not about a single issue or PR.
+      final bad = parsed == null || !_isSafeInteger(parsed.toDouble()) || parsed <= 0;
+      if (path != '/api/gh/labels' && bad) return _send(400, {'error': 'Bad number'});
+      final n = bad ? 0 : parsed;
       if (floor == null) return _send(404, {'error': 'No such floor'});
       final github = floor.github;
       try {
+        if (path == '/api/gh/labels') return _send(200, [for (final l in await github.repoLabels()) l.toJson()]);
         if (path == '/api/gh/pull') return _send(200, (await github.pullDetail(n.toInt())).toJson());
         if (path == '/api/gh/issue') return _send(200, (await github.issueDetail(n.toInt())).toJson());
         if (path == '/api/gh/pull/diff') {
@@ -962,6 +1140,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
   };
 
   void decorChanged(Floor floor) => toFloor(floor, DecorMsg(floor.decor.list()));
+  void ballChanged(Floor floor) => toFloor(floor, BallMsg(floor.court.state()));
   void jukeboxChanged(Floor floor) => toFloor(floor, JukeboxMsg(floor.jukebox.state()));
   Future<void> teamChanged() async => broadcast(TeamMsg(await team.state()));
 
@@ -976,34 +1155,108 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     }
   }
 
-  /// Rides `c` to another floor: everyone sees them leave and arrive, and they get the new floor's everything.
-  void goToFloor(_Client c, Floor floor) {
-    if (c.peer.floor == floor.id) return;
+  /// Off the floor (or the roof) `c` was on, to [at] on the next one, or into its elevator car.
+  ({Floor? was, bool wasDrawing, bool ballLeft}) leave(_Client c, [_Spot? at]) {
     final was = floorOf(c);
     if (was != null) {
       was.workers.detachAll(c.id);
       was.changes.unwatchAll(c.id);
     }
+    // The ball stays on its floor, back under the hoop. That floor hears so once they're off it (see
+    // arrived), or their own page would put it down before it knew they'd gone.
+    final ballLeft = was?.court.left(c.id) ?? false;
     c.attached.clear();
     c.stale.clear();
-    // The whiteboard downstairs stays downstairs.
+    // The whiteboard downstairs stays downstairs, and so does the arcade.
     final wasDrawing = c.whiteboard;
     c.whiteboard = false;
-    final spot = elevatorSpot();
+    stopPlaying(c, was);
+    final e = elevatorSpot();
+    final spot = at ?? (x: e.x, y: 0.0, z: e.z, rotY: 0.0);
     c.peer
-      ..floor = floor.id
       ..x = spot.x
-      ..y = 0
+      ..y = spot.y
       ..z = spot.z
-      ..rotY = 0
+      ..rotY = spot.rotY
       ..moving = false
-      ..seat = null;
+      ..seat = null
+      ..golfing = null
+      // An issue card belongs to the board it came off, which is on the floor they left; a drink stays at the bar.
+      ..carrying = null
+      ..drink = null;
+    return (was: was, wasDrawing: wasDrawing, ballLeft: ballLeft);
+  }
+
+  void arrived(_Client c, ({Floor? was, bool wasDrawing, bool ballLeft}) left) {
+    broadcast(PeerUpdateMsg(c.peer.info), except: c.id);
+    if (left.wasDrawing) drawingChanged(left.was);
+    final was = left.was;
+    if (left.ballLeft && was != null) ballChanged(was);
+  }
+
+  /// Takes `c` to another floor: everyone sees them leave and arrive, and they get the new floor's
+  /// everything. They arrive in the elevator, or [at] the spot they came by.
+  void goToFloor(_Client c, Floor floor, [_Spot? at]) {
+    if (c.peer.floor == floor.id) return;
+    final left = leave(c, at);
+    c.peer.floor = floor.id;
     sendTo(c, FloorEnterMsg(peers: [for (final o in clients.values) o.peer.info], view: floorView(floor)));
     screensOf(c, floor);
-    broadcast(PeerUpdateMsg(c.peer.info), except: c.id);
-    if (wasDrawing) drawingChanged(was);
+    arrived(c, left);
     floor.arrived();
     floor.workers.wakeAll();
+    floorsChanged();
+  }
+
+  /// Out to the lobby, where the elevator has nowhere to go: the building's last floor was taken off.
+  void toLobby(_Client c) {
+    final left = leave(c);
+    c.peer.floor = null;
+    sendTo(c, FloorEnterMsg(peers: [for (final o in clients.values) o.peer.info], view: floorView(null)));
+    arrived(c, left);
+  }
+
+  /// Takes [floor] off the building (already out of floors.json): everyone on it rides the elevator to
+  /// the next floor, or out to the lobby if it was the last (the roof goes with it), and its workers stop.
+  void closeFloor(Floor floor, String who) {
+    final name = floor.def.name;
+    final next = floors.values.where((f) => f != floor).firstOrNull;
+    // The list without it first, so nobody arrives somewhere (the lobby's panel) that still shows it.
+    final list = floorInfos().where((f) => f.id != floor.id).toList();
+    floorsSent = _json([for (final f in list) f.toJson()]);
+    broadcast(FloorsMsg(list));
+    for (final c in List.of(clients.values)) {
+      if (c.peer.floor == floor.id || (next == null && c.peer.floor == roof)) {
+        if (next != null) {
+          goToFloor(c, next);
+        } else {
+          toLobby(c);
+        }
+        sendTo(
+          c,
+          ToastMsg(
+            next != null
+                ? '🛗 $who took $name off the building, so you rode the elevator to ${next.def.name}'
+                : '🛗 $who took $name, the last floor, off the building',
+            ToastLevel.warn,
+          ),
+        );
+      } else {
+        sendTo(c, ToastMsg('🛗 $who took $name off the building', ToastLevel.info));
+      }
+    }
+    floors.remove(floor.id);
+    unawaited(floor.shutdown());
+    floorsChanged();
+  }
+
+  /// Up to the rooftop bar, by elevator.
+  void goToRoof(_Client c) {
+    if (c.peer.floor == roof) return;
+    final left = leave(c);
+    c.peer.floor = roof;
+    sendTo(c, FloorEnterMsg(peers: [for (final o in clients.values) o.peer.info], view: roofView()));
+    arrived(c, left);
     floorsChanged();
   }
 
@@ -1093,6 +1346,14 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
           ..moving = _truthy(msg['moving']);
         toNeighbors(c, PeerMoveMsg(id: c.id, x: pe.x, y: pe.y, z: pe.z, rotY: pe.rotY, moving: pe.moving), true);
       case 'act':
+        if (msg.containsKey('drink')) {
+          // A drink from the rooftop bar, which stays up there.
+          final drink = c.peer.floor == roof ? DrinkId.tryParse(msg['drink']) : null;
+          if (drink == c.peer.drink) break;
+          c.peer.drink = drink;
+          broadcast(PeerActMsg(c.id, drink: drink, drinkSet: true), except: c.id, droppable: true);
+          break;
+        }
         final smoke = msg['smoke'];
         if (smoke is bool) {
           if (smoke == (c.peer.smoking ?? false)) break;
@@ -1100,17 +1361,58 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
           broadcast(PeerActMsg(c.id, smoke: smoke), except: c.id, droppable: true);
           break;
         }
+        final golfing = msg['golf'];
+        if (golfing is bool) {
+          // The tee's on an office floor's balcony; there's none up on the roof.
+          final golf = golfing && c.peer.floor != roof;
+          if (golf == (c.peer.golfing ?? false)) break;
+          c.peer.golfing = golf ? true : null;
+          broadcast(PeerActMsg(c.id, golf: golf), except: c.id, droppable: true);
+          break;
+        }
         final now = _now();
         if (now - c.lastActAt < 100) break;
         c.lastActAt = now;
         toNeighbors(c, PeerActMsg(c.id), true);
+      case 'golf':
+        final now = _now();
+        final (yaw, loft, power) = (_num(msg['yaw']), _num(msg['loft']), _num(msg['power']));
+        if (c.peer.golfing != true ||
+            now - c.lastGolfAt < 800 ||
+            yaw.abs() > 2 ||
+            loft < 0 ||
+            loft > 1.6 ||
+            power < 0 ||
+            power > 1) {
+          break;
+        }
+        c.lastGolfAt = now;
+        toNeighbors(c, GolfMsg(id: c.id, yaw: yaw, loft: loft, power: power));
+      case 'emote':
+        final emote = Emote.tryParse(msg['emote']);
+        if (emote != null && c.emotes.take(_now())) toNeighbors(c, PeerEmoteMsg(c.id, emote), true);
       case 'sit':
         // Everyone sees them sit down (or get up), and anyone who comes in later finds them sitting.
+        // Only on a seat where they are: the roof's up on the roof, the office's on a floor.
         final key = _str(msg['seat'], 40);
-        final seat = seatAt(key) != null ? key : null;
+        final seat = seatHere(key, c.peer.floor == roof) != null ? key : null;
         if (seat == c.peer.seat) break;
         c.peer.seat = seat;
         broadcast(PeerUpdateMsg(c.peer.info), except: c.id);
+      case 'carry':
+        // Everyone on the floor sees the issue card in their hands, and whoever comes in later too.
+        final issue = _issueNumber(msg['issue']);
+        if (issue == c.peer.carrying?.issue) break;
+        c.peer.carrying = issue != null ? CarriedIssue(issue: issue, title: _str(msg['title'], 200)) : null;
+        broadcast(PeerUpdateMsg(c.peer.info), except: c.id);
+      case 'doing':
+        final what = _str(msg['what'], 60).trim();
+        final reading = msg['reading'] == true ? true : null;
+        if ((what.isEmpty ? null : what) == c.peer.doing && reading == c.peer.reading) break;
+        c.peer
+          ..doing = what.isEmpty ? null : what
+          ..reading = reading;
+        broadcast(PeerUpdateMsg(c.peer.info));
       case 'profile':
         final name = _str(msg['name'], 24).trim();
         if (name.isNotEmpty && c.accountId == null) c.peer.name = name;
@@ -1143,6 +1445,14 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         chat.add(line);
         broadcast(ChatMsg(line));
       case 'floor.go':
+        if (msg['floor'] == roof) {
+          if (floors.isNotEmpty) {
+            goToRoof(c);
+          } else {
+            warn(c, 'There is no building to go up on yet');
+          }
+          break;
+        }
         final floor = floors[_str(msg['floor'], 64)];
         if (floor == null) {
           warn(
@@ -1152,7 +1462,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
                 : 'No such floor',
           );
         } else {
-          goToFloor(c, floor);
+          goToFloor(c, floor, _arrivalSpot(msg['at']));
         }
       case 'floor.repos':
         unawaited(
@@ -1192,6 +1502,53 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
                 toastAll('🛗 New floor: ${def.name}, added by $who');
                 sendTo(c, FloorAddedMsg(repo, floor: floor.id));
               }),
+        );
+      case 'ball.take' || 'ball.throw':
+        final floor = floorOf(c);
+        if (floor == null) break;
+        final changed = t == 'ball.take'
+            ? floor.court.take(c.id)
+            : floor.court.throwBall(c.id, (
+                x: _num(msg['x']),
+                y: _num(msg['y']),
+                z: _num(msg['z']),
+                vx: _num(msg['vx']),
+                vy: _num(msg['vy']),
+                vz: _num(msg['vz']),
+              ));
+        // Whoever didn't get it (someone else caught it first) is told where it really is.
+        if (changed) {
+          ballChanged(floor);
+        } else {
+          sendTo(c, BallMsg(floor.court.state()));
+        }
+      case 'floor.remove':
+        // Everyone's workers on it stop: admins do it.
+        if (!meOf(c.accountId).admin) return warn(c, 'Only admins can take a floor off the building');
+        final id = _str(msg['floor'], 64);
+        final r = building.remove(id, who);
+        final def = r.floor;
+        if (def == null) return warn(c, r.error);
+        stdout.writeln('  $who took the ${def.name} floor off the building (${def.dir} stays where it is)');
+        final floor = floors[id];
+        if (floor != null) {
+          closeFloor(floor, who);
+        } else {
+          floorsChanged();
+        }
+      case 'floor.projectsDir':
+        // It's a folder on the office's machine that `gh` writes into: admins pick it.
+        final err = meOf(c.accountId).admin
+            ? building.setProjectsDir(_str(msg['dir'], 1024), who)
+            : 'Only admins can move the workspace folder';
+        warn(c, err);
+        if (err != null) break;
+        final state = building.projectsDirState();
+        broadcast(ProjectsDirMsg(state));
+        toastAll(
+          state.custom
+              ? '📁 $who moved the workspace folder to ${state.dir}'
+              : '📁 $who put the workspace folder back to ${state.dir}',
         );
       case 'dog.pet':
         floorOf(c)?.dog.pet(c.peer.info);
@@ -1361,6 +1718,13 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         if (floor == null || now - c.lastGongAt < 500) break;
         c.lastGongAt = now;
         toFloor(floor, GongMsg(GongWhy.hit, by: who));
+      case 'horn':
+        final now = _now();
+        if (c.peer.floor != roof || now - c.lastHornAt < 1500) break;
+        c.lastHornAt = now;
+        for (final o in List.of(clients.values)) {
+          if (o.peer.floor == roof) sendTo(o, HornMsg(who));
+        }
       case 'gh.close':
         final floor = here();
         final n = _num(msg['number']);
@@ -1390,6 +1754,30 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
                   '${dropped ? ' and took it off the queue' : ''}',
                 );
               }),
+        );
+      case 'gh.labels':
+        final floor = here();
+        final n = _num(msg['number']);
+        final kind = msg['kind'] == 'issue' || msg['kind'] == 'pull' ? GhKind.parse(msg['kind']) : null;
+        if (floor == null || !_isSafeInteger(n) || n <= 0 || kind == null) break;
+        final number = n.toInt();
+        List<String> names(Object? v) => {
+          for (final l in v is List ? v : const [])
+            if (_str(l, ghLabelMax + 1) case final s when s.isNotEmpty && s.length <= ghLabelMax) s,
+        }.take(100).toList();
+        final add = names(msg['add']);
+        final remove = names(msg['remove']).where((l) => !add.contains(l)).toList();
+        if (add.isEmpty && remove.isEmpty) {
+          sendTo(c, GhLabeledMsg(kind: kind, number: number, error: 'No labels to change'));
+          break;
+        }
+        unawaited(
+          floor.github.setLabels(kind, number, add, remove).then((r) {
+            sendTo(c, GhLabeledMsg(kind: kind, number: number, labels: r.labels, error: r.error));
+            if (r.labels == null) return;
+            final what = [for (final l in add) '+$l', for (final l in remove) '−$l'].join(' ');
+            toastFloor(floor, '🏷️ $who labeled ${kind == GhKind.pull ? 'PR' : 'issue'} #$number: $what');
+          }),
         );
       case 'queue.add':
         final floor = here();
@@ -1615,11 +2003,68 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         floor.jukebox.skip(who);
         jukeboxChanged(floor);
         toastFloor(floor, '⏭️ $who skipped to “${floor.jukebox.title()}”');
+      case 'cabinet.play':
+        final floor = here();
+        final wanted = msg['game'];
+        if (floor == null || (c.playing && wanted == c.game)) break;
+        final at = cabinetPlayer(floor);
+        if (at != null && at != c) {
+          warn(c, '${at.peer.name} is on the arcade — press E there to watch');
+          sendTo(c, CabinetMsg(cabinetState(floor)));
+          break;
+        }
+        // Already at it: that game's over, and this is the next one.
+        if (c.playing) arcade.leave(c.game, floor.id);
+        final game = arcade.start(
+          Player(
+            owner: c.accountId != null ? 'account:${c.accountId}' : 'name:$who',
+            name: who,
+            color: c.peer.color,
+            connection: c.id,
+          ),
+          wanted,
+        );
+        c.game = game;
+        if (game != wanted && !arcade.counts(game)) {
+          warn(c, "🕹️ That's a lot of new games in a row, so this one won't go on the high-score table");
+        }
+        c
+          ..playing = true
+          ..frame = null;
+        cabinetChanged(floor);
+      case 'cabinet.leave':
+        stopPlaying(c);
+      case 'cabinet.frame':
+        final floor = floorOf(c);
+        final frame = checkFrame(msg['frame']);
+        if (!c.playing || floor == null || frame == null) break;
+        // Every frame counts towards the score, even one that comes too soon after the last to pass on.
+        if (arcade.frame(c.game, frame, floor.id) == Verdict.voided) {
+          warn(c, "🕹️ The office couldn't follow this game, so its score won't go on the high-score table");
+        }
+        c.frame = frame;
+        final now = _now();
+        if (now - c.lastFrameAt < 40) break;
+        c.lastFrameAt = now;
+        toNeighbors(c, CabinetFrameMsg(frame), true);
       case 'jukebox.stop':
         final floor = here();
         if (floor == null || !floor.jukebox.stop(who)) break;
         jukeboxChanged(floor);
         toastFloor(floor, '🔇 $who turned the jukebox off');
+      case 'theme.set':
+        final pick = ThemePick.tryParse(msg['pick']);
+        if (pick == null || pick == themes.state().pick) break;
+        themes.set(pick, who);
+        final now = themes.state().active;
+        toastAll(switch (pick) {
+          ThemePick.halloween => '🎃 $who dressed the office up for Halloween',
+          ThemePick.christmas => '🎄 $who dressed the office up for Christmas',
+          ThemePick.off => '$who took the holiday decorations down',
+          ThemePick.auto =>
+            '📅 $who set the decorations to follow the calendar'
+                '${now != null ? " (it's ${now == HolidayTheme.halloween ? 'Halloween 🎃' : 'Christmas 🎄'} season)" : ''}',
+        });
       case 'ping':
         sendTo(c, PongMsg(at: _num(msg['at']), now: _now().toDouble()));
     }
@@ -1628,7 +2073,10 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
   void onConnection(RelicWebSocket ws, Uri url, Session session) {
     final id = _randomHex(5);
     // Back where they were before a reload or a restart, else the first floor. Everyone arrives by elevator.
-    final floor = arrivalFloor(_query(url, 'floor'));
+    final wanted = _query(url, 'floor');
+    // Up on the roof, as long as there's a building under it.
+    final onRoof = wanted == roof && floors.isNotEmpty;
+    final floor = onRoof ? null : arrivalFloor(wanted);
     final spot = elevatorSpot();
     final account = session.account;
     // An account's name is its own; on the shared password people pick one.
@@ -1658,7 +2106,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         x: spot.x,
         z: spot.z,
         account: account != null ? true : null,
-        floor: floor?.id,
+        floor: onRoof ? roof : floor?.id,
       ),
       accountId: account?.id,
       admin: me.admin,
@@ -1675,7 +2123,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         you: id,
         peers: [for (final c in clients.values) c.peer.info],
         floors: floorInfos(),
-        projectsDir: ProjectsDirState(dir: _tildify(cfg.projectsDir)), // custom, by, at: phase 2
+        projectsDir: building.projectsDirState(),
         ice: cfg.iceServers,
         chat: chat.recent(50),
         invites: team.available,
@@ -1686,7 +2134,8 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         me: me,
         notify: webhook.state(),
         sky: sky.state,
-        view: floorView(floor),
+        theme: themes.state(),
+        view: onRoof ? roofView() : floorView(floor),
       ),
     );
     screensOf(client, floor);
@@ -1706,9 +2155,11 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
       closed = true;
       clients.remove(id);
       if (client.whiteboard) drawingChanged(floorOf(client));
+      stopPlaying(client);
       for (final f in floors.values) {
         f.workers.detachAll(id);
         f.changes.unwatchAll(id);
+        if (f.court.left(id)) ballChanged(f);
       }
       broadcast(PeerLeaveMsg(id));
       if (account != null) accountsChanged();
@@ -1786,6 +2237,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     upgrader.stop();
     webhook.stop();
     sky.stop();
+    themes.stop();
     limits.close();
     for (final f in floors.values) {
       await f.shutdown(true);
@@ -1807,6 +2259,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
   shutdown = (keep) async {
     if (down) return;
     down = true;
+    arcade.flush();
     heartbeat.cancel();
     resync.cancel();
     floorsTimer?.cancel();
@@ -1814,6 +2267,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     services.stop();
     webhook.stop();
     sky.stop();
+    themes.stop();
     final closing = [for (final f in floors.values) f.shutdown(keep)];
     ledger.flush();
     limits.close();
@@ -1826,7 +2280,17 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     await hookServer.close(force: true);
   };
 
-  return Office._(server, shutdown, accounts, clientDir, hookPort, floors, resolveCommand(cfg.agentCmd));
+  return Office._(
+    server,
+    shutdown,
+    accounts,
+    clientDir,
+    hookPort,
+    floors,
+    resolveCommand(cfg.agentCmd),
+    projectsDir: () => building.projectsDir,
+    signInLink: () => '/login#key=${auth.linkKey()}',
+  );
 }
 
 String _message(Object err) => switch (err) {

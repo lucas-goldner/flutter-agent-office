@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs ON the EC2 instance (piped over ssh by deploy/aws.sh). Idempotent: safe to re-run.
-# Expects these to be exported by the caller: APP_REPO APP_REF PROJECT_REPO PROJECT_NAME
+# Expects these to be exported by the caller: APP_REPO APP_REF PROJECT_REPO (optional)
 # CLAIM_TOKEN PUBLIC_HOST GH_TOKEN CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY GIT_NAME GIT_EMAIL
 # INSTALL_SH_B64 (install.sh, base64: it installs the office's release, no Node.js needed).
 # APP_REF is a release tag (v0.1.68), or main for the newest release.
@@ -74,19 +74,41 @@ AGENT_OFFICE_REPO="$app_repo" AGENT_OFFICE_VERSION="$app_version" AGENT_OFFICE_I
 rm -f "$install_sh"
 echo "    $(sed -n 's/^ *"tag": *"\([^"]*\)".*/\1/p' "$HOME/.local/share/agent-office/current/install.json")"
 
-WORKDIR="$HOME/workspace/$PROJECT_NAME"
-mkdir -p "$HOME/workspace"
-if [[ ! -d "$WORKDIR" ]]; then
-  if [[ -n "$PROJECT_REPO" ]]; then
-    step "Cloning your project $PROJECT_REPO"
-    quiet git clone "$PROJECT_REPO" "$WORKDIR"
-  else
-    step "Creating an empty project at $WORKDIR"
-    mkdir -p "$WORKDIR"
-    git -C "$WORKDIR" init -q
-  fi
+# The office keeps its data (password, accounts, the list of floors) in ~/agent-office and clones
+# projects into ~/workspace/<owner>/<repo>. It starts with no project: its elevator lists every
+# repository the GitHub token can see, and cloning one makes it the first floor.
+OFFICE_HOME="$HOME/agent-office"
+WORKSPACE="$HOME/workspace"
+mkdir -p "$WORKSPACE"
+# Offices provisioned before that ran in one project's checkout, with their data in it: they carry
+# on there, so nobody loses their account. That project can be taken off in the elevator.
+LEGACY_DIR=""
+if [[ -f /etc/agent-office/dir ]]; then
+  legacy=$(cat /etc/agent-office/dir)
+  [[ -f "$legacy/.agent-office/config.json" ]] && LEGACY_DIR="$legacy"
 fi
-echo "$WORKDIR" | sudo tee /etc/agent-office/dir >/dev/null
+if [[ -n "$LEGACY_DIR" ]]; then
+  step "Keeping the office in $LEGACY_DIR (its accounts and floors are there)"
+  RUN_DIR="$LEGACY_DIR"
+  OFFICE_ARGS="$LEGACY_DIR "
+else
+  RUN_DIR="$HOME"
+  OFFICE_ARGS=""
+  setup_args=()
+  # Once: after that, the folder is the admins' to move in ⚙️ Settings.
+  [[ -f "$OFFICE_HOME/.agent-office/projects-folder.json" ]] || setup_args+=(--projects "$WORKSPACE")
+  [[ -n "${PROJECT_REPO:-}" ]] && setup_args+=(--project "$PROJECT_REPO")
+  if [[ ${#setup_args[@]} -gt 0 ]]; then
+    step "Setting up the office${PROJECT_REPO:+: cloning $PROJECT_REPO as a floor}"
+    # It won't touch a running office's floors (the service restarts below anyway).
+    sudo systemctl stop agent-office >/dev/null 2>&1 || true
+    AGENT_OFFICE_HOME="$OFFICE_HOME" "$OFFICE_BIN" setup "${setup_args[@]}" </dev/null ||
+      echo "    (carrying on: add projects from the office's elevator)"
+  fi
+  sudo rm -f /etc/agent-office/dir
+fi
+echo "$OFFICE_HOME" | sudo tee /etc/agent-office/home >/dev/null
+if [[ -n "$LEGACY_DIR" ]]; then echo "$LEGACY_DIR" | sudo tee /etc/agent-office/dir >/dev/null; fi
 
 step "Pre-accepting Claude Code onboarding and folder trust"
 # Claude Code remembers an approved API key by its last 20 characters.
@@ -96,14 +118,14 @@ claude_json="$HOME/.claude.json"
 claude_tmp=$(mktemp)
 # An unreadable or broken file starts over from {}, as Claude Code itself would.
 { jq -e 'type == "object"' "$claude_json" >/dev/null 2>&1 && cat "$claude_json" || echo '{}'; } |
-  jq --arg dir "$WORKDIR" --arg key "$api_key" '
+  jq --arg key "$api_key" --args '
     .hasCompletedOnboarding = true
-    | .projects[$dir] = ((.projects[$dir] // {}) + {hasTrustDialogAccepted: true})
+    | reduce $ARGS.positional[] as $dir (.; .projects[$dir] = ((.projects[$dir] // {}) + {hasTrustDialogAccepted: true}))
     | if $key == "" then .
       else .customApiKeyResponses //= {approved: [], rejected: []}
         | if (.customApiKeyResponses.approved // [] | index($key)) then .
           else .customApiKeyResponses.approved += [$key] end
-      end' >"$claude_tmp"
+      end' "$WORKSPACE" ${LEGACY_DIR:+"$LEGACY_DIR"} >"$claude_tmp"
 install -m 600 "$claude_tmp" "$claude_json"
 rm -f "$claude_tmp"
 
@@ -201,16 +223,17 @@ StartLimitIntervalSec=0
 Type=simple
 User=$USER
 Group=$USER
-WorkingDirectory=$WORKDIR
+WorkingDirectory=$RUN_DIR
 EnvironmentFile=/etc/agent-office/env
 Environment=HOME=$HOME
+Environment=AGENT_OFFICE_HOME=$OFFICE_HOME
 Environment=SHELL=/bin/bash
 Environment=PATH=$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # Lets the office upgrade itself from its UI: it downloads the newest release next to this one,
 # points current at it, then exits, and Restart=always brings it back up on that version.
 Environment=AGENT_OFFICE_SELF_UPDATE=1
 # Loopback only: the office is reached through an SSH tunnel, never from the internet.
-ExecStart=$OFFICE_BIN $WORKDIR --host 127.0.0.1 --port 4600
+ExecStart=$OFFICE_BIN ${OFFICE_ARGS}--host 127.0.0.1 --port 4600
 Restart=always
 RestartSec=3
 LimitNOFILE=65536

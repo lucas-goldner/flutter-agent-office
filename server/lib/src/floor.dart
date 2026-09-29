@@ -9,7 +9,9 @@ import 'agents.dart';
 import 'building.dart' show FloorDef;
 import 'changes.dart';
 import 'config.dart' show excludeFromGit;
+import 'court.dart';
 import 'decor.dart';
+import 'docs.dart';
 import 'dog.dart';
 import 'github.dart';
 import 'jukebox.dart';
@@ -214,6 +216,12 @@ class Floor {
   late final Decor decor;
   late final Jukebox jukebox;
 
+  /// The basketball by the hoop: who has it, or its last throw.
+  final Court court = Court();
+
+  /// The bookshelf: the project's Markdown files.
+  late final Docs docs = Docs(dir);
+
   /// The whiteboard everyone on the floor draws on together.
   late final Whiteboard whiteboard;
 
@@ -241,7 +249,8 @@ class Floor {
       workers.list().any((w) => isBusy(w.status)) ||
       queue.state().tasks.any((t) => t.status != TaskStatus.done);
 
-  FloorInfo info() {
+  /// [local]: the project the office was started in (see Building.isLocal).
+  FloorInfo info({bool? local}) {
     final ws = workers.list();
     return FloorInfo(
       id: id,
@@ -249,6 +258,7 @@ class Floor {
       repo: def.repo,
       dir: dir,
       palette: def.palette,
+      local: local,
       addedBy: def.addedBy,
       addedAt: def.addedAt,
       workers: ws.length,

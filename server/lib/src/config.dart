@@ -28,8 +28,10 @@ class Config {
     required this.dir,
     required this.dataDir,
     required this.projectsDir,
+    this.projects,
     this.project,
     required this.host,
+    this.open = true,
     required this.port,
     this.password,
     required this.passwordGenerated,
@@ -56,13 +58,19 @@ class Config {
   final String dir;
   final String dataDir;
 
-  /// Where new floors are cloned, as `<projectsDir>/<owner>/<repo>`.
+  /// Where new floors are cloned by default, as `<projectsDir>/<owner>/<repo>`.
   final String projectsDir;
+
+  /// --projects / AGENT_OFFICE_PROJECTS: picks the projects folder, as ⚙️ Settings in the office does.
+  final String? projects;
 
   /// Started as `agent-office <dir>`: that checkout is a floor of its own (it's also `dir`).
   final String? project;
   final String host;
   final int port;
+
+  /// Open the office in a browser, signed in, when it's started in a terminal (--no-open: don't).
+  final bool open;
 
   /// Plaintext password, only when known: from --password, or generated and not yet claimed.
   String? password;
@@ -110,6 +118,7 @@ const help = '''agent-office — a 3D office for your team and its Claude Code /
 Usage:
   agent-office [options]
   agent-office [dir] [options]
+  agent-office setup [--projects <dir>] [--project <owner/repo>]...
   agent-office prune [dir] [--dry-run] [--force]
   agent-office accounts [list|invite|revoke|role|password] ...
 
@@ -118,11 +127,18 @@ pick one of the repositories your `gh` login can see, and the office clones it
 into the projects folder as a new floor. Workers, terminals, boards and the
 task queue on a floor all belong to that floor's checkout.
 
+The first time it starts in a terminal with no floors, it walks you through
+where projects are cloned, signing the GitHub CLI in, and your first project.
+
 Started from anywhere, the office keeps its data in --home. Given a [dir] (or
 started in a project where an office already ran), it keeps its data in
-<dir>/.agent-office as it always has, and that project is one of the floors.
+<dir>/.agent-office as it always has, and that project starts out as a floor
+(an admin can take it off in the elevator like any other).
 
 Commands:
+  setup                   Pick the folder projects are cloned into and clone
+                          projects as floors: a walkthrough in a terminal, or
+                          just --projects / --project for scripts (see setup --help)
   prune                   Remove leftover worker worktrees (.agent-office/worktrees/)
                           and their office/* branches. Anything with uncommitted
                           changes or unpushed commits is kept unless --force is given.
@@ -133,9 +149,11 @@ Options:
       --home <dir>        Where the office keeps its data when no [dir] is given
                           (default ~/agent-office, env AGENT_OFFICE_HOME)
       --projects <dir>    Where new floors are cloned, as <dir>/<owner>/<repo>
-                          (default ~/agent-office, env AGENT_OFFICE_PROJECTS)
+                          (default ~/agent-office, env AGENT_OFFICE_PROJECTS).
+                          Also settable from ⚙️ Settings in the office
   -p, --port <n>          Port to listen on (default 4600, env PORT)
-  -H, --host <addr>       Address to bind (default 0.0.0.0)
+  -H, --host <addr>       Address to bind (default 127.0.0.1: only this machine).
+                          0.0.0.0 lets other computers on your network in
       --password <pw>     Office password (env AGENT_OFFICE_PASSWORD).
                           Without one, a random password is generated once and
                           saved in <dir>/.agent-office/config.json
@@ -144,6 +162,8 @@ Options:
                           is kept and the password is never displayed again.
       --reset-password    Forget the generated password (a new one is made on the
                           next start) and exit
+      --no-open           Don't open the office in your browser when it starts
+                          (env AGENT_OFFICE_NO_OPEN=1)
       --agent <cmd>       Default agent command (default "claude", env AGENT_OFFICE_AGENT)
       --agent-args <str>  Extra args for the configured agent, e.g. "--model opus"
                           Workers can also select Claude Code, OpenCode or Codex in the UI
@@ -170,6 +190,10 @@ Options:
                           fog (env AGENT_OFFICE_WEATHER)
       --version           Print the office's version
   -h, --help              Show this help
+
+Started in a terminal, the office opens in your browser already signed in, with
+a link that works once. Only this machine can reach it unless you pass --host.
+To run it on a server for your team, see deploy/provision.sh.
 
 Voice and screen sharing need a secure context: use https (a reverse proxy,
 --tls-cert/--tls-key or --self-signed) unless everyone is on localhost.
@@ -256,7 +280,10 @@ Config loadConfig(List<String> argv) {
   var projects = _env('AGENT_OFFICE_PROJECTS') != null ? _resolve(_env('AGENT_OFFICE_PROJECTS')!) : '';
   final envPort = _jsNumber(_env('PORT'));
   var port = envPort.isNaN || envPort == 0 ? 4600.0 : envPort;
-  var host = '0.0.0.0';
+  // Loopback unless asked: an office lets whoever signs in run commands on this machine.
+  var host = '127.0.0.1';
+  final noOpen = _env('AGENT_OFFICE_NO_OPEN');
+  var open = noOpen == null || noOpen == '0';
   var password = _env('AGENT_OFFICE_PASSWORD') ?? '';
   var agentCmd = _env('AGENT_OFFICE_AGENT') ?? 'claude';
   var agentArgs = splitArgs(_env('AGENT_OFFICE_AGENT_ARGS') ?? '');
@@ -290,6 +317,8 @@ Config loadConfig(List<String> argv) {
       case '-H':
       case '--host':
         host = _takeValue(argv, i++, a);
+      case '--no-open':
+        open = false;
       case '--password':
         password = _takeValue(argv, i++, a);
       case '--agent':
@@ -346,7 +375,7 @@ Config loadConfig(List<String> argv) {
   }
   final dir = project.isNotEmpty ? project : home;
   // New floors go next to the office's data when it has a home of its own, and never into a project.
-  final projectsDir = projects.isNotEmpty ? projects : (project.isNotEmpty ? p.join(homeDir(), 'agent-office') : home);
+  final projectsDir = project.isNotEmpty ? p.join(homeDir(), 'agent-office') : home;
   if (port.isNaN || port != port.truncateToDouble() || port <= 0 || port > 65535) {
     _fail('agent-office: invalid --port');
   }
@@ -426,8 +455,10 @@ Config loadConfig(List<String> argv) {
     dir: dir,
     dataDir: dataDir,
     projectsDir: projectsDir,
+    projects: projects.isEmpty ? null : projects,
     project: project.isEmpty ? null : project,
     host: host,
+    open: open,
     port: port.toInt(),
     password: password.isEmpty ? null : password,
     passwordGenerated: passwordGenerated,
