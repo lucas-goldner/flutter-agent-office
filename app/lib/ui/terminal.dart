@@ -216,8 +216,11 @@ class _TerminalWindowState extends State<_TerminalWindow> {
         setState(() => _typing[m.id] = DateTime.now().millisecondsSinceEpoch + kTypingShowsMs);
       case TermSnapshotMsg m when m.workerId == widget.workerId:
         // A fresh terminal is xterm.js's reset(): new buffers, modes and scrollback.
+        // The view lets go of the old controller when it rebuilds with the new one, so it's disposed
+        // only after that frame: disposing it here broke the view's update and the whole window.
+        final old = _ctl;
+        WidgetsBinding.instance.addPostFrameCallback((_) => old.dispose());
         setState(() {
-          _ctl.dispose();
           _ctl = x.TerminalController();
           _term = _makeTerminal()..resize(m.cols, m.rows);
           _term.write(m.data);
