@@ -11,6 +11,9 @@ import 'agents.dart';
 /// What the queue needs from the worker manager. Narrow on purpose, so a smoke test can fake it.
 abstract interface class QueueWorkers {
   AgentProvider get defaultProvider;
+
+  /// What a task starts on when whoever queued it didn't pick (⚙️ Settings); the default provider without it.
+  AgentChoice? get officeDefault;
   List<WorkerInfo> list();
   bool deskOccupied(String deskId);
 
@@ -23,6 +26,7 @@ abstract interface class QueueWorkers {
     WorkerKind kind,
     AgentProvider provider, [
     String? model,
+    AgentEffort? effort,
   ]);
 
   /// Resolves with a line about what became of the worker's worktree.
@@ -37,6 +41,8 @@ class QueueEvents {
     required this.refreshGitHub,
     required this.hiringPaused,
     required this.emptied,
+    this.room,
+    this.worktreeNote,
   });
 
   final void Function(QueueState state) update;
@@ -53,25 +59,20 @@ class QueueEvents {
 
   /// The last task on the queue just finished, done: nothing is left queued or running.
   final void Function() emptied;
+
+  /// How many more workers the office has room for under its worker limit (infinity without one).
+  final num Function()? room;
+
+  /// What's added after a task that runs in its own worktree ('queue.worktree' in prompts); empty for nothing.
+  final String Function()? worktreeNote;
 }
 
 const int defaultMaxWorkers = 3;
 const int _maxTasks = 100;
 const Duration _pumpEvery = Duration(milliseconds: 10000);
 
-/// A worker in one of these states holds a slot under the worker limit.
-const Set<WorkerStatus> _busy = {
-  WorkerStatus.starting,
-  WorkerStatus.idle,
-  WorkerStatus.working,
-  WorkerStatus.needsInput,
-};
-
 /// A worker in one of these states is finished with its task (and can make room for the next one).
 const Set<WorkerStatus> _finished = {WorkerStatus.done, WorkerStatus.exited, WorkerStatus.offline};
-
-const String _worktreeNote =
-    "\n\nYou're in your own git worktree, on a fresh branch made for this task. Commit there, push it, and open the pull request from it.";
 
 final Random _random = Random.secure();
 
@@ -86,6 +87,7 @@ class _Task {
     required this.id,
     this.provider,
     this.model,
+    this.effort,
     this.issue,
     required this.title,
     required this.prompt,
@@ -105,6 +107,7 @@ class _Task {
   final String id;
   final AgentProvider? provider;
   final String? model;
+  final AgentEffort? effort;
   final int? issue;
   final String title;
   final String prompt;
@@ -124,6 +127,7 @@ class _Task {
     id: id,
     provider: provider,
     model: model,
+    effort: effort,
     issue: issue,
     title: title,
     prompt: prompt,
@@ -142,7 +146,7 @@ class _Task {
 }
 
 /// The 📋 task queue. Tasks (GitHub issues or free text) wait in order; whenever a desk is free and
-/// fewer than `maxWorkers` workers are busy, the next one is seated as a worktree worker. A running
+/// fewer than `maxWorkers` of them are running, the next one is seated as a worktree worker. A running
 /// task finishes when its worker ends its turn, stops, or is sent home. Finished workers stay at
 /// their desks to be looked at, until the queue needs the desk for the next task.
 class TaskQueue {
@@ -176,13 +180,29 @@ class TaskQueue {
 
   int get limit => _maxWorkers;
 
-  String? add(String prompt, String by, [String? title, int? issue, AgentProvider? provider, String? model]) {
-    provider ??= _workers.defaultProvider;
+  /// Queues a task. With no [provider], it runs on the office's default worker, model and effort included.
+  String? add(
+    String prompt,
+    String by, [
+    String? title,
+    int? issue,
+    AgentProvider? provider,
+    String? model,
+    AgentEffort? effort,
+  ]) {
+    if (provider == null) {
+      final d = _workers.officeDefault ?? AgentChoice(provider: _workers.defaultProvider);
+      provider = d.provider;
+      model = d.model;
+      effort = d.effort;
+    }
     if (provider == AgentProvider.custom && _workers.defaultProvider != AgentProvider.custom) {
       return 'Unknown agent provider';
     }
     final modelError = validateWorkerModel(WorkerKind.agent, provider, model);
     if (modelError != null) return modelError;
+    final effortError = validateWorkerEffort(WorkerKind.agent, provider, effort);
+    if (effortError != null) return effortError;
     final clean = prompt.replaceAll(RegExp(r'\r\n?'), '\n').trim();
     if (clean.isEmpty) return 'Empty task';
     if (issue != null && _tasks.any((t) => t.issue == issue && t.status != TaskStatus.done)) {
@@ -196,7 +216,8 @@ class TaskQueue {
     final task = _Task(
       id: _randomHex(6),
       provider: provider,
-      model: provider == AgentProvider.opencode ? model : null,
+      model: provider == AgentProvider.opencode || provider == AgentProvider.claude ? model : null,
+      effort: provider == AgentProvider.claude ? effort : null,
       issue: issue,
       title: heading.length > 120 ? heading.substring(0, 120) : heading,
       prompt: clean,
@@ -260,6 +281,7 @@ class TaskQueue {
         id: t.id,
         provider: t.provider,
         model: t.model,
+        effort: t.effort,
         issue: t.issue,
         title: t.title,
         prompt: t.prompt,
@@ -405,7 +427,10 @@ class TaskQueue {
     return outcome == TaskOutcome.done;
   }
 
-  int _busyCount() => _workers.list().where((w) => w.kind == WorkerKind.agent && _busy.contains(w.status)).length;
+  /// The queue's own tasks at work: the slots under its limit. Workers hired by hand, board agents and
+  /// meetings don't hold one, and nor does a worker left at its prompt after a restart; the office's
+  /// worker limit ([QueueEvents.room]) is what caps everyone together.
+  int _busyCount() => _tasks.where((t) => t.status == TaskStatus.running).length;
 
   /// A free desk, else a free bean bag.
   String? _freeDesk() => nextFreeSeat(_workers.deskOccupied)?.id;
@@ -448,16 +473,22 @@ class TaskQueue {
       // A spent budget holds the queue instead of failing every task; the pump seats them once hiring resumes.
       final paused = _events.hiringPaused();
       if (paused != null && paused.isNotEmpty) break;
-      final desk = _freeDesk() ?? _recycleDesk();
+      // So does an office at its worker limit (--max-workers), unless one of the queue's own finished
+      // workers going home makes room. Over the limit (it was just lowered), it waits for people to send some home.
+      final room = _events.room?.call() ?? double.infinity;
+      if (room < 0) break;
+      final desk = (room > 0 ? _freeDesk() : null) ?? _recycleDesk();
       if (desk == null) break;
+      final note = _useWorktree ? (_events.worktreeNote?.call() ?? prompts['queue.worktree']!.text) : '';
       final r = _workers.spawn(
         desk,
         '${t.addedBy} (queue)',
-        t.prompt + (_useWorktree ? _worktreeNote : ''),
+        note.isNotEmpty ? '${t.prompt}\n\n$note' : t.prompt,
         _useWorktree,
         WorkerKind.agent,
         t.provider ?? _workers.defaultProvider,
         t.model,
+        t.effort,
       );
       changed = true;
       final worker = r.worker;
@@ -537,7 +568,12 @@ class TaskQueue {
         final t = _Task(
           id: id,
           provider: provider,
-          model: provider == AgentProvider.opencode && isValidOpenCodeModel(s['model']) ? s['model'] as String : null,
+          model:
+              (provider == AgentProvider.opencode && isValidOpenCodeModel(s['model'])) ||
+                  (provider == AgentProvider.claude && isClaudeModel(s['model']))
+              ? s['model'] as String
+              : null,
+          effort: provider == AgentProvider.claude ? AgentEffort.tryParse(s['effort']) : null,
           issue: s['issue'] is num ? (s['issue'] as num).toInt() : null,
           title: title,
           prompt: prompt,

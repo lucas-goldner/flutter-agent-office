@@ -29,8 +29,28 @@ bool isValidOpenCodeModel(Object? value) {
 /// [kind] is 'agent' or 'shell'; [model] null means none was requested.
 String? validateWorkerModel(WorkerKind kind, AgentProvider? provider, Object? model) {
   if (model == null) return null;
-  if (kind == WorkerKind.shell) return 'Shell workers do not have an OpenCode model';
-  if (provider != AgentProvider.opencode) return 'Models can only be selected for OpenCode workers';
+  if (kind == WorkerKind.shell) return 'Shell workers do not have an agent model';
+  if (provider == AgentProvider.claude) {
+    return isClaudeModel(model) ? null : 'Invalid Claude model (expected fable, opus, sonnet or haiku)';
+  }
+  if (provider != AgentProvider.opencode) return 'Models can only be selected for Claude Code or OpenCode workers';
   if (!isValidOpenCodeModel(model)) return 'Invalid OpenCode model (expected provider/model without whitespace)';
   return null;
 }
+
+/// Claude Code's own `--effort` flag; no other provider this office launches supports one yet.
+/// [effort] is what was asked for (an [AgentEffort], or its wire string), null for none.
+String? validateWorkerEffort(WorkerKind kind, AgentProvider? provider, Object? effort) {
+  if (effort == null) return null;
+  if (kind == WorkerKind.shell) return 'Shell workers do not have a reasoning effort';
+  if (provider != AgentProvider.claude) return 'Reasoning effort can only be selected for Claude Code workers';
+  return effort is AgentEffort || isAgentEffort(effort)
+      ? null
+      : 'Invalid effort (expected low, medium, high, xhigh or max)';
+}
+
+/// The providers an office started with [configured] can hire: the three it knows, and a custom
+/// --agent only when that's what it was started with.
+List<AgentProvider> agentProviders(AgentProvider configured) => configured == AgentProvider.custom
+    ? const [AgentProvider.claude, AgentProvider.opencode, AgentProvider.codex, AgentProvider.custom]
+    : const [AgentProvider.claude, AgentProvider.opencode, AgentProvider.codex];

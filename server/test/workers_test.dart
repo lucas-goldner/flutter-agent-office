@@ -5,6 +5,7 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:agent_office_server/src/prompts.dart';
 import 'package:agent_office_server/src/usage.dart';
 import 'package:agent_office_server/src/workers.dart';
 import 'package:office_shared/shared.dart';
@@ -27,6 +28,7 @@ class Invocation {
   String? get workerId => env['workerId'];
   String? get hookToken => env['hookToken'];
   String? get opencodeConfig => env['opencodeConfig'];
+  String? get path => env['path'];
 }
 
 class Fixture {
@@ -103,6 +105,7 @@ envjson() {
   [ -n "${AGENT_OFFICE_HOOK_TOKEN+x}" ] && out+=",\"hookToken\":\"$(esc "$AGENT_OFFICE_HOOK_TOKEN")\""
   [ -n "${AGENT_OFFICE_HOOK_URL+x}" ] && out+=",\"hookUrl\":\"$(esc "$AGENT_OFFICE_HOOK_URL")\""
   [ -n "${OPENCODE_CONFIG_CONTENT+x}" ] && out+=",\"opencodeConfig\":\"$(esc "$OPENCODE_CONFIG_CONTENT")\""
+  [ -n "${PATH+x}" ] && out+=",\"path\":\"$(esc "$PATH")\""
   printf '{%s}' "${out#,}"
 }
 record() {
@@ -172,7 +175,18 @@ WorkerManager manager(
   Map<String, String> env, {
   List<String> args = const ['--from-test'],
   Ledger? book,
-}) => WorkerManager(f.root, f.data, cmd, args, _hook, events(updates), book ?? ledger(f.data), env: env);
+  PromptSource? prompts,
+}) => WorkerManager(
+  f.root,
+  f.data,
+  cmd,
+  args,
+  _hook,
+  events(updates),
+  book ?? ledger(f.data),
+  env: env,
+  prompts: prompts,
+);
 
 Future<T> waitFor<T>(T Function() read, bool Function(T value) predicate, {int timeout = 10000}) async {
   final end = DateTime.now().add(Duration(milliseconds: timeout));
@@ -450,7 +464,7 @@ void main() {
     },
   );
 
-  test('workers reject models for non-OpenCode providers and malformed model ids', () async {
+  test('workers reject models for non-OpenCode/Claude providers and malformed model ids', () async {
     final f = Fixture();
     addTearDown(f.close);
     final workers = manager(f, f.claude, [], {...Platform.environment, 'FAKE_AGENT_LOG': f.log});
@@ -459,7 +473,7 @@ void main() {
         workers.spawn(desk, 'test', 'bad', false, kind, provider, model).error;
     expect(
       error('desk-1', WorkerKind.agent, AgentProvider.claude, 'openai/gpt-5'),
-      matches(RegExp('model|OpenCode', caseSensitive: false)),
+      matches(RegExp('model', caseSensitive: false)),
     );
     expect(
       error('desk-2', WorkerKind.agent, AgentProvider.opencode, 'gpt-5'),
@@ -722,4 +736,529 @@ void main() {
     restored.handleCodexHook(worker.id, next.hookToken!, 'SessionStart', {'session_id': 'new-root', 'source': 'clear'});
     expect(restored.get(worker.id)?.usage, isNull);
   });
+
+  // --- #79 #88: a Claude model and effort per worker -------------------------------------------
+
+  test('workers reject reasoning effort for non-Claude providers', () async {
+    final f = Fixture();
+    addTearDown(f.close);
+    final workers = manager(f, f.claude, [], {...Platform.environment, 'FAKE_AGENT_LOG': f.log});
+    addTearDown(workers.shutdown);
+    expect(
+      workers
+          .spawn('desk-2', 'test', 'bad', false, WorkerKind.agent, AgentProvider.opencode, null, AgentEffort.high)
+          .error,
+      matches(RegExp('effort|Claude', caseSensitive: false)),
+    );
+    expect(
+      workers.spawn('desk-3', 'test', 'bad', false, WorkerKind.shell, null, null, AgentEffort.high).error,
+      matches(RegExp('shell|effort', caseSensitive: false)),
+    );
+  });
+
+  test('an explicit Claude model/effort overrides --agent-args and persists across resume', () async {
+    final f = Fixture();
+    addTearDown(f.close);
+    final env = isolatedEnv(f, {'FAKE_AGENT_EXIT_MS': '180', 'FAKE_AGENT_LOG': f.log});
+    final workers = manager(f, f.claude, [], env, args: ['--model', 'opus']);
+    addTearDown(workers.shutdown);
+    final worker = spawned(
+      workers.spawn(
+        'desk-1',
+        'test',
+        'haiku task',
+        false,
+        WorkerKind.agent,
+        AgentProvider.claude,
+        'haiku',
+        AgentEffort.high,
+      ),
+    );
+    expect(workers.get(worker.id)?.model, 'haiku');
+    expect(workers.get(worker.id)?.effort, AgentEffort.high);
+    final first = (await waitFor(f.read, (records) => records.any(_claudeLaunch))).firstWhere(_claudeLaunch);
+    // The per-worker choice is appended after --agent-args, so it wins even though "opus" also appears.
+    expect(first.args.sublist(first.args.indexOf('--model')), [
+      '--model',
+      'opus',
+      '--model',
+      'haiku',
+      '--effort',
+      'high',
+      '--',
+      'haiku task',
+    ]);
+    expect(workers.handleHook(worker.id, first.hookToken!, 'SessionStart', {'session_id': 'claude-model-1'}), isTrue);
+    await waitFor(() => workers.get(worker.id)?.status, (s) => s == WorkerStatus.exited);
+    expect(workers.resume(worker.id), isNull);
+    final second = (await waitFor(f.read, (r) => r.where(_claudeLaunch).length >= 2)).where(_claudeLaunch).elementAt(1);
+    expect(second.args, containsAll(['--model', 'haiku', '--effort', 'high', '--resume']));
+
+    await workers.shutdown();
+    final restored = manager(f, f.claude, [], env, args: ['--model', 'opus']);
+    addTearDown(restored.shutdown);
+    await restored.start();
+    expect(restored.get(worker.id)?.model, 'haiku');
+    expect(restored.get(worker.id)?.effort, AgentEffort.high);
+  });
+
+  test('a worker hired on Fable launches with --model fable and keeps it across a restart', () async {
+    final f = Fixture();
+    addTearDown(f.close);
+    final env = isolatedEnv(f, {'FAKE_AGENT_LOG': f.log});
+    final workers = manager(f, f.claude, [], env, args: ['--model', 'opus']);
+    addTearDown(workers.shutdown);
+    final worker = spawned(
+      workers.spawn('desk-1', 'test', 'fable task', false, WorkerKind.agent, AgentProvider.claude, 'fable'),
+    );
+    final launch = (await waitFor(f.read, (r) => r.any(_claudeLaunch))).firstWhere(_claudeLaunch);
+    expect(launch.args.sublist(launch.args.indexOf('--model')), [
+      '--model',
+      'opus',
+      '--model',
+      'fable',
+      '--',
+      'fable task',
+    ]);
+    await workers.shutdown();
+    final restored = manager(f, f.claude, [], env, args: ['--model', 'opus']);
+    addTearDown(restored.shutdown);
+    await restored.start();
+    expect(restored.get(worker.id)?.model, 'fable');
+  });
+
+  // --- #76 #86 #137: board agents ----------------------------------------------------------------
+
+  test(
+    'a board agent is hired with its brief on the first prompt, then prompted, woken and asked to prove who it is',
+    () async {
+      final f = Fixture();
+      addTearDown(f.close);
+      final env = isolatedEnv(f, {'FAKE_AGENT_EXIT_MS': '600', 'FAKE_AGENT_LOG': f.log});
+      final workers = manager(f, f.claude, [], env);
+      addTearDown(workers.shutdown);
+      // Each start of the agent, not what it reads from its terminal afterwards.
+      List<Invocation> launches() => f.read().where((r) => _claudeLaunch(r) && r.stdin == null).toList();
+
+      expect(
+        workers.station('desk-1', 'test', 'file an issue').error,
+        matches(RegExp('no agent', caseSensitive: false)),
+      );
+      expect(workers.station('station-issues', 'test', '   ').error, matches(RegExp('empty', caseSensitive: false)));
+      expect(
+        workers.spawn('station-issues', 'test', null, false, WorkerKind.shell).error,
+        matches(RegExp('shell', caseSensitive: false)),
+      );
+
+      // Nobody there yet: it's hired, told what it's for, with the request after that.
+      final hired = workers.station('station-issues', 'Ada', 'File an issue about the dog');
+      expect(hired.error, isNull);
+      expect(hired.hired, isTrue);
+      expect(hired.info!.name, 'Issues agent');
+      expect(hired.info!.deskId, 'station-issues');
+      expect(hired.info!.activity, 'File an issue about the dog');
+      final first = (await waitFor(launches, (l) => l.length == 1)).first;
+      final initial = first.args.last;
+      expect(initial, contains('Issues agent'));
+      expect(initial, contains('agent-office queue add'));
+      // Only the queue agent loses its file-editing tools.
+      expect(first.args, isNot(contains('--disallowedTools')));
+      expect(initial, endsWith('File an issue about the dog'));
+      final id = hired.info!.id;
+
+      // The same agent takes the next request in its session.
+      final again = workers.station('station-issues', 'Grace', 'Label it as a bug');
+      expect([again.hired, again.info?.id], [false, id]);
+      await waitFor(f.read, (records) => records.any((r) => r.stdin?.contains('Label it as a bug') ?? false));
+
+      // Waiting on an answer, a prompt would answer the question, so it's refused.
+      expect(workers.handleHook(id, first.hookToken!, 'SessionStart', {'session_id': 'issues-session'}), isTrue);
+      expect(
+        workers.handleHook(id, first.hookToken!, 'PermissionRequest', {
+          'tool_name': 'Bash',
+          'tool_input': {'command': 'gh issue create'},
+        }),
+        isTrue,
+      );
+      expect(workers.get(id)?.status, WorkerStatus.needsInput);
+      expect(
+        workers.station('station-issues', 'Ada', 'hello?').error,
+        matches(RegExp('waiting on an answer', caseSensitive: false)),
+      );
+
+      // Its own token proves who it is; anyone else's doesn't.
+      expect(workers.authenticate(id, first.hookToken!)?.id, id);
+      expect(workers.authenticate(id, 'not-its-token'), isNull);
+      expect(workers.authenticate(id, ''), isNull);
+
+      // Asleep, a request wakes it up carrying on its session, without the brief again.
+      await waitFor(() => workers.get(id)?.status, (s) => s == WorkerStatus.exited);
+      expect(workers.authenticate(id, first.hookToken!), isNull);
+      final woken = workers.station('station-issues', 'Ada', 'Close the duplicates');
+      expect([woken.hired, woken.info?.id], [false, id]);
+      final second = (await waitFor(launches, (l) => l.length == 2))[1];
+      expect(second.args, containsAll(['--resume', 'issues-session']));
+      expect(second.args.last, 'Close the duplicates');
+    },
+  );
+
+  test(
+    'a worker nobody picked a model for starts on the office default, and a board agent is told its rewritten brief',
+    () async {
+      final f = Fixture();
+      addTearDown(f.close);
+      final env = isolatedEnv(f, {'FAKE_AGENT_LOG': f.log});
+      final workers = manager(
+        f,
+        f.claude,
+        [],
+        env,
+        prompts: _Prompts(
+          (id) => id == 'station.issues' ? 'You triage issues. The request:' : prompts[id]!.text,
+          const AgentChoice(provider: AgentProvider.claude, model: 'sonnet', effort: AgentEffort.low),
+        ),
+      );
+      addTearDown(workers.shutdown);
+      List<Invocation> launches(String id) =>
+          f.read().where((r) => _claudeLaunch(r) && r.stdin == null && r.workerId == id).toList();
+      String? flag(List<String> args, String name) => args.contains(name) ? args[args.indexOf(name) + 1] : null;
+
+      final hired = workers.station('station-issues', 'Ada', 'File one about the dog');
+      expect(hired.error, isNull);
+      expect(
+        [hired.info!.provider, hired.info!.model, hired.info!.effort],
+        [AgentProvider.claude, 'sonnet', AgentEffort.low],
+      );
+      final first = (await waitFor(() => launches(hired.info!.id), (l) => l.length == 1)).first;
+      expect(first.args.last, 'You triage issues. The request:\n\nFile one about the dog');
+      expect([flag(first.args, '--model'), flag(first.args, '--effort')], ['sonnet', 'low']);
+
+      // Picked at the desk, the pick wins, down to "the provider's own model".
+      final desk = spawned(workers.spawn('desk-1', 'Ada', 'Fix it', false, WorkerKind.agent, AgentProvider.claude));
+      expect([desk.provider, desk.model, desk.effort], [AgentProvider.claude, null, null]);
+      final own = (await waitFor(() => launches(desk.id), (l) => l.length == 1)).first;
+      expect(own.args, isNot(contains('--model')));
+    },
+  );
+
+  test(
+    'the queue agent is launched without file-editing tools, and board agents get agent-office on their PATH',
+    () async {
+      final f = Fixture();
+      addTearDown(f.close);
+      final env = isolatedEnv(f, {'FAKE_AGENT_EXIT_MS': '600', 'FAKE_AGENT_LOG': f.log});
+      final workers = manager(f, f.claude, [], env);
+      addTearDown(workers.shutdown);
+      List<Invocation> launches(String id) =>
+          f.read().where((r) => _claudeLaunch(r) && r.stdin == null && r.workerId == id).toList();
+      final bin = p.join(f.data, 'bin');
+      bool onPath(Invocation r) => (r.path ?? '').split(':').first == bin;
+      List<String>? denied(List<String> args) {
+        final i = args.indexOf('--disallowedTools');
+        return i < 0 ? null : args.sublist(i + 1, i + 4);
+      }
+
+      // The command is there, and runs the office's own executable.
+      final command = p.join(bin, 'agent-office');
+      expect(File(command).statSync().mode & 0x40, isNonZero);
+      final help = await Process.run(command, ['queue', '--help']);
+      expect('${help.stdout}', contains('agent-office queue add --title'));
+
+      final hired = workers.station('station-queue', 'Ada', 'Fix the typo in the README');
+      expect(hired.error, isNull);
+      final id = hired.info!.id;
+      final first = (await waitFor(() => launches(id), (l) => l.length == 1)).first;
+      expect(denied(first.args), ['Edit', 'Write', 'NotebookEdit']);
+      expect(
+        first.args.indexOf('--disallowedTools'),
+        lessThan(first.args.indexOf('--')),
+        reason: 'the tools come before the prompt',
+      );
+      expect(first.args.last, endsWith('Fix the typo in the README'));
+      expect(onPath(first), isTrue, reason: 'agent-office is first on its PATH');
+
+      // Woken up carrying on its session, it's still without them.
+      expect(workers.handleHook(id, first.hookToken!, 'SessionStart', {'session_id': 'queue-session'}), isTrue);
+      await waitFor(() => workers.get(id)?.status, (s) => s == WorkerStatus.exited);
+      workers.station('station-queue', 'Grace', 'Also bump the version');
+      final second = (await waitFor(() => launches(id), (l) => l.length == 2))[1];
+      expect(second.args, containsAll(['--resume', 'queue-session']));
+      expect(denied(second.args), ['Edit', 'Write', 'NotebookEdit']);
+      expect(second.args.last, 'Also bump the version');
+      expect(onPath(second), isTrue);
+
+      // The other board agents keep their tools but get the command; a desk worker gets neither.
+      final pulls = workers.station('station-pulls', 'Ada', 'Sum up the open PRs');
+      final desk = spawned(workers.spawn('desk-2', 'Ada', 'Fix login'));
+      final pullsLaunch = (await waitFor(() => launches(pulls.info!.id), (l) => l.length == 1)).first;
+      final deskLaunch = (await waitFor(() => launches(desk.id), (l) => l.length == 1)).first;
+      expect(denied(pullsLaunch.args), isNull);
+      expect(onPath(pullsLaunch), isTrue);
+      expect(denied(deskLaunch.args), isNull);
+      expect((deskLaunch.path ?? '').split(':'), isNot(contains(bin)));
+    },
+  );
+
+  // --- #97 #91: acting it out, and when it started waiting ----------------------------------------
+
+  test(
+    'a Claude worker acts out its latest tool call, and puts its head in its hands when its tests keep failing',
+    () async {
+      final f = Fixture();
+      addTearDown(f.close);
+      final env = isolatedEnv(f, {'FAKE_AGENT_EXIT_MS': '5000', 'FAKE_AGENT_LOG': f.log});
+      final workers = manager(f, f.claude, [], env);
+      addTearDown(workers.shutdown);
+      final worker = spawned(workers.spawn('desk-1', 'test', 'make the tests pass'));
+      final launch = (await waitFor(f.read, (r) => r.any(_claudeLaunch))).firstWhere(_claudeLaunch);
+      final settings = jsonDecode(File(launch.args[launch.args.indexOf('--settings') + 1]).readAsStringSync());
+      expect(
+        (settings['hooks'] as Map).containsKey('PostToolUseFailure'),
+        isTrue,
+        reason: 'failed tool calls are reported',
+      );
+
+      final token = launch.hookToken!;
+      void hook(String event, Map<String, Object?> payload) =>
+          expect(workers.handleHook(worker.id, token, event, {'session_id': 'acting', ...payload}), isTrue);
+      WorkerAction? action() => workers.get(worker.id)?.action;
+      const npmTest = {
+        'tool_name': 'Bash',
+        'tool_input': {'command': 'npm test 2>&1 | tail -5'},
+      };
+      hook('SessionStart', {});
+      hook('UserPromptSubmit', {'prompt': 'make the tests pass'});
+      expect(action(), isNull);
+      hook('PreToolUse', {
+        'tool_name': 'Read',
+        'tool_input': {'file_path': 'src/a.ts'},
+      });
+      expect(action(), WorkerAction.read);
+      hook('PreToolUse', npmTest);
+      expect(action(), WorkerAction.test);
+      // Failed once (by exit code): still watching. An interrupt isn't a failure.
+      hook('PostToolUseFailure', {...npmTest, 'error': 'Exit code 1\n# fail 2', 'is_interrupt': false});
+      hook('PostToolUseFailure', {...npmTest, 'error': 'Interrupted', 'is_interrupt': true});
+      expect(action(), WorkerAction.test);
+      hook('PreToolUse', {
+        'tool_name': 'Edit',
+        'tool_input': {'file_path': 'src/a.ts'},
+      });
+      expect(action(), WorkerAction.edit);
+      // Failed again, by the summary it printed through the pipe: head in hands, until its next tool call.
+      hook('PreToolUse', npmTest);
+      hook('PostToolUse', {
+        ...npmTest,
+        'tool_response': {'stdout': '# tests 5\n# pass 3\n# fail 2', 'stderr': ''},
+      });
+      expect(action(), WorkerAction.failing);
+      hook('PreToolUse', npmTest);
+      expect(action(), WorkerAction.test);
+      // A pass ends the streak: one more failure isn't "again and again".
+      hook('PostToolUse', {
+        ...npmTest,
+        'tool_response': {'stdout': '# tests 5\n# pass 5\n# fail 0', 'stderr': ''},
+      });
+      hook('PreToolUse', npmTest);
+      hook('PostToolUseFailure', {...npmTest, 'error': 'Exit code 1'});
+      expect(action(), WorkerAction.test);
+      // A failing command that isn't a test run doesn't count.
+      hook('PostToolUseFailure', {
+        'tool_name': 'Bash',
+        'tool_input': {'command': 'git push'},
+        'error': 'Exit code 1',
+      });
+      expect(action(), WorkerAction.test);
+      hook('Stop', {});
+      expect(workers.get(worker.id)?.status, WorkerStatus.done);
+      expect(action(), isNull);
+    },
+  );
+
+  test('a worker is stamped with when it started waiting on someone, afresh each time', () async {
+    final f = Fixture();
+    addTearDown(f.close);
+    final workers = manager(f, f.claude, [], isolatedEnv(f, {'FAKE_AGENT_LOG': f.log}));
+    addTearDown(workers.shutdown);
+    final worker = spawned(workers.spawn('desk-1', 'test', 'fix the login'));
+    final token = (await waitFor(f.read, (r) => r.any(_claudeLaunch))).firstWhere(_claudeLaunch).hookToken!;
+    void hook(String event, [Map<String, Object?> extra = const {}]) =>
+        workers.handleHook(worker.id, token, event, {'session_id': 'waiting', ...extra});
+    WorkerInfo now() => workers.get(worker.id)!;
+    hook('SessionStart');
+    hook('UserPromptSubmit', {'prompt': 'fix the login'});
+    expect(now().status, WorkerStatus.working);
+    expect(now().waitingSince, isNull);
+    final before = DateTime.now().millisecondsSinceEpoch;
+    hook('PermissionRequest', {
+      'tool_name': 'Bash',
+      'tool_input': {'command': 'npm test'},
+    });
+    expect(now().status, WorkerStatus.needsInput);
+    final asked = now().waitingSince!;
+    expect(asked, inInclusiveRange(before, DateTime.now().millisecondsSinceEpoch));
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+    hook('PostToolUse', {'tool_name': 'Bash'});
+    hook('Stop');
+    expect(now().status, WorkerStatus.done);
+    expect(now().waitingSince!, greaterThan(asked), reason: 'finishing is a new wait');
+  });
+
+  test('who has a terminal open is told by connection as well as by name', () async {
+    final f = Fixture();
+    addTearDown(f.close);
+    final updates = <WorkerInfo>[];
+    final workers = manager(f, f.claude, updates, isolatedEnv(f, {'FAKE_AGENT_LOG': f.log}));
+    addTearDown(workers.shutdown);
+    final worker = spawned(workers.spawn('desk-1', 'test', 'fix the login'));
+    workers.attach(worker.id, 'c1', 'Ada');
+    workers.attach(worker.id, 'c2', 'Ada');
+    expect(workers.get(worker.id)!.viewers, ['Ada']);
+    expect(workers.get(worker.id)!.viewerIds, ['c1', 'c2']);
+    final told = updates.length;
+    workers.detach(worker.id, 'c1');
+    expect(updates.length, told + 1, reason: 'the same names, but one window fewer');
+    expect(workers.get(worker.id)!.viewerIds, ['c2']);
+  });
+
+  // --- #140: a restart carries on whoever it cut off ---------------------------------------------
+
+  test('a restart that takes a mid-turn worker down resumes it with continue; a finished one just wakes up', () async {
+    final f = Fixture();
+    addTearDown(f.close);
+    final env = isolatedEnv(f, {'FAKE_AGENT_LOG': f.log});
+    final before = manager(f, f.claude, [], env);
+    // Never started, so its terminals run in-process and go down with it.
+    await _hireInState(f, before, 'desk-1', 'mid-turn', WorkerStatus.working);
+    await _hireInState(f, before, 'desk-2', 'asking', WorkerStatus.needsInput);
+    await _hireInState(f, before, 'desk-3', 'finished', WorkerStatus.done);
+    await before.shutdown(true);
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+
+    final after = manager(f, f.claude, [], env);
+    addTearDown(after.shutdown);
+    await after.start();
+    final resumed = (await waitFor(() => _launches(f), (x) => x.length >= 6)).sublist(3);
+    Invocation of(String session) => resumed.firstWhere((r) => r.args.contains(session));
+    for (final session in ['mid-turn', 'asking']) {
+      expect(of(session).args, contains('--resume'));
+      expect(_promptOf(of(session)), carryOnPrompt);
+    }
+    expect(of('finished').args, contains('--resume'));
+    expect(_promptOf(of('finished')), isNull);
+  });
+
+  test(
+    'a worker whose terminal outlives the office is picked back up mid-turn, not relaunched or told to continue',
+    () async {
+      final f = Fixture();
+      addTearDown(f.close);
+      final env = isolatedEnv(f, {'FAKE_AGENT_LOG': f.log});
+      final before = manager(f, f.claude, [], env);
+      await before.start();
+      final worker = await _hireInState(f, before, 'desk-1', 'kept', WorkerStatus.working);
+      await before.shutdown(true);
+
+      final after = manager(f, f.claude, [], env);
+      addTearDown(after.shutdown);
+      await after.start();
+      expect(after.get(worker.id)?.status, WorkerStatus.working);
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      expect(_launches(f).length, 1);
+    },
+  );
+
+  test(
+    'a worker whose terminal was in the host when an older office went down carries on if the host is gone',
+    () async {
+      final f = Fixture();
+      addTearDown(f.close);
+      // workers.json as the office before midTurn left it: only the host terminal's status says it was mid-turn.
+      Map<String, Object?> saved(String id, String deskId, String sessionId, String status) => {
+        'id': id,
+        'kind': 'agent',
+        'provider': 'claude',
+        'deskId': deskId,
+        'name': id,
+        'sessionId': sessionId,
+        'hookToken': '$id-token',
+        'pty': {'id': '$id-pty', 'status': status, 'acked': true},
+      };
+      File(p.join(f.data, 'workers.json')).writeAsStringSync(
+        jsonEncode([
+          saved('upgraded', 'desk-1', 'was-working', 'working'),
+          saved('idle', 'desk-2', 'was-done', 'done'),
+        ]),
+      );
+      final workers = manager(f, f.claude, [], isolatedEnv(f, {'FAKE_AGENT_LOG': f.log}));
+      addTearDown(workers.shutdown);
+      await workers.start();
+      final resumed = await waitFor(() => _launches(f), (x) => x.length >= 2);
+      expect(_promptOf(resumed.firstWhere((r) => r.args.contains('was-working'))), carryOnPrompt);
+      expect(_promptOf(resumed.firstWhere((r) => r.args.contains('was-done'))), isNull);
+    },
+  );
+
+  test('stopping the office on purpose (Ctrl+C) leaves nothing to carry on', () async {
+    final f = Fixture();
+    addTearDown(f.close);
+    final env = isolatedEnv(f, {'FAKE_AGENT_LOG': f.log});
+    final before = manager(f, f.claude, [], env);
+    // Its terminals run in the host, which ends them without telling the office they exited.
+    await before.start();
+    await _hireInState(f, before, 'desk-1', 'stopped', WorkerStatus.working);
+    await before.shutdown(false);
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+
+    final after = manager(f, f.claude, [], env);
+    addTearDown(after.shutdown);
+    await after.start();
+    final resumed = (await waitFor(() => _launches(f), (x) => x.length >= 2))[1];
+    expect(resumed.args, contains('stopped'));
+    expect(_promptOf(resumed), isNull);
+  });
+}
+
+bool _claudeLaunch(Invocation r) => r.kind == 'claude' && r.args.contains('--settings');
+
+/// Each Claude worker launch so far (not the task namer's calls, nor what it read from its terminal), oldest first.
+List<Invocation> _launches(Fixture f) => f.read().where((r) => _claudeLaunch(r) && r.stdin == null).toList();
+
+/// What a launch was told to do: the prompt after `--`, if any.
+String? _promptOf(Invocation r) => r.args.contains('--') ? r.args[r.args.indexOf('--') + 1] : null;
+
+/// Hires a Claude worker and puts its session in [state]: mid-turn (working, needs_input) or finished (done).
+Future<WorkerInfo> _hireInState(
+  Fixture f,
+  WorkerManager workers,
+  String deskId,
+  String session,
+  WorkerStatus state,
+) async {
+  final before = _launches(f).length;
+  final worker = spawned(workers.spawn(deskId, 'test', 'task for $session'));
+  final token = (await waitFor(() => _launches(f), (x) => x.length > before)).last.hookToken!;
+  void hook(String event, [Map<String, Object?> extra = const {}]) =>
+      expect(workers.handleHook(worker.id, token, event, {'session_id': session, ...extra}), isTrue);
+  hook('SessionStart');
+  hook('UserPromptSubmit', {'prompt': 'task for $session'});
+  if (state == WorkerStatus.needsInput) {
+    hook('PermissionRequest', {
+      'tool_name': 'Bash',
+      'tool_input': {'command': 'npm test'},
+    });
+  }
+  if (state == WorkerStatus.done) hook('Stop');
+  expect(workers.get(worker.id)?.status, state);
+  return worker;
+}
+
+class _Prompts implements PromptSource {
+  _Prompts(this._text, this._agent);
+  final String Function(PromptId id) _text;
+  final AgentChoice? _agent;
+  @override
+  String text(PromptId id) => _text(id);
+  @override
+  AgentChoice? agent() => _agent;
 }

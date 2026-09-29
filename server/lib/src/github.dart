@@ -407,6 +407,30 @@ class GitHub {
     return null;
   }
 
+  /// Posts a review on a pull request that only comments (the meeting room's review panel), its body
+  /// read from [file]. Resolves to the review's URL.
+  Future<String> review(int n, String file) async {
+    // -F reads @file's contents as the value; {owner}/{repo} are filled in from the checkout's remote.
+    final url = (await gh(
+      [
+        'api',
+        '--method',
+        'POST',
+        'repos/{owner}/{repo}/pulls/$n/reviews',
+        '-F',
+        'body=@$file',
+        '-f',
+        'event=COMMENT',
+        '--jq',
+        '.html_url',
+      ],
+      _dir,
+      60000,
+    )).trim();
+    unawaited(_refreshPulls());
+    return url;
+  }
+
   /// Every label the repository has, for the label picker. Asked again after a minute (or a failure).
   Future<List<GhLabel>> repoLabels() {
     final known = _labelList;
@@ -592,7 +616,7 @@ class GitHub {
     final asked = _now();
     try {
       const fields =
-          'number,title,state,isDraft,url,author,labels,reviewDecision,headRefName,baseRefName,createdAt,updatedAt,additions,deletions,statusCheckRollup,body,closingIssuesReferences';
+          'number,title,state,isDraft,url,author,labels,reviewDecision,headRefName,headRefOid,baseRefName,createdAt,updatedAt,additions,deletions,statusCheckRollup,body,closingIssuesReferences';
       final lists = await Future.wait([
         gh(['pr', 'list', '--state', 'open', '--limit', '150', '--json', fields], _dir),
         gh(['pr', 'list', '--state', 'merged', '--limit', '30', '--json', fields], _dir),
@@ -617,6 +641,7 @@ class GitHub {
             labels: _labels(p['labels']),
             reviewDecision: _str(p['reviewDecision']) ?? '',
             headRefName: asString(p['headRefName']),
+            headRefOid: _str(p['headRefOid']),
             baseRefName: asString(p['baseRefName']),
             createdAt: asString(p['createdAt']),
             updatedAt: asString(p['updatedAt']),

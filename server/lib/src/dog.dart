@@ -280,7 +280,11 @@ class Dog {
     if (call != null) return _barkAt(call);
     final busy = _env
         .workers()
-        .where((w) => w.status == WorkerStatus.working && deskById.containsKey(w.deskId))
+        .where(
+          // Only at a desk or a bean bag: a board agent's kiosk has nothing to curl up under.
+          (w) =>
+              w.status == WorkerStatus.working && deskById.containsKey(w.deskId) && deskById[w.deskId]!.station == null,
+        )
         .toList();
     final people = _env.people().where((p) => p.y < 0.5).toList();
     final was = _mode;
@@ -394,8 +398,16 @@ class Dog {
     _follow = null;
     if (!already) {
       final side = _sideOf(desk);
-      final spot = deskPoint(desk, side * 0.75, 1.45);
-      _walkTo(spot, _run, DogAct.bark, workerId: w.id, face: _toward(spot, deskPoint(desk, 0, 0.9)));
+      // At a board agent, out in front of its kiosk, looking up at the agent behind it.
+      final station = desk.station != null;
+      final spot = station ? deskPoint(desk, side * 0.6, -1.1) : deskPoint(desk, side * 0.75, 1.45);
+      _walkTo(
+        spot,
+        _run,
+        DogAct.bark,
+        workerId: w.id,
+        face: _toward(spot, deskPoint(desk, 0, station ? Kiosk.stand : 0.9)),
+      );
     }
     // Checks now and then that it's still the one to bark at.
     _wake(5000);
@@ -404,7 +416,8 @@ class Dog {
   /// Which end of a desk (-1 or +1 along its width) is nearer.
   double _sideOf(DeskDef desk) {
     final at = here();
-    return _dist(at, deskPoint(desk, 1, 1.3)) <= _dist(at, deskPoint(desk, -1, 1.3)) ? 1 : -1;
+    final s = desk.station != null ? -1.1 : 1.3;
+    return _dist(at, deskPoint(desk, 1, s)) <= _dist(at, deskPoint(desk, -1, s)) ? 1 : -1;
   }
 }
 

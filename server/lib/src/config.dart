@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:office_shared/shared.dart';
 import 'package:path/path.dart' as p;
 
+import 'machine.dart' show maxWorkerLimit, parseWorkerLimit;
 import 'secrets.dart';
 
 /// PEM text of the certificate and key the office serves HTTPS with.
@@ -49,6 +50,7 @@ class Config {
     this.publicHost,
     this.budget,
     required this.budgetPause,
+    this.maxWorkers,
     this.webhook,
     this.city,
     this.weather,
@@ -103,6 +105,9 @@ class Config {
   /// Refuse new hires for the rest of the day once the budget is spent.
   final bool budgetPause;
 
+  /// The most workers the office runs at once, across every floor; ⚙️ Settings can't go past it.
+  final int? maxWorkers;
+
   /// Slack / Discord webhook to post to when a worker needs input or finishes ('' turns it off).
   final String? webhook;
 
@@ -121,6 +126,7 @@ Usage:
   agent-office setup [--projects <dir>] [--project <owner/repo>]...
   agent-office prune [dir] [--dry-run] [--force]
   agent-office accounts [list|invite|revoke|role|password] ...
+  agent-office queue [list|add|remove] ...
 
 Runs the office. Every project is a floor of the building: ride the elevator,
 pick one of the repositories your `gh` login can see, and the office clones it
@@ -144,6 +150,9 @@ Commands:
                           changes or unpushed commits is kept unless --force is given.
   accounts                Invite, list and revoke people's own accounts, and switch
                           the shared password off or on (see accounts --help)
+  queue                   The task queue, for the agents standing by the boards:
+                          list, add --title "…" [--issue n] (prompt on stdin),
+                          remove <id>. Only works from a board agent's terminal
 
 Options:
       --home <dir>        Where the office keeps its data when no [dir] is given
@@ -178,6 +187,10 @@ Options:
                           day's spend passes it. OpenCode/Codex spend is excluded
       --budget-pause      ...and no new workers can be hired until the next
                           day (env AGENT_OFFICE_BUDGET_PAUSE=1)
+      --max-workers <n>   Run at most this many workers at once, across every
+                          floor (env AGENT_OFFICE_MAX_WORKERS). Hiring past it
+                          is refused. Admins can lower the limit from ⚙️
+                          Settings, but not raise it past this
       --webhook <url>     Post to this Slack or Discord webhook when a worker
                           needs input or finishes (env AGENT_OFFICE_WEBHOOK).
                           Also settable from ⚙️ Settings in the office; "" turns it off
@@ -296,6 +309,7 @@ Config loadConfig(List<String> argv) {
   var budget = _env('AGENT_OFFICE_BUDGET') ?? '';
   final pause = _env('AGENT_OFFICE_BUDGET_PAUSE');
   var budgetPause = pause != null && pause != '0';
+  var maxWorkers = _env('AGENT_OFFICE_MAX_WORKERS') ?? '';
   // Unlike the others, an empty AGENT_OFFICE_WEBHOOK counts: it turns the webhook off.
   var webhook = Platform.environment['AGENT_OFFICE_WEBHOOK'];
   var city = _env('AGENT_OFFICE_CITY') ?? '';
@@ -324,7 +338,9 @@ Config loadConfig(List<String> argv) {
       case '--agent':
         agentCmd = _takeValue(argv, i++, a);
       case '--agent-args':
-        agentArgs = splitArgs(_takeValue(argv, i++, a));
+        // Its value is flags itself ("--model opus"), so a leading -- doesn't mean the value is missing.
+        if (i + 1 >= argv.length) _takeValue(argv, i, a);
+        agentArgs = splitArgs(argv[++i]);
       case '--tls-cert':
         tlsCert = _takeValue(argv, i++, a);
       case '--tls-key':
@@ -343,6 +359,8 @@ Config loadConfig(List<String> argv) {
         budget = _takeValue(argv, i++, a);
       case '--budget-pause':
         budgetPause = true;
+      case '--max-workers':
+        maxWorkers = _takeValue(argv, i++, a);
       case '--webhook':
         webhook = _takeValue(argv, i++, a);
       case '--home':
@@ -382,6 +400,10 @@ Config loadConfig(List<String> argv) {
   final budgetUsd = budget.isNotEmpty ? _jsNumber(budget.replaceFirst(RegExp(r'^\$'), '')) : null;
   if (budgetUsd != null && !(budgetUsd > 0)) {
     _fail('agent-office: --budget needs an amount in dollars, e.g. --budget 20');
+  }
+  final workerLimit = maxWorkers.isNotEmpty ? parseWorkerLimit(maxWorkers) : null;
+  if (maxWorkers.isNotEmpty && workerLimit == null) {
+    _fail('agent-office: --max-workers needs a whole number from 1 to $maxWorkerLimit, e.g. --max-workers 6');
   }
   weather = weather.trim().toLowerCase();
   if (weather.isNotEmpty && !weathers.any((w) => w.wire == weather)) {
@@ -482,6 +504,7 @@ Config loadConfig(List<String> argv) {
     publicHost: _env('AGENT_OFFICE_PUBLIC_HOST'),
     budget: budgetUsd,
     budgetPause: budgetPause,
+    maxWorkers: workerLimit,
     webhook: webhook,
     city: city.trim().isEmpty ? null : city.trim(),
     weather: weather.isEmpty ? null : Weather.parse(weather),

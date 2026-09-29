@@ -20,8 +20,11 @@ import 'docs.dart' show DocFailed, DocFound;
 import 'floor.dart';
 import 'headless.dart' show ScreenFrame;
 import 'history.dart';
+import 'leave_on_merge.dart';
 import 'limits.dart';
+import 'machine.dart';
 import 'models.dart';
+import 'prompts.dart';
 import 'relay.dart';
 import 'secrets.dart' show writePrivateFile;
 import 'services.dart';
@@ -159,6 +162,9 @@ class _Client {
   bool whiteboard = false;
   int lastWbPointerAt = 0;
 
+  /// When this client last said it was typing, per terminal (see 'term.typing').
+  final Map<String, int> typingAt = {};
+
   /// At the arcade cabinet on their floor, playing [game] (see Arcade); [frame] is it as it looks now.
   bool playing = false;
   String? game;
@@ -169,6 +175,9 @@ class _Client {
 }
 
 const _slowClientBytes = 8 * 1024 * 1024;
+
+/// The least time between two 'term.typing' notes from one person in one terminal.
+const _typingGapMs = 500;
 
 /// The most a client may send in one message (the Node server's `maxPayload`).
 const _maxPayload = 2 * 1024 * 1024;
@@ -508,9 +517,78 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     if (error != null && error.isNotEmpty) sendTo(c, ToastMsg(error, ToastLevel.warn));
   }
 
+  /// The task queue, for the board agents (see stations.dart, which tells them how, and the
+  /// `agent-office queue` command): GET lists it, POST adds a task, DELETE with ?task= takes a waiting
+  /// one off. The agent's own hook token says who's asking.
+  Future<Response> officeQueue(Request req) async {
+    final url = req.url;
+    final workerId = _query(url, 'worker') ?? '';
+    final token = (headerValue(req.headers, 'authorization') ?? '').replaceFirst(
+      RegExp(r'^Bearer\s+', caseSensitive: false),
+      '',
+    );
+    final floor = workerFloor(workerId);
+    final agent = floor?.workers.authenticate(workerId, token);
+    if (floor == null || agent == null) {
+      return _send(401, {
+        'error': 'Send your own AGENT_OFFICE_WORKER_ID as ?worker= and AGENT_OFFICE_HOOK_TOKEN as the bearer token',
+      });
+    }
+    if (deskById[agent.deskId]?.station == null) {
+      return _send(403, {'error': 'Only the agents standing by the boards can use the queue'});
+    }
+    Map<String, dynamic> view() {
+      final q = floor.queue.state();
+      return {
+        'maxWorkers': q.maxWorkers,
+        'tasks': [
+          for (final t in q.tasks)
+            {
+              'id': t.id,
+              'title': t.title,
+              'status': t.status.wire,
+              'outcome': ?t.outcome?.wire,
+              'issue': ?t.issue,
+              'addedBy': t.addedBy,
+              'worker': ?t.workerName,
+              'branch': ?t.branch,
+              'pr': ?t.pr?.toJson(),
+              'error': ?t.error,
+            },
+        ],
+      };
+    }
+
+    if (req.method == Method.get) return _send(200, view());
+    if (req.method == Method.delete) {
+      final err = floor.queue.remove(_query(url, 'task') ?? '');
+      return err != null ? _send(400, {'error': err}) : _send(200, view());
+    }
+    if (req.method != Method.post) return _send(405, {'error': 'GET, POST or DELETE'});
+    Object? body;
+    try {
+      body = jsonDecode(await req.readAsString(encoding: utf8, maxLength: 1024 * 1024));
+    } catch (_) {
+      body = null;
+    }
+    if (body is! Map) return _send(400, {'error': 'Send JSON: {"title": "…", "prompt": "…", "issue": 12}'});
+    final raw = body['issue'];
+    final issue = raw is num && raw.isFinite && raw == raw.truncate() && raw > 0 ? raw.toInt() : null;
+    final title = _str(body['title'], 200);
+    final err = floor.queue.add(_str(body['prompt'], 20000), agent.name, title.isEmpty ? null : title, issue);
+    if (err != null) return _send(400, {'error': err});
+    final task = floor.queue.state().tasks.last;
+    toastFloor(floor, '📋 The ${agent.name} queued ${issue != null ? 'issue #$issue' : '“${task.title}”'}');
+    return _send(200, {
+      'ok': true,
+      'task': {'id': task.id, 'title': task.title, 'status': task.status.wire},
+    });
+  }
+
   // --- Loopback-only endpoint for authenticated agent events -------------------------------
   Future<Response> hookHandler(Request req) async {
     final url = req.url;
+    if (url.path == '/office/queue') return officeQueue(req);
     const paths = ['/hooks/claude', '/hooks/opencode', '/hooks/codex'];
     if (req.method != Method.post || !paths.contains(url.path)) return _send(404, {'ok': false});
     Object? payload = <String, dynamic>{};
@@ -565,6 +643,14 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
 
   // Day, night and the weather outside the windows, the same for everyone.
   final sky = Sky(city: cfg.city, weather: cfg.weather, onChange: (state) => broadcast(SkyMsg(state)))..start();
+  // The prompts the office writes for workers by itself, and the worker everyone starts on (⚙️ Settings).
+  final configured = configuredProvider(cfg.agentCmd);
+  final officePrompts = OfficePrompts(cfg.dataDir, (
+    list: agentProviders(configured),
+    configured: configured,
+  ), (state) => broadcast(PromptsMsg(state)));
+  // Whether a worker whose pull request merged goes home by itself, on every floor (⚙️ Settings).
+  final leaveOnMerge = LeaveOnMerge(cfg.dataDir, (state) => broadcast(LeaveOnMergeMsg(state)));
   // Halloween or Christmas all over the building, the same for everyone (⚙️ Settings). On 'auto' it
   // goes by the calendar at the office, the sky's clock.
   final themes = Themes(cfg.dataDir, () => sky.state.utcOffset, (state) => broadcast(ThemeMsg(state)))..start();
@@ -596,47 +682,74 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     if (err != null) stderr.writeln('agent-office: --webhook: $err');
   }
 
-  final floorContext = _FloorContext(
-    agentCmd: cfg.agentCmd,
-    agentArgs: cfg.agentArgs,
-    hook: HookEnv(url: 'http://127.0.0.1:$hookPort', token: ''),
-    ledger: ledger,
-    onEmit: toFloor,
-    onToast: toastFloor,
-    onTermData: (workerId, data, viewers) {
-      final json = _json(TermDataMsg(workerId, data).toJson());
-      for (final id in viewers) {
-        final c = clients[id];
-        if (c == null || !c.open) continue;
-        // A viewer on a slow link skips output and gets a fresh snapshot once it catches up,
-        // instead of queueing unbounded data in server memory.
-        if (c.stale.contains(workerId) || _buffered(c) > _slowClientBytes) {
-          c.stale.add(workerId);
-        } else {
-          sendRaw(c, json);
-        }
+  // The machine's CPU and memory, for the monitor on the wall and a warning before hiring, and the
+  // most workers the office runs at once, across every floor (--max-workers, or ⚙️ Settings).
+  final machine = Machine(cfg.dataDir, cfg.maxWorkers, () {
+    var n = 0;
+    for (final f in floors.values) {
+      n += f.workers.list().length;
+    }
+    return n;
+  }, (state) => broadcast(MachineMsg(state)))..start();
+
+  /// Queues everywhere may be waiting for room under the worker limit: let them look again.
+  void pumpQueues([Floor? except]) {
+    if (machine.limit == null) return;
+    // Not right now: whoever freed the seat (a queue making room for its next task) takes it first.
+    Timer.run(() {
+      for (final f in floors.values) {
+        if (f != except) f.queue.pump();
       }
-    },
-    onChanges: (state, ids) {
-      for (final id in ids) {
-        final c = clients[id];
-        if (c != null) sendTo(c, ChangesMsg(state));
-      }
-    },
-    onWorkerChanged: (floor, workerId, w) {
-      if (w == null) {
-        webhook.onWorkerGone(workerId);
-      } else {
-        webhook.onWorker(w);
-      }
-      floorsChanged();
-    },
-    onPeople: (floor) => clients.values.where((c) => c.peer.floor == floor.id).length,
-    onPeers: (floor) => [
-      for (final c in clients.values)
-        if (c.peer.floor == floor.id) c.peer.info,
-    ],
-  );
+    });
+  }
+
+  final floorContext =
+      _FloorContext(
+          agentCmd: cfg.agentCmd,
+          agentArgs: cfg.agentArgs,
+          hook: HookEnv(url: 'http://127.0.0.1:$hookPort', token: ''),
+          ledger: ledger,
+          onEmit: toFloor,
+          onToast: toastFloor,
+          onTermData: (workerId, data, viewers) {
+            final json = _json(TermDataMsg(workerId, data).toJson());
+            for (final id in viewers) {
+              final c = clients[id];
+              if (c == null || !c.open) continue;
+              // A viewer on a slow link skips output and gets a fresh snapshot once it catches up,
+              // instead of queueing unbounded data in server memory.
+              if (c.stale.contains(workerId) || _buffered(c) > _slowClientBytes) {
+                c.stale.add(workerId);
+              } else {
+                sendRaw(c, json);
+              }
+            }
+          },
+          onChanges: (state, ids) {
+            for (final id in ids) {
+              final c = clients[id];
+              if (c != null) sendTo(c, ChangesMsg(state));
+            }
+          },
+          onWorkerChanged: (floor, workerId, w) {
+            if (w == null) {
+              webhook.onWorkerGone(workerId);
+              pumpQueues(floor);
+            } else {
+              webhook.onWorker(w);
+            }
+            machine.workersChanged();
+            floorsChanged();
+          },
+          onPeople: (floor) => clients.values.where((c) => c.peer.floor == floor.id).length,
+          onPeers: (floor) => [
+            for (final c in clients.values)
+              if (c.peer.floor == floor.id) c.peer.info,
+          ],
+        )
+        ..capacity = machine
+        ..prompts = officePrompts
+        ..onLeaveOnMerge = (() => leaveOnMerge.on);
 
   Floor? openFloor(FloorDef def) {
     if (!Directory(def.dir).existsSync()) {
@@ -739,6 +852,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
       elements: floor?.whiteboard.scene() ?? const [],
       people: floor != null ? drawing(floor) : const [],
     ),
+    meeting: floor?.meetings.state() ?? const MeetingState(),
   );
 
   /// The rooftop bar: nobody works up there, so it has none of a floor's things.
@@ -1166,6 +1280,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     // arrived), or their own page would put it down before it knew they'd gone.
     final ballLeft = was?.court.left(c.id) ?? false;
     c.attached.clear();
+    c.typingAt.clear();
     c.stale.clear();
     // The whiteboard downstairs stays downstairs, and so does the arcade.
     final wasDrawing = c.whiteboard;
@@ -1309,6 +1424,15 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         );
         accountsChanged(); // signs out whoever came in with it
     }
+  }
+
+  /// A worker took on GitHub issue [n] (an issue card dropped on its desk): assign it on GitHub, which
+  /// moves it to In progress on the board, and take it off the queue so nobody else is seated for it.
+  void takeIssue(_Client c, Floor floor, int n) {
+    floor.queue.dropIssue(n);
+    unawaited(
+      floor.github.claim(n).then((err) => warn(c, err != null ? "Couldn't assign issue #$n on GitHub: $err" : null)),
+    );
   }
 
   void handleMessage(_Client c, Map<String, dynamic> msg) {
@@ -1570,6 +1694,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
             ? null
             : AgentProvider.tryParse(msg['provider']) ?? AgentProvider.custom;
         final model = msg.containsKey('model') ? _str(msg['model'], openCodeModelMax + 1) : null;
+        final effort = AgentEffort.tryParse(msg['effort']);
         final prompt = _str(msg['prompt'], 20000);
         final r = floor.workers.spawn(
           _str(msg['deskId'], 32),
@@ -1579,8 +1704,10 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
           kind,
           provider,
           model,
+          effort,
         );
         final w = r.worker;
+        final issue = kind == WorkerKind.agent ? _issueNumber(msg['issue']) : null;
         if (w == null) {
           warn(c, r.error);
         } else {
@@ -1588,8 +1715,13 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
             floor,
             kind == WorkerKind.shell
                 ? '$who opened a shell at a desk'
-                : '$who hired ${w.name}${(w.prompt ?? '').isNotEmpty ? ' with a task' : ''}',
+                : '$who hired ${w.name}${issue != null
+                      ? ' for issue #$issue'
+                      : (w.prompt ?? '').isNotEmpty
+                      ? ' with a task'
+                      : ''}',
           );
+          if (issue != null) takeIssue(c, floor, issue);
         }
       case 'worker.resume':
         final w = worker(msg['workerId']);
@@ -1626,10 +1758,17 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
       case 'worker.detach':
         final wid = _str(msg['workerId'], 32);
         c.attached.remove(wid);
+        c.typingAt.remove(wid);
         workerFloor(wid)?.workers.detach(wid, c.id);
       case 'worker.prompt':
         final w = worker(msg['workerId']);
-        warn(c, w != null ? w.floor.workers.prompt(w.wid, _str(msg['prompt'], 20000), who) : 'No such worker');
+        final err = w != null ? w.floor.workers.prompt(w.wid, _str(msg['prompt'], 20000), who) : 'No such worker';
+        warn(c, err);
+        final issue = w?.info.kind == WorkerKind.agent ? _issueNumber(msg['issue']) : null;
+        if (w != null && err == null && issue != null) {
+          toastFloor(w.floor, '$who handed issue #$issue to ${w.info.name}');
+          takeIssue(c, w.floor, issue);
+        }
       case 'worker.pr':
         final w = worker(msg['workerId']);
         if (w == null) break;
@@ -1660,6 +1799,131 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         if (wid is String && c.attached.contains(wid)) {
           workerFloor(wid)?.workers.write(wid, _str(msg['data'], 64 * 1024), who);
         }
+      case 'station.prompt':
+        final floor = here();
+        if (floor == null) break;
+        final r = floor.workers.station(_str(msg['deskId'], 32), who, _str(msg['prompt'], 20000));
+        if (r.error != null) {
+          warn(c, r.error);
+        } else if (r.hired) {
+          toastFloor(floor, '$who asked the ${r.info!.name} something');
+        }
+      case 'term.typing':
+        // Everyone else in that terminal sees who's typing. A typist says so about once a second.
+        final w = worker(msg['workerId']);
+        final now = _now();
+        if (w == null || !c.attached.contains(w.wid) || now - (c.typingAt[w.wid] ?? 0) < _typingGapMs) break;
+        c.typingAt[w.wid] = now;
+        for (final id in w.info.viewerIds) {
+          final o = clients[id];
+          if (o != null && o.id != c.id) sendTo(o, TermTypingMsg(w.wid, c.id));
+        }
+      case 'meeting.start':
+        final floor = here();
+        if (floor == null) break;
+        if (badProvider(floor)) {
+          warn(c, 'Unknown agent provider');
+          break;
+        }
+        if (!isMeetingPattern(msg['pattern'])) {
+          warn(c, 'Unknown meeting pattern');
+          break;
+        }
+        int? count(Object? v) => v is num && v.isFinite && v == v.truncate() && v > 0 ? v.toInt() : null;
+        final roles = msg['roles'], parts = msg['parts'];
+        final request = MeetingRequest(
+          pattern: MeetingPattern.parse(msg['pattern']),
+          prompt: _str(msg['prompt'], 20000),
+          title: _str(msg['title'], 200).isEmpty ? null : _str(msg['title'], 200),
+          output: _str(msg['output'], 300).isEmpty ? null : _str(msg['output'], 300),
+          roles: roles is List ? [for (final r in roles.take(8)) _str(r, 80)] : const [],
+          parts: parts is List ? [for (final x in parts.take(200)) _str(x, 500)] : null,
+          pr: count(msg['pr']),
+          issue: count(msg['issue']),
+          rounds: count(msg['rounds']),
+          budget: count(msg['budget']),
+          provider: AgentProvider.tryParse(msg['provider']),
+          model: msg.containsKey('model') && msg['model'] != null ? _str(msg['model'], openCodeModelMax + 1) : null,
+          effort: AgentEffort.tryParse(msg['effort']),
+        );
+        warn(c, floor.meetings.start(request, who));
+      case 'meeting.stop':
+        final floor = here();
+        if (floor != null) warn(c, floor.meetings.stop(who));
+      case 'meeting.clear':
+        final floor = here();
+        if (floor != null) warn(c, floor.meetings.clear(who));
+      case 'prompts.set':
+        if (!meOf(c.accountId).admin) return warn(c, 'Only admins can change the office’s prompts');
+        final id = msg['id'];
+        final text = msg['text'];
+        if (!isPromptId(id) || (text != null && text is! String)) return;
+        final key = id as String;
+        final custom = officePrompts.state().custom.containsKey(key);
+        final err = officePrompts.setPrompt(key, text == null ? null : _str(text, promptMax + 1), who);
+        if (err != null) return warn(c, err);
+        final now = officePrompts.state().custom.containsKey(key);
+        final label = prompts[key]!.label;
+        if (now) {
+          toastAll('📝 $who rewrote the “$label” prompt');
+        } else if (custom) {
+          toastAll('📝 $who put the default “$label” prompt back');
+        }
+      case 'prompts.agent':
+        if (!meOf(c.accountId).admin) return warn(c, 'Only admins can pick the office’s default worker');
+        final ch = msg['choice'];
+        if (ch != null && ch is! Map) return;
+        AgentChoice? choice;
+        if (ch is Map) {
+          final model = ch['model'] == null || ch['model'] == '' ? null : _str(ch['model'], openCodeModelMax + 1);
+          final why = officePrompts.problem(ch['provider'], model, ch['effort']);
+          if (why != null) return warn(c, why);
+          choice = AgentChoice(
+            provider: AgentProvider.parse(ch['provider']),
+            model: model,
+            effort: AgentEffort.tryParse(ch['effort']),
+          );
+        }
+        final err = officePrompts.setAgent(choice, who);
+        if (err != null) return warn(c, err);
+        toastAll(
+          choice != null
+              ? '🤖 $who set the office’s default worker'
+              : '🤖 $who put the office’s default worker back to ${p.basename(cfg.agentCmd)}',
+        );
+      case 'leaveOnMerge.set':
+        final on = msg['on'] == true;
+        if (on == leaveOnMerge.on) break;
+        leaveOnMerge.set(on, who);
+        toastAll(
+          on
+              ? '🏠 $who set workers to go home by themselves once their pull request merges'
+              : "🪑 $who set workers whose pull request merged to stay until they're sent home",
+        );
+        // The ones already merged go now.
+        if (on) {
+          for (final f in floors.values) {
+            f.sendLandedHome();
+          }
+        }
+      case 'machine.limit':
+        if (!meOf(c.accountId).admin) return warn(c, 'Only admins can change the worker limit');
+        final raw = msg['limit'];
+        final limit = raw == null ? null : parseWorkerLimit(raw);
+        if (raw != null && limit == null) {
+          return warn(c, 'The worker limit is a whole number from 1 to $maxWorkerLimit');
+        }
+        final err = machine.setLimit(limit, who);
+        if (err != null) return warn(c, err);
+        final now = machine.limit;
+        toastAll(
+          limit != null
+              ? '⚙️ $who set the worker limit to $now'
+              : now == null
+              ? '⚙️ $who took the worker limit off'
+              : '⚙️ $who put the worker limit back to $now (--max-workers)',
+        );
+        pumpQueues();
       case 'term.resize':
         final wid = msg['workerId'];
         if (wid is String && c.attached.contains(wid)) {
@@ -1796,6 +2060,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
           issue,
           AgentProvider.tryParse(msg['provider']),
           model,
+          AgentEffort.tryParse(msg['effort']),
         );
         if (err != null) {
           warn(c, err);
@@ -2133,7 +2398,10 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         limits: limits.state,
         me: me,
         notify: webhook.state(),
+        machine: machine.state(),
         sky: sky.state,
+        prompts: officePrompts.state(),
+        leaveOnMerge: leaveOnMerge.state(),
         theme: themes.state(),
         view: onRoof ? roofView() : floorView(floor),
       ),
@@ -2236,6 +2504,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     heartbeat.cancel();
     upgrader.stop();
     webhook.stop();
+    machine.stop();
     sky.stop();
     themes.stop();
     limits.close();
@@ -2266,6 +2535,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     upgrader.stop();
     services.stop();
     webhook.stop();
+    machine.stop();
     sky.stop();
     themes.stop();
     final closing = [for (final f in floors.values) f.shutdown(keep)];
@@ -2347,4 +2617,12 @@ class _FloorContext implements FloorContext {
   int people(Floor floor) => onPeople(floor);
   @override
   List<PeerInfo> peers(Floor floor) => onPeers(floor);
+
+  @override
+  Capacity? capacity;
+  @override
+  PromptSource? prompts;
+  bool Function()? onLeaveOnMerge;
+  @override
+  bool leaveOnMerge() => onLeaveOnMerge?.call() ?? false;
 }

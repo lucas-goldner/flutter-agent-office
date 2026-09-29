@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:office_pty/office_pty.dart' show chmodSync;
-import 'package:office_shared/shared.dart' hide Jukebox, Whiteboard;
+import 'package:office_shared/shared.dart' hide Jukebox, MeetingRoom, Whiteboard;
 import 'package:path/path.dart' as p;
 
 import 'agents.dart';
@@ -15,10 +15,15 @@ import 'docs.dart';
 import 'dog.dart';
 import 'github.dart';
 import 'jukebox.dart';
+import 'leave_on_merge.dart' show landedWorkers;
+import 'machine.dart' show Capacity;
+import 'meetings.dart';
+import 'prompts.dart';
 import 'queue.dart';
 import 'usage.dart' show Ledger;
 import 'whiteboard.dart';
 import 'workers.dart';
+import 'worktrees.dart' show Worktrees;
 
 /// What a floor needs from the building around it.
 abstract interface class FloorContext {
@@ -49,7 +54,19 @@ abstract interface class FloorContext {
 
   /// Who's on this floor, and where they stand.
   List<PeerInfo> peers(Floor floor);
+
+  /// The office's worker limit, across every floor.
+  Capacity? get capacity;
+
+  /// The office's prompts and the worker everyone starts on, as set in ⚙️ Settings.
+  PromptSource? get prompts;
+
+  /// ⚙️ Settings: a worker whose pull request merged goes home by itself.
+  bool leaveOnMerge();
 }
+
+/// How long after a PR list or a worker's change the office looks for workers whose PR merged.
+const _landedDelay = Duration(milliseconds: 1500);
 
 /// Boards on a floor nobody is on, with nothing running, are asked GitHub about this seldom.
 const _idleRefreshMs = 10 * 60000;
@@ -74,9 +91,7 @@ ProjectInfo projectInfo(String dir, String name, String agentCmd, List<String> a
     remote: git(['remote', 'get-url', 'origin']),
     agentCmd: [agentCmd, ...agentArgs].join(' '),
     defaultProvider: provider,
-    agentProviders: provider == AgentProvider.custom
-        ? const [AgentProvider.claude, AgentProvider.opencode, AgentProvider.codex, AgentProvider.custom]
-        : const [AgentProvider.claude, AgentProvider.opencode, AgentProvider.codex],
+    agentProviders: agentProviders(provider),
   );
 }
 
@@ -116,13 +131,17 @@ class Floor {
           _ctx.emit(this, WorkerUpdateMsg(worker));
           // Still being built: the first updates come from waking the workers already at their desks.
           _queue?.onWorker(worker);
+          _meetings?.onWorker(worker);
           dog.onWorker(worker);
           _ctx.workerChanged(this, worker.id, worker);
+          // Its turn ended, or whoever had its terminal open closed it: it may be free to go now.
+          sendLandedHome();
         },
         remove: (workerId) {
           _changes?.forget(workerId);
           _ctx.emit(this, WorkerRemoveMsg(workerId));
           _queue?.onWorkerGone(workerId);
+          _meetings?.onWorkerGone(workerId);
           dog.onWorkerGone(workerId);
           _ctx.workerChanged(this, workerId, null);
         },
@@ -132,6 +151,8 @@ class Floor {
       ),
       _ctx.ledger,
       env: env,
+      capacity: _ctx.capacity,
+      prompts: _ctx.prompts,
     );
 
     github = GitHub(def.dir, (state) => _ctx.emit(this, GhIssuesMsg(state)), (state) {
@@ -142,6 +163,7 @@ class Floor {
         _ctx.toast(this, '🎉 PR #${pr.number} merged: ${pr.title}');
         merged(pr.number);
       }
+      sendLandedHome();
     });
     // The 📋 task queue seats workers by itself: it watches the workers and links PRs from GitHub.
     _queue = TaskQueue(
@@ -149,7 +171,11 @@ class Floor {
       workers,
       project.branch != null && project.branch!.isNotEmpty,
       QueueEvents(
-        update: (state) => _ctx.emit(this, QueueMsg(state)),
+        update: (state) {
+          _ctx.emit(this, QueueMsg(state));
+          // A task's pull request may just have been linked (or merged).
+          sendLandedHome();
+        },
         toast: (text, level) => _ctx.toast(this, text, level),
         claimIssue: (issue) => github.claim(issue),
         refreshGitHub: () => unawaited(github.refresh()),
@@ -158,6 +184,23 @@ class Floor {
           _ctx.toast(this, '📋 The queue is empty: every task is done 🎉');
           _ctx.emit(this, const GongMsg(GongWhy.queue));
         },
+        room: () => _ctx.capacity?.room() ?? double.infinity,
+        worktreeNote: () => officePrompt(_ctx.prompts, 'queue.worktree'),
+      ),
+    );
+
+    // Meetings seat their own workers round the meeting room's table and run them round by round.
+    _meetings = MeetingRoom(
+      def.dir,
+      dataDir,
+      _FloorMeetingWorkers(workers),
+      project.branch != null && project.branch!.isNotEmpty ? GitMeetingTrees(Worktrees(def.dir)) : null,
+      MeetingEvents(
+        update: (state) => _ctx.emit(this, MeetingMsg(state)),
+        toast: (text, level) => _ctx.toast(this, text, level),
+        hiringPaused: () => _ctx.ledger.hiringPaused,
+        postReview: (pr, file) => github.review(pr, file),
+        prompt: (id) => _ctx.prompts?.text(id) ?? prompts[id]!.text,
       ),
     );
 
@@ -208,10 +251,17 @@ class Floor {
   late final ProjectInfo project;
   WorkerManager? _workers;
   TaskQueue? _queue;
+  MeetingRoom? _meetings;
   Changes? _changes;
+
+  /// A look for workers whose pull request merged, due shortly (see [sendLandedHome]).
+  Timer? _landedTimer;
   WorkerManager get workers => _workers!;
   late final GitHub github;
   TaskQueue get queue => _queue!;
+
+  /// The meeting room, where workers work through a question together (see meetings.dart).
+  MeetingRoom get meetings => _meetings!;
   Changes get changes => _changes!;
   late final Decor decor;
   late final Jukebox jukebox;
@@ -238,6 +288,30 @@ class Floor {
     if (_merges.ring(n)) _ctx.emit(this, GongMsg(GongWhy.merged, pr: n, by: by));
   }
 
+  /// With ⚙️ Settings' *go home once merged* on, sends home every worker whose pull request merged,
+  /// once it's at rest and nobody has its terminal open, deleting its worktree and branch unless they
+  /// hold work that isn't on GitHub. Called whenever that might have changed; it looks a moment later,
+  /// once for a burst of calls, and not from inside the event that prompted it.
+  void sendLandedHome() {
+    if (_landedTimer != null || !_ctx.leaveOnMerge()) return;
+    _landedTimer = Timer(_landedDelay, () {
+      _landedTimer = null;
+      if (!_ctx.leaveOnMerge() || _closed) return;
+      for (final l in landedWorkers(workers.list(), github.pulls.items, queue.state().tasks)) {
+        final done = workers.kill(l.worker.id, null, l.head);
+        _ctx.toast(this, '🏠 ${l.worker.name} went home: PR #${l.pr} merged');
+        unawaited(
+          done.then((r) {
+            if (r.note != null) _ctx.toast(this, r.note!);
+            if (r.error != null) _ctx.toast(this, r.error!, ToastLevel.warn);
+          }),
+        );
+      }
+    });
+  }
+
+  bool _closed = false;
+
   /// Someone just walked in: boards that haven't been looked at in a while get fetched again.
   void arrived() {
     final fetched = github.issues.fetchedAt > github.pulls.fetchedAt ? github.issues.fetchedAt : github.pulls.fetchedAt;
@@ -247,7 +321,8 @@ class Floor {
   bool _active() =>
       _ctx.people(this) > 0 ||
       workers.list().any((w) => isBusy(w.status)) ||
-      queue.state().tasks.any((t) => t.status != TaskStatus.done);
+      queue.state().tasks.any((t) => t.status != TaskStatus.done) ||
+      meetings.state().current?.status == MeetingStatus.running;
 
   /// [local]: the project the office was started in (see Building.isLocal).
   FloorInfo info({bool? local}) {
@@ -261,7 +336,7 @@ class Floor {
       local: local,
       addedBy: def.addedBy,
       addedAt: def.addedAt,
-      workers: ws.length,
+      workers: ws.where((w) => deskById[w.deskId]?.station == null).length,
       busy: ws.where((w) => w.status == WorkerStatus.working).length,
       waiting: ws
           .where(
@@ -277,9 +352,12 @@ class Floor {
   /// With [keep] (a restart), the workers' terminals keep running for the next office to pick up.
   Future<void> shutdown([bool keep = false]) async {
     _timer.cancel();
+    _closed = true;
+    _landedTimer?.cancel();
     dog.stop();
     github.stop();
     queue.shutdown();
+    meetings.shutdown();
     changes.stop();
     whiteboard.flush();
     await workers.shutdown(keep);
@@ -287,3 +365,32 @@ class Floor {
 }
 
 int _now() => DateTime.now().millisecondsSinceEpoch;
+
+/// The floor's workers, as the meeting room sees them.
+class _FloorMeetingWorkers implements MeetingWorkers {
+  _FloorMeetingWorkers(this._w);
+  final WorkerManager _w;
+
+  @override
+  AgentProvider get defaultProvider => _w.defaultProvider;
+  @override
+  AgentChoice? get officeDefault => _w.officeDefault;
+  @override
+  List<WorkerInfo> list() => _w.list();
+  @override
+  ({WorkerInfo? worker, String? error}) seat(
+    String deskId,
+    String by,
+    String prompt,
+    AgentProvider provider,
+    String? model,
+    AgentEffort? effort,
+    ({String id, WorkerWorktree? worktree}) meeting,
+  ) => _w.spawn(deskId, by, prompt, false, WorkerKind.agent, provider, model, effort, meeting);
+  @override
+  String? prompt(String id, String text, [String? by]) => _w.prompt(id, text, by);
+  @override
+  void write(String id, String data, String by) => _w.write(id, data, by);
+  @override
+  Future<({String? note, String? error})> kill(String id) => _w.kill(id);
+}

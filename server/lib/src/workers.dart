@@ -19,11 +19,14 @@ import 'github.dart' show gh;
 import 'headless.dart';
 import 'history.dart';
 import 'hook.dart';
+import 'machine.dart' show Capacity;
 import 'opencode.dart';
+import 'prompts.dart';
 import 'ptys.dart';
 import 'queue.dart' show QueueWorkers;
 import 'reported_usage.dart';
 import 'services.dart' show ServiceOwner;
+import 'stations.dart';
 import 'tasks.dart';
 import 'usage.dart';
 import 'worktrees.dart';
@@ -92,6 +95,12 @@ const _bootGrace = Duration(seconds: 12);
 /// Between a worker's saved scrollback and what it prints after the office restarted.
 const _restoredNote = '\x1b[2m──── the office restarted · earlier output above ────\x1b[0m\r\n';
 
+/// What a worker whose terminal didn't make it through a restart (the machine rebooted, the terminal
+/// host was replaced or died) is resumed with when it was in the middle of something, so it carries on
+/// by itself instead of waiting at every desk for someone to type "continue".
+const carryOnPrompt =
+    'continue — the office restarted and interrupted you. Pick up where you left off; if you were waiting on an answer or a permission, ask again.';
+
 /// The Claude Code hooks the office listens to (see [WorkerManager.handleHook]).
 const _claudeHookEvents = [
   'SessionStart',
@@ -101,6 +110,7 @@ const _claudeHookEvents = [
   'PermissionRequest',
   'PreToolUse',
   'PostToolUse',
+  'PostToolUseFailure',
 ];
 
 /// Where the workers' hooks reach the office.
@@ -154,6 +164,7 @@ class _Info {
     required this.kind,
     this.provider,
     this.model,
+    this.effort,
     required this.deskId,
     required this.name,
     required this.color,
@@ -168,17 +179,22 @@ class _Info {
     this.task,
     this.pr,
     this.usage,
+    this.meeting,
   });
 
   final String id;
   final WorkerKind kind;
   final AgentProvider? provider;
   final String? model;
+  final AgentEffort? effort;
   final String deskId;
   final String name;
   final String color;
   WorkerStatus status;
   bool acked = true;
+
+  /// When it last went to done or needs_input (ms), so N goes to whoever has waited longest first.
+  int? waitingSince;
   final String createdBy;
   final int createdAt;
   final String? prompt;
@@ -191,21 +207,30 @@ class _Info {
   int cols = 100;
   int rows = 30;
   List<String> viewers = const [];
+  List<String> viewerIds = const [];
   String? activity;
+
+  /// What its latest tool call is, for the worker to act out while it works.
+  WorkerAction? action;
   WorkerTask? task;
   Usage? usage;
   LastInput? lastInput;
+
+  /// The meeting it was called to, for a worker at the meeting room's table.
+  final String? meeting;
 
   WorkerInfo get view => WorkerInfo(
     id: id,
     kind: kind,
     provider: provider,
     model: model,
+    effort: effort,
     deskId: deskId,
     name: name,
     color: color,
     status: status,
     acked: acked,
+    waitingSince: waitingSince,
     createdBy: createdBy,
     createdAt: createdAt,
     prompt: prompt,
@@ -218,19 +243,23 @@ class _Info {
     cols: cols,
     rows: rows,
     viewers: List.unmodifiable(viewers),
+    viewerIds: List.unmodifiable(viewerIds),
     activity: activity,
+    action: action,
     task: task,
     usage: usage,
     lastInput: lastInput,
+    meeting: meeting,
   );
 }
 
 /// Its terminal in the host as of the last save, and how it was doing, to pick back up after a restart.
 class _Saved {
-  const _Saved(this.ptyId, this.status, this.acked);
+  const _Saved(this.ptyId, this.status, this.acked, [this.waitingSince]);
   final String ptyId;
   final WorkerStatus status;
   final bool acked;
+  final int? waitingSince;
 }
 
 class _Worker {
@@ -260,6 +289,9 @@ class _Worker {
   final codexPending = <String>{};
   bool codexPermissionUnknown = false;
 
+  /// Test runs and builds that have failed in a row (see failsToDespair).
+  int failStreak = 0;
+
   /// Its latest prompts and tool calls, for naming its task.
   List<String> prompts = [];
   List<String> tools = [];
@@ -273,6 +305,10 @@ class _Worker {
   final UsageTracker tracker;
   Timer? scanTimer;
   _Saved? saved;
+
+  /// Its process went away mid-turn with the office or the terminal host: its next start carries on
+  /// ([carryOnPrompt]).
+  bool interrupted = false;
 
   /// Output since its scrollback was last saved to disk.
   bool unsaved = false;
@@ -292,7 +328,15 @@ class WorkerManager implements QueueWorkers {
     this._events,
     this._ledger, {
     Map<String, String>? env,
+
+    /// The office's worker limit, across every floor (see machine.dart).
+    Capacity? capacity,
+
+    /// The office's prompts and the worker everyone starts on, as set in ⚙️ Settings (see prompts.dart).
+    PromptSource? prompts,
   }) : _env = env ?? Platform.environment,
+       _capacity = capacity,
+       _prompts = prompts,
        defaultProvider = configuredProvider(_agentCmd) {
     _trees = Worktrees(_dir);
     _statePath = p.join(_dataDir, 'workers.json');
@@ -300,6 +344,7 @@ class WorkerManager implements QueueWorkers {
     _office = officeCommand();
     _writeHookSettings();
     _openCodePlugin = writeOpenCodePlugin(_dataDir);
+    _queueBin = _writeQueueCommand();
     _agentPath = resolveCommand(_agentCmd, _env);
     final claude = defaultProvider == AgentProvider.claude ? _agentPath : resolveCommand('claude', _env);
     _namer = TaskNamer(claude, childEnv(_env), (id, task, ctx) {
@@ -308,7 +353,7 @@ class WorkerManager implements QueueWorkers {
       w.info.task = task;
       _emitUpdate(w);
       _persist();
-    });
+    }, system: () => officePrompt(_prompts, 'office.namer'));
     _host = PtyHost(
       _dataDir,
       () => _events.toast("The workers' terminal host stopped — resuming them", ToastLevel.warn),
@@ -341,6 +386,11 @@ class WorkerManager implements QueueWorkers {
   final WorkerEvents _events;
   final Ledger _ledger;
   final Map<String, String> _env;
+  final Capacity? _capacity;
+  final PromptSource? _prompts;
+
+  /// Where the `agent-office` command is, for the board agents' PATH (see [_writeQueueCommand]).
+  String? _queueBin;
 
   final _workers = <String, _Worker>{};
   late final String _statePath;
@@ -357,6 +407,9 @@ class WorkerManager implements QueueWorkers {
 
   /// The office is shutting down: workers exiting now are being stopped, not failing to resume.
   bool _closing = false;
+
+  /// Closing for good (Ctrl+C), not restarting: whatever the workers were doing is stopped on purpose.
+  bool _stopping = false;
   late final TaskNamer _namer;
   late final Timer _usageTimer;
 
@@ -369,7 +422,8 @@ class WorkerManager implements QueueWorkers {
 
   /// Picks every worker whose terminal outlived the last office (a dev-server reload, an upgrade)
   /// back up where it is, mid-turn or not. Whoever else was at a desk when the office stopped (a
-  /// restart, a crash) gets straight back to work. Call once, before anyone can walk in.
+  /// restart, a crash) gets straight back to work, carrying on with whatever it was in the middle of.
+  /// Call once, before anyone can walk in.
   Future<void> start() async {
     await _host.connect();
     await Future.wait([
@@ -394,6 +448,16 @@ class WorkerManager implements QueueWorkers {
 
   String? get resolvedAgent => _agentPath;
 
+  /// What an agent starts on when whoever starts it doesn't pick: the one set in ⚙️ Settings, or the office's --agent.
+  @override
+  AgentChoice get officeDefault {
+    final picked = _prompts?.agent();
+    if (picked != null && (picked.provider != AgentProvider.custom || defaultProvider == AgentProvider.custom)) {
+      return picked;
+    }
+    return AgentChoice(provider: defaultProvider);
+  }
+
   @override
   List<WorkerInfo> list() => [for (final w in _workers.values) w.info.view];
 
@@ -414,7 +478,9 @@ class WorkerManager implements QueueWorkers {
   @override
   bool deskOccupied(String deskId) => _workers.values.any((w) => w.info.deskId == deskId);
 
-  /// Seats a new worker at [deskId]. Returns it, or why there is none as `error`.
+  /// Seats a new worker at [deskId]. Returns it, or why there is none as `error`. [meeting] seats one
+  /// at the meeting room's table instead, for that meeting (see meetings.dart), in the meeting's own
+  /// worktree, which everyone at the table shares.
   @override
   ({WorkerInfo? worker, String? error}) spawn(
     String deskId,
@@ -424,14 +490,44 @@ class WorkerManager implements QueueWorkers {
     WorkerKind kind = WorkerKind.agent,
     AgentProvider? provider,
     String? model,
+    AgentEffort? effort,
+    ({String id, WorkerWorktree? worktree})? meeting,
   ]) {
     ({WorkerInfo? worker, String? error}) fail(String error) => (worker: null, error: error);
-    final selectedProvider = kind == WorkerKind.agent ? provider ?? defaultProvider : null;
+    // Nobody picked (a board agent, say): the office's default worker, model and effort included.
+    if (kind == WorkerKind.agent && provider == null) {
+      final d = officeDefault;
+      provider = d.provider;
+      model = d.model;
+      effort = d.effort;
+    }
+    final selectedProvider = kind == WorkerKind.agent ? provider : null;
     final modelError = validateWorkerModel(kind, selectedProvider, model);
     if (modelError != null) return fail(modelError);
+    final effortError = validateWorkerEffort(kind, selectedProvider, effort);
+    if (effortError != null) return fail(effortError);
     final seat = deskById[deskId];
     if (seat == null) return fail('Unknown desk');
-    if (deskOccupied(deskId)) return fail('That ${seat.beanbag ? 'bean bag' : 'desk'} is taken');
+    final station = seat.station;
+    if (deskOccupied(deskId)) {
+      return fail(
+        station != null
+            ? 'The ${stationAgent[station]!.name} is already there'
+            : 'That ${seat.beanbag ? 'bean bag' : 'desk'} is taken',
+      );
+    }
+    if (kind == WorkerKind.shell && station != null) return fail('A board agent is always an agent, not a shell');
+    if (station != null && (prompt == null || prompt.trim().isEmpty)) return fail('Tell the board agent what to do');
+    if (seat.room != (meeting != null)) {
+      return fail(
+        seat.room
+            ? 'Only a meeting seats workers at the meeting table: call one in the meeting room'
+            : 'A meeting seats its workers at the meeting table',
+      );
+    }
+    if (meeting != null && (kind != WorkerKind.agent || worktree)) {
+      return fail('A meeting seats agents, in its own worktree');
+    }
     if (kind == WorkerKind.shell && provider != null) return fail('Shell workers do not have an agent provider');
     if (kind == WorkerKind.agent &&
         selectedProvider == AgentProvider.custom &&
@@ -442,10 +538,14 @@ class WorkerManager implements QueueWorkers {
       final paused = _ledger.hiringPaused;
       if (paused != null) return fail(paused);
     }
+    final full = _capacity?.full();
+    if (full != null) return fail(full);
     final used = {for (final w in _workers.values) w.info.name.replaceFirst(RegExp(r' 🐚$'), '')};
-    final name = _names.firstWhere((n) => !used.contains(n), orElse: () => 'Worker ${_workers.length + 1}');
+    final agent = station != null ? stationAgent[station] : null;
+    final name =
+        agent?.name ?? _names.firstWhere((n) => !used.contains(n), orElse: () => 'Worker ${_workers.length + 1}');
     final id = _randomHex(6);
-    WorkerWorktree? wt;
+    WorkerWorktree? wt = meeting?.worktree;
     if (worktree) {
       final made = _trees.create('${name.toLowerCase()}-${id.substring(0, 4)}');
       if (made.error != null) return fail(made.error!);
@@ -456,34 +556,82 @@ class WorkerManager implements QueueWorkers {
       id: id,
       kind: kind,
       provider: selectedProvider,
-      model: selectedProvider == AgentProvider.opencode ? model : null,
+      model: selectedProvider == AgentProvider.opencode || selectedProvider == AgentProvider.claude ? model : null,
+      effort: selectedProvider == AgentProvider.claude ? effort : null,
       deskId: deskId,
       name: kind == WorkerKind.shell ? '$name 🐚' : name,
-      color: kind == WorkerKind.shell ? '#8d99ae' : _colors[_random.nextInt(_colors.length)],
+      color: kind == WorkerKind.shell ? '#8d99ae' : agent?.color ?? _colors[_random.nextInt(_colors.length)],
       status: WorkerStatus.starting,
       createdBy: by,
       createdAt: _now(),
       prompt: kind == WorkerKind.shell || trimmed == null || trimmed.isEmpty ? null : trimmed,
       worktree: wt,
       activity: prompt != null && prompt.isNotEmpty ? _truncate(prompt, 80) : null,
+      meeting: meeting?.id,
     );
     final w = _Worker(info, newTracker());
     _workers[id] = w;
     if (info.prompt != null) _notePrompt(w, info.prompt!);
-    _launch(w, info.prompt, null);
+    // A board agent is told what it's there for ahead of its first request (which is what shows).
+    _launch(
+      w,
+      station != null && info.prompt != null ? '${stationBrief(station, _prompts)}\n\n${info.prompt}' : info.prompt,
+      null,
+    );
     _persist();
     return (worker: info.view, error: null);
   }
 
-  /// Starts a worker that isn't running again, resuming its conversation. Returns why it can't.
-  String? resume(String id) {
+  /// Starts a worker that isn't running again, carrying on its session, with [prompt] as its next
+  /// message. Returns why it can't.
+  String? resume(String id, [String? prompt]) {
     final w = _workers[id];
     if (w == null) return 'No such worker';
     if (w.pty != null) return 'Worker is already running';
     w.info.status = WorkerStatus.starting;
     w.info.exitCode = null;
-    _launch(w, null, w.info.sessionId);
+    final station = deskById[w.info.deskId]?.station;
+    // A board agent with no session to carry on starts over, so it needs telling what it's for again.
+    final first = prompt != null && station != null && w.info.sessionId == null
+        ? '${stationBrief(station, _prompts)}\n\n$prompt'
+        : prompt;
+    if (prompt != null) {
+      w.info.activity = _truncate(prompt, 80);
+      _notePrompt(w, prompt);
+    }
+    // Cut off mid-turn by a restart: it gets on with it, as whoever was watching would have told it to.
+    final carryOn = prompt == null && w.interrupted && w.info.kind == WorkerKind.agent && w.info.sessionId != null;
+    w.interrupted = false;
+    _launch(w, carryOn ? carryOnPrompt : first, w.info.sessionId);
     return null;
+  }
+
+  /// A request for the agent standing by a board (see stations): typed into its session, which is
+  /// woken up with it if it's asleep, or it's hired there with it when nobody is. Returns what went
+  /// wrong as `error`, or the agent and whether it was just hired.
+  ({WorkerInfo? info, bool hired, String? error}) station(String deskId, String by, String text) {
+    ({WorkerInfo? info, bool hired, String? error}) fail(String error) => (info: null, hired: false, error: error);
+    if (deskById[deskId]?.station == null) return fail('There is no agent to ask there');
+    final clean = text.replaceAll(RegExp(r'\r\n?'), '\n').trim();
+    if (clean.isEmpty) return fail('Empty prompt');
+    final w = _workers.values.where((x) => x.info.deskId == deskId).firstOrNull;
+    if (w == null) {
+      final r = spawn(deskId, by, clean);
+      return r.worker == null ? fail(r.error!) : (info: r.worker, hired: true, error: null);
+    }
+    // Typed into the question it's asking, the prompt would answer it.
+    if (w.info.status == WorkerStatus.needsInput) {
+      return fail('The ${w.info.name} is waiting on an answer in its terminal');
+    }
+    if (w.pty == null) w.info.lastInput = LastInput(by: by, at: _now());
+    final err = w.pty != null ? prompt(w.info.id, clean, by) : resume(w.info.id, clean);
+    return err != null ? fail(err) : (info: w.info.view, hired: false, error: null);
+  }
+
+  /// The worker whose terminal holds this hook token: how a worker proves it's asking for itself.
+  WorkerInfo? authenticate(String id, String token) {
+    final w = _workers[id];
+    return w != null && w.pty != null && token.isNotEmpty && _safeEq(token, w.hookToken) ? w.info.view : null;
   }
 
   /// Starts every worker that isn't running: nobody should be found asleep at their desk.
@@ -494,10 +642,11 @@ class WorkerManager implements QueueWorkers {
   }
 
   /// Sends a worker home. For one with its own worktree, [cleanup] says what becomes of it; with no
-  /// choice given, the worktree and branch go only when they hold no work. Resolves once that's done,
-  /// with a line for the team about the worktree.
+  /// choice given, the worktree and branch go only when they hold no work, where [landed] (its merged
+  /// pull request's head commit) is work delivered. Resolves once that's done, with a line for the
+  /// team about the worktree.
   @override
-  Future<({String? note, String? error})> kill(String id, [WorktreeCleanup? cleanup]) async {
+  Future<({String? note, String? error})> kill(String id, [WorktreeCleanup? cleanup, String? landed]) async {
     const none = (note: null, error: null);
     final w = _workers.remove(id);
     if (w == null) return none;
@@ -515,11 +664,12 @@ class WorkerManager implements QueueWorkers {
     _events.remove(id);
     _persist();
     final wt = w.info.worktree;
-    if (wt == null) return none;
+    // A meeting's worktree is everyone at the table's: the meeting tidies it away once they've all gone.
+    if (wt == null || w.info.meeting != null) return none;
     final name = w.info.name;
     final ref = _ref(wt);
     if (cleanup == null) {
-      final work = describeWork(await _trees.inspect(ref));
+      final work = describeWork(await _trees.inspect(ref, landed));
       if (work.isNotEmpty) return (note: "Kept $name's worktree and branch ${wt.branch} — it has $work", error: null);
       cleanup = WorktreeCleanup.all;
     }
@@ -762,13 +912,17 @@ class WorkerManager implements QueueWorkers {
     _scheduleScan(w);
     switch (event) {
       case 'SessionStart':
-        if (m['source'] == 'clear') _clearTask(w);
+        if (m['source'] == 'clear') {
+          _clearTask(w);
+          w.failStreak = 0;
+        }
         if (w.info.status == WorkerStatus.starting || (w.bootBlocked && w.info.status == WorkerStatus.needsInput)) {
           w.bootBlocked = false;
           _setStatus(w, WorkerStatus.idle);
         }
       case 'UserPromptSubmit':
         w.bootBlocked = false;
+        w.info.action = null;
         final prompt = m['prompt'];
         if (prompt is String) {
           w.info.activity = _truncate(prompt, 80);
@@ -785,6 +939,7 @@ class WorkerManager implements QueueWorkers {
         } else {
           final activity = _describeTool(m);
           w.info.activity = activity;
+          w.info.action = toolAction(m['tool_name'], m['tool_input']);
           _noteTool(w, activity);
           if (w.info.status != WorkerStatus.working) {
             _setStatus(w, WorkerStatus.working);
@@ -793,6 +948,8 @@ class WorkerManager implements QueueWorkers {
           }
         }
       case 'PostToolUse':
+      case 'PostToolUseFailure':
+        _noteOutcome(w, m, event == 'PostToolUseFailure');
         if (w.info.status == WorkerStatus.needsInput) {
           w.leftNeedsInputAt = now;
           _setStatus(w, WorkerStatus.working);
@@ -860,6 +1017,7 @@ class WorkerManager implements QueueWorkers {
         }
       case 'UserPromptSubmit':
         clearPending();
+        info.action = null;
         final prompt = report.prompt;
         if (prompt != null) {
           info.activity = _truncate(prompt, 80);
@@ -869,6 +1027,7 @@ class WorkerManager implements QueueWorkers {
       case 'PreToolUse':
         final tool = report.tool;
         info.activity = tool != null ? _truncate(tool, 80) : 'Using a tool';
+        info.action = toolAction(tool);
         final toolUseId = report.toolUseId;
         if (toolUseId != null && w.codexTools.length < 256) w.codexTools[toolUseId] = tool ?? '';
         if (RegExp(r'(?:^|[.])(?:AskUserQuestion|request_user_input)$').hasMatch(tool ?? '')) {
@@ -952,9 +1111,11 @@ class WorkerManager implements QueueWorkers {
     }
     if (hasPrompt) {
       info.activity = _truncate(prompt, 80);
+      info.action = null;
       _notePrompt(w, prompt);
     } else if (ev.tool != null && ev.tool!.isNotEmpty) {
       info.activity = _truncate(ev.tool!, 80);
+      info.action = toolAction(ev.tool);
     } else if (ev.detail != null && ev.detail!.isNotEmpty) {
       info.activity = _truncate(ev.detail!, 80);
     }
@@ -978,8 +1139,11 @@ class WorkerManager implements QueueWorkers {
   void _notePrompt(_Worker w, String prompt) {
     if (w.info.kind != WorkerKind.agent) return;
     final clean = prompt.replaceAll(RegExp(r'\s+'), ' ').trim();
-    // Bare slash commands (/model, /compact) and repeats aren't new work.
-    if (clean.isEmpty || RegExp(r'^/\S+$').hasMatch(clean) || (w.prompts.isNotEmpty && w.prompts.last == clean)) {
+    // Bare slash commands (/model, /compact), repeats and the office's own carry-on aren't new work.
+    if (clean.isEmpty ||
+        RegExp(r'^/\S+$').hasMatch(clean) ||
+        (w.prompts.isNotEmpty && w.prompts.last == clean) ||
+        clean == carryOnPrompt) {
       return;
     }
     w.prompts = _lastN([...w.prompts, clean], _taskPrompts);
@@ -998,6 +1162,29 @@ class WorkerManager implements QueueWorkers {
     if (w.info.task != null && w.toolsSinceNamed >= _taskRefreshTools && _now() - w.namedAt > _taskRefreshMs) {
       _nameTask(w);
     }
+  }
+
+  /// A tool call finished. Tests or a build that failed again (by exit code, or by the summary it
+  /// printed when the exit code was piped away) and the worker puts its head in its hands, until its
+  /// next tool call; a passing run ends the streak.
+  void _noteOutcome(_Worker w, Map payload, bool failed) {
+    if (payload['is_interrupt'] == true ||
+        toolAction(payload['tool_name'], payload['tool_input']) != WorkerAction.test) {
+      return;
+    }
+    final res = payload['tool_response'];
+    final output = [
+      payload['error'],
+      if (res is Map) res['stdout'],
+      if (res is Map) res['stderr'],
+    ].whereType<String>().join('\n');
+    if (!failed && !outputFailed(output)) {
+      w.failStreak = 0;
+      return;
+    }
+    if (++w.failStreak < failsToDespair || w.info.action == WorkerAction.failing) return;
+    w.info.action = WorkerAction.failing;
+    _emitUpdate(w);
   }
 
   void _nameTask(_Worker w) {
@@ -1027,6 +1214,7 @@ class WorkerManager implements QueueWorkers {
   /// office to pick back up; otherwise every worker stops.
   Future<void> shutdown([bool keep = false]) async {
     _closing = true;
+    _stopping = !keep;
     _screenTimer.cancel();
     _usageTimer.cancel();
     _saveTimer.cancel();
@@ -1037,6 +1225,8 @@ class WorkerManager implements QueueWorkers {
       // Before the process goes, so the next office shows what it was doing, not how it was stopped.
       if (w.unsaved) _saveScrollbackOf(w);
       if (keep && w.pty?.id != null) continue;
+      // A restart only takes this one down because it runs in-process: the next office carries on its turn.
+      if (keep && _midTurn(w)) w.interrupted = true;
       try {
         w.pty?.kill();
       } catch (_) {
@@ -1075,11 +1265,17 @@ class WorkerManager implements QueueWorkers {
     final isOpenCode = !isShell && provider == AgentProvider.opencode;
     final isCodex = !isShell && provider == AgentProvider.codex;
     final configured = !isShell && provider == defaultProvider;
+    final station = deskById[info.deskId]?.station;
     final command = _command(info);
     final commandPath = isShell ? null : (configured ? _agentPath : resolveCommand(command, _env));
     var args = isShell ? ['-l'] : (configured ? [..._agentArgs] : <String>[]);
     if (isClaude) {
       args.insertAll(0, ['--settings', _settingsPath]);
+      // A model/effort chosen for this worker overrides whatever --agent-args set office-wide.
+      if (info.model != null) args.addAll(['--model', info.model!]);
+      if (info.effort != null) args.addAll(['--effort', info.effort!.wire]);
+      // The queue agent only ever adds to the queue: without these it can't touch the checkout's files.
+      if (station == StationKind.queue) args.addAll(['--disallowedTools', ...queueAgentDisallowedTools]);
       if (resumeSessionId != null) args.addAll(['--resume', resumeSessionId]);
       // `--` so a prompt like "- fix login" is never parsed as a CLI option.
       if (prompt != null && prompt.isNotEmpty) args.addAll(['--', prompt]);
@@ -1110,6 +1306,12 @@ class WorkerManager implements QueueWorkers {
         'AGENT_OFFICE_HOOK_URL': _hook.url,
         'AGENT_OFFICE_HOOK_TOKEN': w.hookToken,
       });
+    // A board agent reaches the queue with the `agent-office queue` command, whichever agent it runs.
+    final queueBin = _queueBin;
+    if (station != null && queueBin != null) {
+      final path = env['PATH'];
+      env['PATH'] = path != null && path.isNotEmpty ? '$queueBin:$path' : queueBin;
+    }
 
     final cwd = _cwd(info);
     if (isCodex) w.codexHome = _codexHome(cwd, env);
@@ -1148,6 +1350,8 @@ class WorkerManager implements QueueWorkers {
   /// Takes back a terminal the host kept running while the office was down.
   void _adopt(_Worker w, Adopted adopted, _Saved saved) {
     final info = w.info;
+    // It kept working through the restart: nothing to carry on.
+    w.interrupted = false;
     info.cols = adopted.cols;
     info.rows = adopted.rows;
     final term = _newTerm(w);
@@ -1160,6 +1364,7 @@ class WorkerManager implements QueueWorkers {
     if (info.status == WorkerStatus.offline) {
       info.status = saved.status;
       info.acked = saved.acked;
+      info.waitingSince = saved.waitingSince;
     }
     if (info.provider == AgentProvider.codex) w.codexHome = _codexHome(_cwd(info), childEnv(_env));
     _follow(w, adopted.pty, term, null);
@@ -1216,6 +1421,7 @@ class WorkerManager implements QueueWorkers {
       }
       // The terminal host died and took the process with it: nothing the worker did.
       if (e.lost && !_closing) {
+        if (_midTurn(w)) w.interrupted = true;
         resume(info.id);
         return;
       }
@@ -1334,9 +1540,13 @@ class WorkerManager implements QueueWorkers {
     if (w.info.status == status) return;
     if (w.info.status == WorkerStatus.needsInput) w.leftNeedsInputAt = _now();
     w.info.status = status;
-    // Nobody is looking at the terminal right now -> raise the flag (the worker jumps).
+    // Done, idle or asleep: it's not acting anything out any more.
+    if (status != WorkerStatus.working && status != WorkerStatus.needsInput) w.info.action = null;
+    // Nobody is looking at the terminal right now -> raise the flag (the worker jumps). A worker at the
+    // meeting table that ends its part is waiting on the meeting, not on anyone, so it stays quiet.
     if (status == WorkerStatus.done || status == WorkerStatus.needsInput) {
-      w.info.acked = w.viewers.isNotEmpty && status == WorkerStatus.done;
+      w.info.acked = status == WorkerStatus.done && (w.viewers.isNotEmpty || w.info.meeting != null);
+      w.info.waitingSince = _now();
     } else {
       w.info.acked = true;
     }
@@ -1347,13 +1557,18 @@ class WorkerManager implements QueueWorkers {
 
   bool _syncViewers(_Worker w) {
     final names = w.viewers.values.toSet().toList();
-    final cur = w.info.viewers;
-    var same = names.length == cur.length;
-    for (var i = 0; same && i < names.length; i++) {
-      same = names[i] == cur[i];
+    final ids = w.viewers.keys.toList();
+    bool same(List<String> a, List<String> b) {
+      if (a.length != b.length) return false;
+      for (var i = 0; i < a.length; i++) {
+        if (a[i] != b[i]) return false;
+      }
+      return true;
     }
-    if (same) return false;
+
+    if (same(names, w.info.viewers) && same(ids, w.info.viewerIds)) return false;
     w.info.viewers = names;
+    w.info.viewerIds = ids;
     return true;
   }
 
@@ -1429,6 +1644,29 @@ class WorkerManager implements QueueWorkers {
     _writePrivate(_settingsPath, const JsonEncoder.withIndent('  ').convert({'hooks': hooks}));
   }
 
+  /// Writes the `agent-office` command into the data dir's bin/, running the office's own executable,
+  /// and returns that directory: on a board agent's PATH, `agent-office queue …` reaches the queue.
+  /// Rewritten on every start, so after an upgrade it runs the new install.
+  String? _writeQueueCommand() {
+    if (Platform.isWindows) return null;
+    try {
+      final dir = p.join(_dataDir, 'bin');
+      Directory(dir).createSync(recursive: true);
+      chmodSync(dir, 0x1c0); // 0700
+      final file = p.join(dir, 'agent-office');
+      final tmp = '$file.tmp';
+      File(tmp).writeAsStringSync(
+        "#!/bin/sh\n# Agent Office, for the board agents: agent-office queue list|add|remove.\n"
+        'exec ${_office.map(shellQuote).join(' ')} "\$@"\n',
+      );
+      chmodSync(tmp, 0x1c0); // 0700
+      File(tmp).renameSync(file);
+      return dir;
+    } catch (_) {
+      return null;
+    }
+  }
+
   void _saveScrollbackOf(_Worker w) {
     final term = w.term;
     if (term == null) return;
@@ -1444,6 +1682,7 @@ class WorkerManager implements QueueWorkers {
           'kind': w.info.kind.wire,
           'provider': ?w.info.provider?.wire,
           'model': ?w.info.model,
+          'effort': ?w.info.effort?.wire,
           'deskId': w.info.deskId,
           'name': w.info.name,
           'color': w.info.color,
@@ -1456,13 +1695,22 @@ class WorkerManager implements QueueWorkers {
           'activity': ?w.info.activity,
           'task': ?w.info.task?.toJson(),
           'pr': ?w.info.pr?.toJson(),
+          'meeting': ?w.info.meeting,
           if (w.info.kind == WorkerKind.agent) 'tracker': w.tracker.toJson(),
           if (w.info.provider == AgentProvider.opencode || w.info.provider == AgentProvider.codex)
             'usage': ?w.info.usage?.toJson(),
           if (w.info.provider == AgentProvider.codex) 'codexTranscript': ?w.codexTranscript,
           // A terminal still running in the host, to pick back up after a restart. Its hooks keep the token.
           'hookToken': w.hookToken,
-          if (w.pty?.id case final ptyId?) 'pty': {'id': ptyId, 'status': w.info.status.wire, 'acked': w.info.acked},
+          if (w.pty?.id case final ptyId?)
+            'pty': {
+              'id': ptyId,
+              'status': w.info.status.wire,
+              'acked': w.info.acked,
+              'waitingSince': ?w.info.waitingSince,
+            },
+          // In the middle of something: if its terminal doesn't make it through a restart, it carries on after.
+          'midTurn': !_stopping && (w.interrupted || _midTurn(w)),
         },
     ];
     try {
@@ -1497,7 +1745,12 @@ class WorkerManager implements QueueWorkers {
           id: id,
           kind: shell ? WorkerKind.shell : WorkerKind.agent,
           provider: provider,
-          model: provider == AgentProvider.opencode && isValidOpenCodeModel(s['model']) ? s['model'] as String : null,
+          model:
+              (provider == AgentProvider.opencode && isValidOpenCodeModel(s['model'])) ||
+                  (provider == AgentProvider.claude && isClaudeModel(s['model']))
+              ? s['model'] as String
+              : null,
+          effort: provider == AgentProvider.claude ? AgentEffort.tryParse(s['effort']) : null,
           deskId: deskId,
           name: _str(s['name']) ?? 'Worker',
           color: _str(s['color']) ?? _colors[0],
@@ -1518,6 +1771,7 @@ class WorkerManager implements QueueWorkers {
               : claudeLike && tracker.transcript != null
               ? trackerUsage(tracker)
               : null,
+          meeting: s['meeting'] is String && deskById[deskId]!.room ? s['meeting'] as String : null,
         );
         final token = s['hookToken'];
         final w = _Worker(info, tracker, token is String && token.isNotEmpty ? token : null);
@@ -1528,8 +1782,19 @@ class WorkerManager implements QueueWorkers {
         final pty = s['pty'];
         if (pty is Map && pty['id'] is String) {
           final status = _running.firstWhere((st) => st.wire == pty['status'], orElse: () => WorkerStatus.idle);
-          w.saved = _Saved(pty['id'] as String, status, pty['acked'] != false);
+          w.saved = _Saved(
+            pty['id'] as String,
+            status,
+            pty['acked'] != false,
+            pty['waitingSince'] is num ? (pty['waitingSince'] as num).toInt() : null,
+          );
         }
+        // Mid-turn as the office went down: cut off, unless its terminal is picked back up still
+        // running (adopt). An office from before midTurn only said so for a terminal in the host.
+        final midTurn = s['midTurn'];
+        w.interrupted = midTurn is bool
+            ? midTurn
+            : pty is Map && (pty['status'] == 'working' || pty['status'] == 'needs_input');
         final prompt = info.prompt;
         if (prompt != null) w.prompts = [prompt.replaceAll(RegExp(r'\s+'), ' ').trim()];
         _workers[info.id] = w;
@@ -1541,6 +1806,11 @@ class WorkerManager implements QueueWorkers {
 }
 
 // -----------------------------------------------------------------------------------------------
+
+/// In the middle of a turn: working, or asking something (not stuck on a trust or login screen).
+bool _midTurn(_Worker w) =>
+    w.info.kind == WorkerKind.agent &&
+    (w.info.status == WorkerStatus.working || (w.info.status == WorkerStatus.needsInput && !w.bootBlocked));
 
 final _random = Random.secure();
 

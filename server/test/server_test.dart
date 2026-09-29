@@ -121,6 +121,8 @@ void main() {
 
     expect(await post('/hooks/claude?worker=nobody&event=Stop'), 401);
     expect(await post('/hooks/elsewhere'), 404);
+    // The board agents' queue: only for a worker that proves who it is.
+    expect(await post('/office/queue?worker=nobody'), 401);
   });
 
   test('WebSocket: welcome, a shell worker typed into, and sent home', () async {
@@ -158,6 +160,9 @@ void main() {
     expect(welcome['floor'], 'project');
     expect((welcome['peers'] as List).single, containsPair('name', 'Ada'));
     expect(welcome.keys, containsAll(['you', 'floors', 'version', 'me', 'sky', 'workers', 'jukebox', 'whiteboard']));
+    expect(welcome.keys, containsAll(['machine', 'prompts', 'leaveOnMerge', 'meeting']));
+    expect(welcome['meeting'], {'current': null, 'past': []});
+    expect(welcome['leaveOnMerge'], {'on': false});
 
     send({'t': 'worker.spawn', 'deskId': 'desk-1', 'kind': 'shell'});
     final update = await next((m) => m['t'] == 'worker.update' && (m['worker'] as Map)['deskId'] == 'desk-1');
@@ -169,6 +174,10 @@ void main() {
     send({'t': 'worker.attach', 'workerId': id});
     final snapshot = await next((m) => m['t'] == 'term.snapshot');
     expect(snapshot, containsPair('workerId', id));
+    final watched = await next(
+      (m) => m['t'] == 'worker.update' && ((m['worker'] as Map)['viewerIds'] as List).isNotEmpty,
+    );
+    expect((watched['worker'] as Map)['viewerIds'], [welcome['you']]);
 
     // Typed until the shell is up to answer: it may still be starting.
     var output = '';

@@ -44,7 +44,19 @@ class HeadlessTerminal {
 
   /// Parses [data] onto the screen. Unlike xterm.js this is synchronous: once it returns, the
   /// screen shows everything written so far.
-  void write(String data) => term.write(data);
+  void write(String data) {
+    // xterm_core ignores a full reset (RIS, ESC c); the mouse it switched on must go with it, or a
+    // snapshot would hand a browser mouse reports nobody reads any more.
+    if (!data.contains('\x1bc')) return term.write(data);
+    final parts = data.split('\x1bc');
+    for (var i = 0; i < parts.length; i++) {
+      if (i > 0) {
+        term.setMouseMode(MouseMode.none);
+        term.setMouseReportMode(MouseReportMode.normal);
+      }
+      if (parts[i].isNotEmpty) term.write(parts[i]);
+    }
+  }
 
   void resize(int cols, int rows) => term.resize(cols, rows);
 
