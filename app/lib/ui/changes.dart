@@ -37,6 +37,7 @@ void openChanges(OfficeScope scope, String workerId, {VoidCallback? onTerminal})
       if (identical(_current?.modal, modal)) _current = null;
     },
   );
+  modal.doing = "🌿 looking over ${scope.store.workers[workerId]!.name}'s changes";
   _current = (workerId: workerId, modal: modal);
   previous?.modal.close();
 }

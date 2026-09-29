@@ -8,7 +8,13 @@ import 'package:vector_math/vector_math.dart' as vm;
 
 void main() {
   const size = Size(1000, 800);
-  final cam = PerspectiveCamera(position: vm.Vector3(0, 0, 0), target: vm.Vector3(0, 0, 1), fovRadiansY: math.pi / 3, fovNear: 0.1, fovFar: 100);
+  final cam = PerspectiveCamera(
+    position: vm.Vector3(0, 0, 0),
+    target: vm.Vector3(0, 0, 1),
+    fovRadiansY: math.pi / 3,
+    fovNear: 0.1,
+    fovFar: 100,
+  );
 
   test('a worker in view gets no arrow; one off to a side or behind does', () {
     expect(bearingFrom(cam, vm.Vector3(0, 0, 5), size), isNull);
@@ -24,7 +30,11 @@ void main() {
 
   test('marks go to the edge of the box, the way they point', () {
     final box = compassBox(size);
-    final m = placeMarks([('r', const Offset(10, 0)), ('u', const Offset(0, -3)), ('d', const Offset(0, 1))], size, box);
+    final m = placeMarks(
+      [('r', const Offset(10, 0)), ('u', const Offset(0, -3)), ('d', const Offset(0, 1))],
+      size,
+      box,
+    );
     expect(m.map((p) => (p.id, p.edge)), [('r', CompassEdge.right), ('u', CompassEdge.top), ('d', CompassEdge.bottom)]);
     expect(m[0].x, box.right);
     expect(m[0].y, size.height / 2);

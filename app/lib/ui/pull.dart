@@ -1188,7 +1188,7 @@ class _LabelButton extends StatelessWidget {
 
 /// Opens a pull request's window, on the tab you used last.
 ModalHandle openPull(OfficeScope scope, GhPull first) =>
-    ModalStack.instance.show((modal) => _PullWindow(modal: modal, scope: scope, first: first));
+    ModalStack.instance.show((modal) => _PullWindow(modal: modal, scope: scope, first: first))..doing = '🔀 reading PR #${first.number}';
 
 class _Section {
   _Section({required this.big});
@@ -2190,7 +2190,7 @@ class _StatusBox extends StatelessWidget {
 // ---- The issue window -----------------------------------------------------------------------------
 
 ModalHandle openIssue(OfficeScope scope, GhIssue first) =>
-    ModalStack.instance.show((modal) => _IssueWindow(modal: modal, scope: scope, first: first));
+    ModalStack.instance.show((modal) => _IssueWindow(modal: modal, scope: scope, first: first))..doing = '📋 reading issue #${first.number}';
 
 class _IssueWindow extends StatefulWidget {
   const _IssueWindow({required this.modal, required this.scope, required this.first});

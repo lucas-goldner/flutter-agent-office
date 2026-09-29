@@ -25,7 +25,8 @@ const _cork = Color(0xFFD8A86A);
 
 /// Opens the issues or pull requests board.
 ModalHandle openBoard(OfficeScope scope, BoardKind kind) =>
-    ModalStack.instance.show((modal) => _BoardWindow(modal: modal, scope: scope, kind: kind));
+    ModalStack.instance.show((modal) => _BoardWindow(modal: modal, scope: scope, kind: kind))
+      ..doing = kind == BoardKind.issues ? '📋 at the issues board' : '🔀 at the PR board';
 
 class _BoardWindow extends StatefulWidget {
   const _BoardWindow({required this.modal, required this.scope, required this.kind});

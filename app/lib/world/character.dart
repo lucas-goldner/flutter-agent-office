@@ -358,11 +358,44 @@ class Person {
     _label = _labels.add(
       WorldLabel(
         anchor: root,
-        offset: vm.Vector3(0, 2.0, 0),
+        offset: vm.Vector3(0, 2.0 + _doingLift, 0),
         alignment: Alignment.center,
         child: TagPill('$name$suffix', bg: '#fffaf3', size: 40),
       ),
     );
+  }
+
+  // ---- The line under the name tag: what they have open, or where they are (see whereabouts) ----
+
+  WorldLabel? _doing;
+  String _doingText = '';
+
+  /// How far the line under the name tag lifts the name tag (and the mic badge, and chat bubbles).
+  double get _doingLift => _doing != null ? 0.25 : 0;
+
+  /// Where a chat bubble goes: over the name tag, however high it sits.
+  double get bubbleY => 2.45 + _doingLift;
+
+  /// Puts a smaller line under the name tag, like "💻 in Pixel's terminal"; null (or '') takes it away.
+  void setDoing(String? text) {
+    text ??= '';
+    if (text == _doingText) return;
+    _doingText = text;
+    _labels.remove(_doing);
+    _doing = null;
+    if (text.isNotEmpty) {
+      _doing = _labels.add(
+        WorldLabel(
+          anchor: root,
+          offset: vm.Vector3(0, 1.95, 0),
+          alignment: Alignment.center,
+          child: TagPill(text, bg: '#e9ecef', size: 26),
+        )..visible = _label?.visible ?? true,
+      );
+    }
+    // The name tag and the mic badge move up out of the way of the line under them.
+    _label?.offset = vm.Vector3(0, 2.0 + _doingLift, 0);
+    _mic.position = vm.Vector3(_mic.position.x, 2.25 + _doingLift, _mic.position.z);
   }
 
   /// How loud this person is talking right now (0 when silent); drives the mic badge and the mouth.
@@ -372,7 +405,10 @@ class Person {
     _mic.visible = _speaking;
   }
 
-  void showLabel(bool v) => _label?.visible = v;
+  void showLabel(bool v) {
+    _label?.visible = v;
+    _doing?.visible = v;
+  }
 
   /// Reach out with the right hand, as if pressing or grabbing something in front of you.
   void reach() => _reachT = 0;
@@ -496,6 +532,8 @@ class Person {
   void dispose() {
     _labels.remove(_label);
     _label = null;
+    _labels.remove(_doing);
+    _doing = null;
   }
 }
 

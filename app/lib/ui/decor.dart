@@ -105,7 +105,7 @@ const _tip = 'Paste a link to an image. Online, right-click any picture and choo
 
 /// Pick an image, a title and a frame. Editing a picture ([initial]) fills them in.
 ModalHandle openHangDialog({Decoration? initial, required void Function(HangChoice choice) onDone}) =>
-    ModalStack.instance.show((modal) => _HangWindow(modal: modal, initial: initial, onDone: onDone));
+    ModalStack.instance.show((modal) => _HangWindow(modal: modal, initial: initial, onDone: onDone))..doing = '🖼️ hanging a picture';
 
 class _HangWindow extends StatefulWidget {
   const _HangWindow({required this.modal, required this.initial, required this.onDone});

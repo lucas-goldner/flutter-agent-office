@@ -52,10 +52,12 @@ import '../ui/arcade.dart';
 import '../ui/terminal.dart';
 import '../ui/upgrade.dart';
 import '../ui/whiteboard.dart';
+import '../ui/whereabouts.dart';
 import '../ui/whiteboard_logic.dart' show othersDrawing, whiteboardHint;
 import '../ui/usage.dart' show hiringPaused, usageLabel, usageTitle;
 import '../ui/worker_text.dart' show statusLabel;
 import '../voice/office_voice.dart';
+import '../walkto.dart';
 import '../world/board_faces.dart';
 import '../world/character.dart';
 import '../world/collider.dart';
@@ -191,6 +193,7 @@ class OfficeController implements OfficeActions {
       onHelp: openHelp,
       onOpenWorker: openWorkerTerminal,
       onEditProfile: editProfile,
+      onWalkTo: walkTo,
     ),
   );
 
@@ -295,6 +298,7 @@ class OfficeController implements OfficeActions {
     root.add(me.root);
     player = PlayerController(office.colliders)..view = settings.view;
     player.onStand = _gotUp;
+    player.onPathEnd = _pathEnded;
     _placeInCar();
     hands = Hands(store.profile.color, me.skinColor);
     root.add(hands.root);
@@ -434,6 +438,9 @@ class OfficeController implements OfficeActions {
           _arrive();
         }
         if (player.seat != null) net.send(SitCmd(seat: player.seat!.key));
+        // After a reconnect the office has forgotten what we're doing.
+        _doingSent = null;
+        _sendDoing();
         // Back from a restart on another version: this page's code is stale, so load the new one.
         if (_bootVersion.isEmpty) {
           _bootVersion = m.version;
@@ -517,6 +524,8 @@ class OfficeController implements OfficeActions {
   @override
   void ride(String floorId) {
     if (_riding != null || floorId == store.floor) return;
+    // Another floor is somewhere else: a walk over to someone here ends (walkTo rides on with its own).
+    if (!_walkRide) _stopWalking();
     ModalStack.instance.closeAll();
     hanger.cancel();
     final inside = inElevator(player.pos.x, player.pos.z);
@@ -575,6 +584,124 @@ class OfficeController implements OfficeActions {
     });
   }
 
+  // ---- Walking over to someone, and what everyone's up to ---------------------------------------
+
+  /// Near enough to talk: where a walk over to someone ends.
+  static const double _nearEnough = 1.6;
+
+  /// Who you're on your way to (clicked in the people list), and when to look again at where they've got to.
+  ({String id, double replanAt})? _walkingTo;
+
+  /// The elevator ride is walkTo's own, so it doesn't end the walk.
+  bool _walkRide = false;
+
+  /// Walks you over to a teammate, riding the elevator first if they're on another floor. A key of yours takes over.
+  void walkTo(String id) {
+    final p = store.peers[id];
+    if (p == null || id == store.you) return;
+    if (!store.onMyFloor(p) && p.floor == null) return;
+    if (player.seat != null) standUp();
+    _walkingTo = (id: id, replanAt: 0);
+    if (store.onMyFloor(p)) {
+      toast('🚶 Walking over to ${p.name}');
+    } else {
+      final floor = store.floors.where((f) => f.id == p.floor).firstOrNull?.name ?? 'other';
+      toast('🛗 Taking the elevator to ${p.name}, on the $floor floor');
+      _walkRide = true;
+      try {
+        ride(p.floor!);
+      } finally {
+        _walkRide = false;
+      }
+    }
+  }
+
+  void _stopWalking() {
+    _walkingTo = null;
+    player.stopWalking();
+  }
+
+  /// Where they are, sitting or standing.
+  WalkSpot _whereIs(PeerInfo p) {
+    final s = p.seat != null ? seatAt(p.seat!) : null;
+    return s != null ? (x: s.x, y: s.y, z: s.z) : (x: p.x, y: p.y, z: p.z);
+  }
+
+  /// There: stop, and turn to them.
+  void _arrivedAt(WalkSpot at) {
+    _stopWalking();
+    final yaw = math.atan2(at.x - player.pos.x, at.z - player.pos.z);
+    player.facing = yaw;
+    player.camYaw = yaw - math.pi;
+  }
+
+  double _flat(WalkSpot at) => math.sqrt(math.pow(at.x - player.pos.x, 2) + math.pow(at.z - player.pos.z, 2));
+
+  /// Each frame: keep heading for them, looking again every so often in case they've moved on.
+  void _walkTick(double now) {
+    final w = _walkingTo;
+    if (w == null || _riding != null) return;
+    // Opening something on the way over to someone is stopping there.
+    if (ModalStack.instance.open) return _stopWalking();
+    if (!player.enabled) return;
+    // Sitting down on the way is stopping there.
+    if (player.seat != null) return _stopWalking();
+    final p = store.peers[w.id];
+    if (p == null || !store.onMyFloor(p)) {
+      toast(p != null ? '${p.name} left the floor before you got there' : 'They left the office', ToastKind.warn);
+      return _stopWalking();
+    }
+    final at = _whereIs(p);
+    if (_flat(at) < _nearEnough && (at.y - player.pos.y).abs() < 1) return _arrivedAt(at);
+    if (now < w.replanAt) return;
+    _walkingTo = (id: w.id, replanAt: now + 800);
+    player.walkPath(wayTo((x: player.pos.x, y: player.pos.y, z: player.pos.z), at));
+  }
+
+  void _pathEnded(PathEnd why) {
+    final w = _walkingTo;
+    if (w == null) return;
+    if (why == PathEnd.cancelled) {
+      _walkingTo = null;
+      return;
+    }
+    final p = store.peers[w.id];
+    if (p == null) return _stopWalking();
+    final at = _whereIs(p);
+    // As near as the way goes (they're behind a desk, or on the couch): that'll do.
+    if (_flat(at) < 3) return _arrivedAt(at);
+    if (why == PathEnd.stuck) {
+      toast("🚧 Couldn't find a way over to ${p.name}", ToastKind.warn);
+      _stopWalking();
+    } else {
+      _walkingTo = (id: w.id, replanAt: 0);
+    }
+  }
+
+  /// What you last told the office you have open (see PeerInfo.doing).
+  String? _doingSent;
+  double _presenceAt = 0;
+
+  /// Tells everyone what you have open now, for the line under your name tag.
+  void _sendDoing() {
+    final what = clipDoing(ModalStack.instance.doingNow);
+    if (what == _doingSent) return;
+    _doingSent = what;
+    net.send(DoingCmd(what: what));
+  }
+
+  /// A few times a second: what you have open, and what people are up to (it changes as they walk
+  /// about, not only when they open something).
+  void _presenceTick(double now) {
+    if (now - _presenceAt < 200) return;
+    _presenceAt = now;
+    _sendDoing();
+    for (final e in _remotes.entries) {
+      final p = store.peers[e.key];
+      if (p != null) e.value.person.setDoing(whereabouts(p));
+    }
+  }
+
   // ---- Peers ------------------------------------------------------------------------------------
 
   void _syncPeers() {
@@ -601,6 +728,7 @@ class OfficeController implements OfficeActions {
       }
       r.person.setSmoking(peer.smoking ?? false);
       r.person.sit(peer.seat != null ? seatAt(peer.seat!)?.hips : null);
+      r.person.setDoing(whereabouts(peer));
     }
     for (final id in _remotes.keys.toList()) {
       final peer = store.peers[id];
@@ -621,7 +749,7 @@ class OfficeController implements OfficeActions {
     r.bubble = labels.add(
       WorldLabel(
         anchor: r.person.root,
-        offset: vm.Vector3(0, 2.45, 0),
+        offset: vm.Vector3(0, r.person.bubbleY, 0),
         child: TagPill('💬 ${clip(text, 60)}', bg: '#ffffff', size: 34),
       ),
     );
@@ -893,6 +1021,7 @@ class OfficeController implements OfficeActions {
   void _standAt(DeskDef desk) {
     if (player.seat != null) standUp();
     if (hanger.active) hanger.cancel();
+    _stopWalking();
     final spot = deskSeat(desk, desk.beanbag ? 1.6 : 2.4);
     player.pos.setValues(spot.x, 0, spot.z);
     player.vy = 0;
@@ -1623,6 +1752,7 @@ class OfficeController implements OfficeActions {
     hands.holdMug(mug);
 
     _readKeys();
+    _walkTick(now);
     player.update(dt);
     me.root.position = vm.Vector3(player.pos.x, player.pos.y + player.stepOffset, player.pos.z);
     me.root.rotation = vm.Quaternion.axisAngle(vm.Vector3(0, 1, 0), player.facing);
@@ -1725,6 +1855,7 @@ class OfficeController implements OfficeActions {
         math.sqrt(math.pow(desk.x - player.camPos.x, 2) + math.pow(desk.z - player.camPos.z, 2)),
       );
     }
+    _presenceTick(now);
     voiceRoom.tick(now, me, {for (final e in _remotes.entries) e.key: e.value.person}, player.pos);
     departures.update(dt, t);
     dog.update(dt);

@@ -80,10 +80,10 @@ List<PlacedMark> placeMarks(List<(String id, Offset dir)> ways, Size size, Rect 
     final edge = x <= box.left + 1
         ? CompassEdge.left
         : x >= box.right - 1
-            ? CompassEdge.right
-            : y <= box.top + 1
-                ? CompassEdge.top
-                : CompassEdge.bottom;
+        ? CompassEdge.right
+        : y <= box.top + 1
+        ? CompassEdge.top
+        : CompassEdge.bottom;
     placed.add(PlacedMark(id, x, y, math.atan2(d.dy, d.dx), edge));
   }
   for (final edge in CompassEdge.values) {
@@ -109,15 +109,21 @@ List<PlacedMark> placeMarks(List<(String id, Offset dir)> ways, Size size, Rect 
 /// Where the marks can go: clear of the top bar, the side panels, and the hint and chat along the
 /// bottom, and never so tight they crowd the middle of the screen.
 Rect compassBox(Size size) => Rect.fromLTRB(
-      kCompassMargin,
-      math.min(kCompassMargin + 64, size.height / 2 - 60),
-      math.max(size.width - kCompassMargin, size.width / 2 + 60),
-      math.max(size.height - 130, size.height / 2 + 60),
-    );
+  kCompassMargin,
+  math.min(kCompassMargin + 64, size.height / 2 - 60),
+  math.max(size.width - kCompassMargin, size.width / 2 + 60),
+  math.max(size.height - 130, size.height / 2 + 60),
+);
 
 /// The arrows, re-placed every frame from [bearings] and the [camera].
 class CompassLayer extends StatefulWidget {
-  const CompassLayer({super.key, required this.camera, required this.bearings, required this.waiting, required this.onNext});
+  const CompassLayer({
+    super.key,
+    required this.camera,
+    required this.bearings,
+    required this.waiting,
+    required this.onNext,
+  });
 
   final PerspectiveCamera Function() camera;
 
@@ -149,35 +155,39 @@ class _CompassLayerState extends State<CompassLayer> with SingleTickerProviderSt
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
-        builder: (context, c) {
-          final size = c.biggest;
-          final cam = widget.camera();
-          final bs = widget.bearings();
-          final byId = {for (final b in bs) b.id: b};
-          final ways = <(String, Offset)>[
-            for (final b in bs)
-              if (bearingFrom(cam, b.at, size) case final d?) (b.id, d),
-          ];
-          final marks = placeMarks(ways, size, compassBox(size));
-          return Stack(
-            clipBehavior: Clip.hardEdge,
-            children: [
-              for (final m in marks)
-                Positioned(
-                  left: m.x.roundToDouble(),
-                  top: m.y.roundToDouble(),
-                  child: IgnorePointer(child: _Mark(bearing: byId[m.id]!, angle: m.angle)),
-                ),
-              Positioned(
-                top: 64,
-                left: 0,
-                right: 0,
-                child: Center(child: _WaitingChip(waiting: widget.waiting, onTap: widget.onNext)),
+    builder: (context, c) {
+      final size = c.biggest;
+      final cam = widget.camera();
+      final bs = widget.bearings();
+      final byId = {for (final b in bs) b.id: b};
+      final ways = <(String, Offset)>[
+        for (final b in bs)
+          if (bearingFrom(cam, b.at, size) case final d?) (b.id, d),
+      ];
+      final marks = placeMarks(ways, size, compassBox(size));
+      return Stack(
+        clipBehavior: Clip.hardEdge,
+        children: [
+          for (final m in marks)
+            Positioned(
+              left: m.x.roundToDouble(),
+              top: m.y.roundToDouble(),
+              child: IgnorePointer(
+                child: _Mark(bearing: byId[m.id]!, angle: m.angle),
               ),
-            ],
-          );
-        },
+            ),
+          Positioned(
+            top: 64,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: _WaitingChip(waiting: widget.waiting, onTap: widget.onNext),
+            ),
+          ),
+        ],
       );
+    },
+  );
 }
 
 class _Mark extends StatelessWidget {
@@ -233,7 +243,12 @@ class _Mark extends StatelessWidget {
                   constraints: const BoxConstraints(maxWidth: 120),
                   padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
                   decoration: BoxDecoration(color: Swatch.ink, borderRadius: BorderRadius.circular(8)),
-                  child: Text(bearing.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: heavy(11, color: Swatch.paper, weight: FontWeight.w900)),
+                  child: Text(
+                    bearing.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: heavy(11, color: Swatch.paper, weight: FontWeight.w900),
+                  ),
                 ),
               ],
             ),
@@ -252,42 +267,45 @@ class _WaitingChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => ValueListenableBuilder(
-        valueListenable: waiting,
-        builder: (context, v, _) {
-          final (text, allDone) = v;
-          if (text.isEmpty) return const SizedBox.shrink();
-          return Tooltip(
-            message: 'Go to the worker that has waited longest on someone (N)',
-            child: Semantics(
-              button: true,
-              child: GestureDetector(
-                onTap: onTap,
-                child: MouseRegion(
-                  cursor: SystemMouseCursors.click,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: allDone ? const Color(0xFFD8F5E3) : const Color(0xFFFFE3EA),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: Swatch.ink, width: 2),
+    valueListenable: waiting,
+    builder: (context, v, _) {
+      final (text, allDone) = v;
+      if (text.isEmpty) return const SizedBox.shrink();
+      return Tooltip(
+        message: 'Go to the worker that has waited longest on someone (N)',
+        child: Semantics(
+          button: true,
+          child: GestureDetector(
+            onTap: onTap,
+            child: MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                decoration: BoxDecoration(
+                  color: allDone ? const Color(0xFFD8F5E3) : const Color(0xFFFFE3EA),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Swatch.ink, width: 2),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(text, style: heavy(13, weight: FontWeight.w900)),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                      decoration: BoxDecoration(color: Swatch.ink, borderRadius: BorderRadius.circular(6)),
+                      child: Text(
+                        'N',
+                        style: heavy(12, color: Swatch.paper, weight: FontWeight.w900),
+                      ),
                     ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(text, style: heavy(13, weight: FontWeight.w900)),
-                        const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                          decoration: BoxDecoration(color: Swatch.ink, borderRadius: BorderRadius.circular(6)),
-                          child: Text('N', style: heavy(12, color: Swatch.paper, weight: FontWeight.w900)),
-                        ),
-                      ],
-                    ),
-                  ),
+                  ],
                 ),
               ),
             ),
-          );
-        },
+          ),
+        ),
       );
+    },
+  );
 }

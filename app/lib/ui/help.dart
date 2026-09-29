@@ -36,6 +36,7 @@ const List<(String, String)> helpRows = [
   ('B', 'Open a shared shell (dev servers, git, tests) at an empty desk'),
   ('R', 'Resume a sleeping worker'),
   ('X', 'Send a worker home (frees the desk)'),
+  ('👥', 'Click someone under "In the office" to walk over to them (on another floor, you ride the elevator first). The line under their name says what they have open or where they are'),
   ('N', "Next worker that needs you: go to whoever has waited longest (needs input, or done and nobody's looked), and again for the next one. Arrows at the edge of the screen point to the ones out of sight"),
   ('F', 'Hang a picture from the web on a wall. Look at a picture and press E to move, edit or take it down'),
   (

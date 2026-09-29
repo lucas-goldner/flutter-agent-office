@@ -2,21 +2,22 @@ import 'package:agent_office/nextup.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:office_shared/protocol.dart';
 
-WorkerInfo worker(String id, WorkerStatus status, {int? waitingSince, bool acked = false, int createdAt = 0}) => WorkerInfo(
-  id: id,
-  kind: WorkerKind.agent,
-  deskId: 'desk-$id',
-  name: id,
-  color: '#fff',
-  status: status,
-  acked: acked,
-  waitingSince: waitingSince,
-  createdBy: 'test',
-  createdAt: createdAt,
-  cols: 80,
-  rows: 24,
-  viewers: const [],
-);
+WorkerInfo worker(String id, WorkerStatus status, {int? waitingSince, bool acked = false, int createdAt = 0}) =>
+    WorkerInfo(
+      id: id,
+      kind: WorkerKind.agent,
+      deskId: 'desk-$id',
+      name: id,
+      color: '#fff',
+      status: status,
+      acked: acked,
+      waitingSince: waitingSince,
+      createdBy: 'test',
+      createdAt: createdAt,
+      cols: 80,
+      rows: 24,
+      viewers: const [],
+    );
 
 List<String?> ids(Iterable<WorkerInfo?> ws) => [for (final w in ws) w?.id];
 
@@ -58,7 +59,10 @@ void main() {
   });
 
   test("N skips the worker you're standing at, unless it's the only one waiting", () {
-    final workers = [worker('a', WorkerStatus.needsInput, waitingSince: 100), worker('b', WorkerStatus.done, waitingSince: 200)];
+    final workers = [
+      worker('a', WorkerStatus.needsInput, waitingSince: 100),
+      worker('b', WorkerStatus.done, waitingSince: 200),
+    ];
     expect(NextUp().next(workers, 'a')?.id, 'b');
     expect(NextUp().next([workers[0]], 'a')?.id, 'a');
     expect(NextUp().next([worker('x', WorkerStatus.working)]), isNull);
@@ -72,11 +76,13 @@ void main() {
 
   test('the waiting chip counts who needs input and who is done', () {
     expect(
-      waitingLabel(waitingInOrder([
-        worker('a', WorkerStatus.needsInput, waitingSince: 1),
-        worker('b', WorkerStatus.needsInput, waitingSince: 2),
-        worker('c', WorkerStatus.done, waitingSince: 3),
-      ])),
+      waitingLabel(
+        waitingInOrder([
+          worker('a', WorkerStatus.needsInput, waitingSince: 1),
+          worker('b', WorkerStatus.needsInput, waitingSince: 2),
+          worker('c', WorkerStatus.done, waitingSince: 3),
+        ]),
+      ),
       '🙋 2 waiting · ✅ 1 done',
     );
     expect(waitingLabel([worker('c', WorkerStatus.done, waitingSince: 3)]), '✅ 1 done');
