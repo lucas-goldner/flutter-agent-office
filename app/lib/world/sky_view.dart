@@ -81,10 +81,7 @@ class SkyView {
     // Halos round the bulbs at night.
     _haloMat = UnlitMaterial()..alphaMode = AlphaMode.blend;
     _halos = InstancedMesh(geometry: verticalPlane(1, 1), material: _haloMat, sortTransparentInstances: false);
-    for (final h in _night.halos) {
-      final c = hex(h.color);
-      _halos.addInstance(_hidden, color: vm.Vector4(c.r, c.g, c.b, 1));
-    }
+    _addHalos();
     _haloNode = _instanced('halos', _halos);
     root.add(_haloNode);
     _blob(0.25).then((t) => _haloMat.baseColorTexture = t);
@@ -147,6 +144,17 @@ class SkyView {
     return spin == 0 ? m : (m..rotateZ(spin));
   }
 
+  /// How many halos [_halos] has room for: one per lamp in [NightParts.halos] so far.
+  int _haloCount = 0;
+
+  void _addHalos() {
+    for (final h in _night.halos.skip(_haloCount)) {
+      final c = hex(h.color);
+      _halos.addInstance(_hidden, color: vm.Vector4(c.r, c.g, c.b, 1));
+    }
+    _haloCount = _night.halos.length;
+  }
+
   /// Every frame: [cam] is the camera in office space.
   void update(double dt, double t, SkyModel m, vm.Vector3 cam) {
     // Stars, the sun and the moon ride along with you, so they look infinitely far off.
@@ -170,6 +178,8 @@ class SkyView {
     if (_haloNode.visible) {
       _haloMat.baseColorFactor = vm.Vector4(1, 1, 1, m.lampsOn * 0.85);
       final halos = _night.halos;
+      // Rooms built after the sky (the meeting room, the roof) bring lamps of their own.
+      if (halos.length > _haloCount) _addHalos();
       // The ones down by the street are as far down as the street is from the floor you're on.
       final drop = _night.street - streetY;
       for (var i = 0; i < halos.length; i++) {
