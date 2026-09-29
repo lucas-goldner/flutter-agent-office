@@ -9,12 +9,14 @@ import 'dart:ui' as ui;
 import 'package:flutter/painting.dart';
 import 'package:flutter_scene/scene.dart';
 import 'package:office_shared/decor.dart' show WallRect;
+import 'package:office_shared/hoop.dart' show Hoop;
 import 'package:office_shared/layout.dart';
 import 'package:office_shared/nav.dart' show deskPoint;
 import 'package:vector_math/vector_math.dart' as vm;
 
 import '../../ui/screen_paint.dart';
 import '../collider.dart';
+import '../hoop.dart';
 import '../text.dart';
 import '../toon.dart';
 import 'geo.dart';
@@ -32,7 +34,15 @@ const Map<StationKind, String> _kioskSign = {
 
 /// What [addRooms] built that the office needs to reach later.
 class RoomsView {
-  RoomsView({required this.cabinetScreen, required this.machineScreen, required this.idleAgentSpots});
+  RoomsView({
+    required this.cabinetScreen,
+    required this.machineScreen,
+    required this.idleAgentSpots,
+    required this.hoop,
+  });
+
+  /// The basketball hoop on the west wall (the ball is office/ball_play.dart's).
+  final HoopView hoop;
 
   /// The arcade cabinet's screen: 4:3, leaning back a little.
   final Face cabinetScreen;
@@ -90,7 +100,19 @@ RoomsView addRooms(Office office) {
   office.interactables.add(cabinet.interactable);
   fixture(Side.east, Cabinet.z, Cabinet.height / 2, Cabinet.width + 0.1, Cabinet.height);
 
+  // The basketball hoop, on the west wall between the exit door and the kitchen.
+  final hoop = buildHoop();
+  group.add(hoop.group);
+  fixture(
+    Side.west,
+    Hoop.z,
+    (Hoop.board.bottom - 0.6 + Hoop.board.top + 0.1) / 2,
+    Hoop.board.width + 0.2,
+    Hoop.board.top - Hoop.board.bottom + 0.7,
+  );
+
   return RoomsView(
+    hoop: hoop,
     cabinetScreen: cabinet.screen,
     machineScreen: Face(machineNode, machineMat, MachineMonitor.width, MachineMonitor.height),
     idleAgentSpots: spots,

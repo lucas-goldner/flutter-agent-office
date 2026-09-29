@@ -1300,6 +1300,13 @@ class OfficeController implements OfficeActions {
       hint.value = parts;
       return;
     }
+    final held = ModalStack.instance.open ? null : rooms.heldHint();
+    if (held != null) {
+      if (held.$1 == _hintKey) return;
+      _hintKey = held.$1;
+      hint.value = held.$2;
+      return;
+    }
     final t = _target;
     if (t == null || ModalStack.instance.open) {
       if (_hintKey.isNotEmpty) {
@@ -1482,6 +1489,7 @@ class OfficeController implements OfficeActions {
 
   /// A key went down while the office has the keyboard. True when it was one of the office's own.
   bool onKey(KeyEvent e) {
+    if (!ModalStack.instance.open && !hud.typing && rooms.key(e)) return true;
     if (e is! KeyDownEvent) return false;
     if (ModalStack.instance.open || hud.typing) return false;
     final hk = HardwareKeyboard.instance;
@@ -1507,6 +1515,7 @@ class OfficeController implements OfficeActions {
   /// A click (not a drag) on the scene, at [screen] in a view of [view] size.
   void onClick(Offset screen, Size view) {
     if (ModalStack.instance.open) return;
+    if (rooms.click()) return;
     if (hanger.active) {
       _reachOut();
       return hanger.place(screen);
@@ -1705,7 +1714,7 @@ class OfficeController implements OfficeActions {
       _target = null;
     } else if (firstPerson) {
       final aim = aimedAt(Offset(view.width / 2, view.height / 2), view);
-      _target = aim != null && aim.near ? aim.it : _mySeat();
+      _target = aim != null && aim.near ? aim.it : _mySeat() ?? rooms.nearby();
     } else {
       _target = _mySeat() ?? _pickTarget();
     }
@@ -1728,6 +1737,9 @@ class OfficeController implements OfficeActions {
   /// Set by the page: whether the mouse can be captured for looking around, and whether it is.
   bool lockAvailable = true;
   bool pointerLocked = false;
+
+  /// Someone else on your floor, as you see them.
+  Person? personOf(String id) => _remotes[id]?.person;
 
   static double _yawOf(vm.Quaternion q) {
     final f = q.rotated(vm.Vector3(0, 0, 1));

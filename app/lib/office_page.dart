@@ -9,6 +9,7 @@ import 'interop/pointer_lock.dart';
 import 'office/controller.dart';
 import 'office_scope.dart';
 import 'ui/arcade.dart';
+import 'ui/shot_meter.dart';
 import 'ui/hud.dart';
 import 'ui/modal.dart';
 import 'world/hands.dart';
@@ -185,6 +186,16 @@ class _OfficePageState extends State<OfficePage> {
                         child: const ColoredBox(color: Color(0xFF14151F)),
                       ),
                     ),
+                  ),
+                ),
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 120,
+                  child: ValueListenableBuilder(
+                    valueListenable: c.rooms.meter,
+                    builder: (context, m, _) =>
+                        m == null ? const SizedBox.shrink() : Center(child: ShotMeterBar(at: m.at, sweet: m.aimed)),
                   ),
                 ),
                 Positioned.fill(

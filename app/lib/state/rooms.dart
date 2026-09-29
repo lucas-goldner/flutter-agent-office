@@ -23,6 +23,9 @@ class Rooms {
   /// The basketball: who has it, or how it was last thrown, and when ([nowMs]) that throw left their hands.
   BallState ball = const BallState();
   double ballSince = 0;
+
+  /// The last ball news came with arriving on a floor (or a welcome), not as a `ball` message.
+  bool ballFromEnter = false;
   final ChangeNotifier ballChanged = _Notifier();
 
   /// The meeting room: who's meeting about what, and the meetings before.
@@ -43,6 +46,7 @@ class Rooms {
     cabinet = v.cabinet;
     cabinetFrame = v.cabinet.frame;
     _setBall(v.ball);
+    ballFromEnter = true;
     meeting = v.meeting;
     _emit(cabinetChanged);
     _emit(cabinetFrameChanged);
@@ -72,6 +76,7 @@ class Rooms {
         _emit(cabinetFrameChanged);
       case BallMsg m:
         _setBall(m.ball);
+        ballFromEnter = false;
         _emit(ballChanged);
       case MeetingMsg m:
         meeting = m.state;

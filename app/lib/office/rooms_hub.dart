@@ -3,6 +3,7 @@
 // bookshelf and the meeting room. The controller hands it what you aim at and the keys you press, and
 // it moves the camera when you're up at a screen.
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_scene/scene.dart' show PerspectiveCamera;
 import 'package:office_shared/cabinet.dart';
@@ -11,6 +12,7 @@ import 'package:office_shared/protocol.dart';
 import 'package:office_shared/status.dart';
 
 import '../ui/arcade.dart' show ScreenTexture;
+import '../state/store.dart' show nowMs;
 import '../ui/cabinet.dart';
 import '../ui/hud_parts.dart' hide statusLabel;
 import '../ui/modal.dart';
@@ -22,6 +24,7 @@ import '../world/character.dart';
 import '../world/collider.dart';
 import '../world/machine.dart';
 import '../world/office/rooms.dart';
+import 'ball_play.dart';
 import 'controller.dart';
 
 /// What each board agent is for: its board's icon, what it offers on the card over its head, and an example ask.
@@ -56,6 +59,7 @@ class RoomsHub {
   final OfficeController c;
   late final RoomsView view;
   late final ArcadeCabinet cabinet;
+  late final BallPlay ball;
   late final ScreenTexture _machine;
   final MachinePainter _machinePainter = MachinePainter();
   final List<({Worker model, String deskId})> _idleAgents = [];
@@ -81,6 +85,14 @@ class RoomsHub {
       if (_machinePainter.changed(c.store.rooms.machine)) _machine.paint();
     });
 
+    // The floor's basketball, by the hoop.
+    ball = BallPlay(c, view.hoop, () => c.office.colliders);
+    c.office.group
+      ..add(ball.node)
+      ..add(ball.popsAnchor);
+    c.office.interactables.add(ball.ball.interactable);
+    c.store.rooms.ballChanged.addListener(ball.news);
+
     // The board agents waiting by their boards before anyone has asked them anything.
     for (final def in stations) {
       final kind = def.station!;
@@ -95,11 +107,16 @@ class RoomsHub {
 
   void dispose() => cabinet.dispose();
 
+  /// The wind-up meter to show over the hint (null when you're not winding up).
+  ValueListenable<ShotMeter?> get meter => ball.meterShown;
+
   /// Anywhere between your view and a screen you're using: your first-person hands would cover it.
   bool get zoomed => cabinet.zoomed;
 
   /// Moves things on, and the camera toward whichever screen you're using. Returns the camera to draw with.
   PerspectiveCamera update(PerspectiveCamera camera, double dt, double t, Size size) {
+    view.hoop.update(dt);
+    ball.update(nowMs());
     for (final a in _idleAgents) {
       final desk = c.office.desks[a.deskId];
       if (desk != null && desk.vacancy.visible) a.model.update(dt, t);
@@ -130,10 +147,25 @@ class RoomsHub {
       case InteractKind.cabinet:
         if (key == DeskKey.e) cabinet.play();
         return true;
+      case InteractKind.ball:
+        if (key == DeskKey.e) ball.take();
+        return true;
       default:
         return false;
     }
   }
+
+  /// A key (down or up) before the office's own: the ball in your hands takes E and Q.
+  bool key(KeyEvent e) => ball.key(e);
+
+  /// A click on the scene: with the ball in your hands, it winds up and shoots.
+  bool click() => ball.click();
+
+  /// What the hint says whatever you look at: with the ball in hand, how to shoot.
+  (String, List<HintPart>)? heldHint() => ball.holding ? ball.hint() : null;
+
+  /// Something to use that's near without aiming at it: the ball at your feet.
+  Interactable? nearby() => ball.atFeet();
 
   /// E at a board agent: type it a request. It's hired with it when nobody is there yet.
   void _askStation(String deskId) {
@@ -168,6 +200,8 @@ class RoomsHub {
   /// What the hint says at [it], or null when it's not one of the rooms' things.
   (String, List<HintPart>)? hint(Interactable it) {
     switch (it.kind) {
+      case InteractKind.ball:
+        return ball.ballHint();
       case InteractKind.station:
         return it.deskId == null ? ('', const []) : _stationHint(it.deskId!);
       case InteractKind.cabinet:
