@@ -87,9 +87,14 @@ class _Peer {
   bool muted = true;
   bool sharing = false;
   bool? smoking;
+  bool? golfing;
   String? seat;
+  CarriedIssue? carrying;
+  DrinkId? drink;
   final bool? account;
   String? floor;
+  String? doing;
+  bool? reading;
 
   PeerInfo get info => PeerInfo(
     id: id,
@@ -105,9 +110,14 @@ class _Peer {
     muted: muted,
     sharing: sharing,
     smoking: smoking,
+    golfing: golfing,
     seat: seat,
+    carrying: carrying,
+    drink: drink,
     account: account,
     floor: floor,
+    doing: doing,
+    reading: reading,
   );
 }
 
@@ -132,6 +142,15 @@ class _Client {
   final Set<String> stale = {};
   int lastActAt = 0;
   int lastGongAt = 0;
+
+  /// When they last hit a golf ball off the balcony.
+  int lastGolfAt = 0;
+
+  /// When they last blew the DJ's air horn on the roof.
+  int lastHornAt = 0;
+
+  /// A little more lenient than the page's own, so emotes it let through aren't dropped for arriving bunched up.
+  final EmoteBucket emotes = EmoteBucket(emoteEvery * 0.8);
 
   /// Has the floor's whiteboard open.
   bool whiteboard = false;
@@ -230,6 +249,25 @@ double _num(Object? v) => v is num && v.isFinite ? v.toDouble() : 0;
 bool _truthy(Object? v) => v != null && v != false && v != '' && !(v is num && (v == 0 || v.isNaN));
 
 bool _isSafeInteger(double n) => n == n.truncateToDouble() && n.abs() <= 9007199254740991;
+
+/// A spot someone stands on, facing `rotY`.
+typedef _Spot = ({double x, double y, double z, double rotY});
+
+/// Where someone going to another floor says they arrive (see `floor.go`): on the grounds, or nowhere (the elevator).
+_Spot? _arrivalSpot(Object? at) {
+  if (at is! Map) return null;
+  double clamp(Object? v, double lo, double hi) => _num(v).clamp(lo, hi).toDouble();
+  // Down on the street from a floor high up, the street is a long way down.
+  return (
+    x: clamp(at['x'], -60, 60),
+    y: clamp(at['y'], streetBelow(maxFloors - 1), 10),
+    z: clamp(at['z'], -60, 60),
+    rotY: _num(at['rotY']),
+  );
+}
+
+/// A GitHub issue number, else null.
+int? _issueNumber(Object? v) => v is num && v.isFinite && v == v.truncate() && v > 0 ? v.toInt() : null;
 
 final _colorRe = RegExp(r'^#[0-9a-fA-F]{6}$');
 bool _isColor(Object? v) => v is String && _colorRe.hasMatch(v);
@@ -590,8 +628,8 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
   }
 
   /// Everything on a floor, for whoever just arrived there.
-  FloorView floorView(Floor? floor) => FloorView(
-    floor: floor?.id,
+  FloorView floorView(Floor? floor, [String? id]) => FloorView(
+    floor: id ?? floor?.id,
     project: floor?.project,
     workers: floor?.workers.list() ?? const [],
     issues: floor?.github.issues ?? const GhState(items: [], fetchedAt: 0, loading: false),
@@ -608,6 +646,9 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
       people: floor != null ? drawing(floor) : const [],
     ),
   );
+
+  /// The rooftop bar: nobody works up there, so it has none of a floor's things.
+  FloorView roofView() => floorView(null, roof);
   void screensOf(_Client c, Floor? floor) {
     for (final (:workerId, :frame)
         in floor?.workers.fullScreens() ?? const <({String workerId, ScreenFrame frame})>[]) {
@@ -976,9 +1017,8 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     }
   }
 
-  /// Rides `c` to another floor: everyone sees them leave and arrive, and they get the new floor's everything.
-  void goToFloor(_Client c, Floor floor) {
-    if (c.peer.floor == floor.id) return;
+  /// Off the floor (or the roof) `c` was on, to [at] on the next one, or into its elevator car.
+  ({Floor? was, bool wasDrawing}) leave(_Client c, [_Spot? at]) {
     final was = floorOf(c);
     if (was != null) {
       was.workers.detachAll(c.id);
@@ -989,21 +1029,48 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     // The whiteboard downstairs stays downstairs.
     final wasDrawing = c.whiteboard;
     c.whiteboard = false;
-    final spot = elevatorSpot();
+    final e = elevatorSpot();
+    final spot = at ?? (x: e.x, y: 0.0, z: e.z, rotY: 0.0);
     c.peer
-      ..floor = floor.id
       ..x = spot.x
-      ..y = 0
+      ..y = spot.y
       ..z = spot.z
-      ..rotY = 0
+      ..rotY = spot.rotY
       ..moving = false
-      ..seat = null;
+      ..seat = null
+      ..golfing = null
+      // An issue card belongs to the board it came off, which is on the floor they left; a drink stays at the bar.
+      ..carrying = null
+      ..drink = null;
+    return (was: was, wasDrawing: wasDrawing);
+  }
+
+  void arrived(_Client c, ({Floor? was, bool wasDrawing}) left) {
+    broadcast(PeerUpdateMsg(c.peer.info), except: c.id);
+    if (left.wasDrawing) drawingChanged(left.was);
+  }
+
+  /// Takes `c` to another floor: everyone sees them leave and arrive, and they get the new floor's
+  /// everything. They arrive in the elevator, or [at] the spot they came by.
+  void goToFloor(_Client c, Floor floor, [_Spot? at]) {
+    if (c.peer.floor == floor.id) return;
+    final left = leave(c, at);
+    c.peer.floor = floor.id;
     sendTo(c, FloorEnterMsg(peers: [for (final o in clients.values) o.peer.info], view: floorView(floor)));
     screensOf(c, floor);
-    broadcast(PeerUpdateMsg(c.peer.info), except: c.id);
-    if (wasDrawing) drawingChanged(was);
+    arrived(c, left);
     floor.arrived();
     floor.workers.wakeAll();
+    floorsChanged();
+  }
+
+  /// Up to the rooftop bar, by elevator.
+  void goToRoof(_Client c) {
+    if (c.peer.floor == roof) return;
+    final left = leave(c);
+    c.peer.floor = roof;
+    sendTo(c, FloorEnterMsg(peers: [for (final o in clients.values) o.peer.info], view: roofView()));
+    arrived(c, left);
     floorsChanged();
   }
 
@@ -1093,6 +1160,14 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
           ..moving = _truthy(msg['moving']);
         toNeighbors(c, PeerMoveMsg(id: c.id, x: pe.x, y: pe.y, z: pe.z, rotY: pe.rotY, moving: pe.moving), true);
       case 'act':
+        if (msg.containsKey('drink')) {
+          // A drink from the rooftop bar, which stays up there.
+          final drink = c.peer.floor == roof ? DrinkId.tryParse(msg['drink']) : null;
+          if (drink == c.peer.drink) break;
+          c.peer.drink = drink;
+          broadcast(PeerActMsg(c.id, drink: drink, drinkSet: true), except: c.id, droppable: true);
+          break;
+        }
         final smoke = msg['smoke'];
         if (smoke is bool) {
           if (smoke == (c.peer.smoking ?? false)) break;
@@ -1100,17 +1175,58 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
           broadcast(PeerActMsg(c.id, smoke: smoke), except: c.id, droppable: true);
           break;
         }
+        final golfing = msg['golf'];
+        if (golfing is bool) {
+          // The tee's on an office floor's balcony; there's none up on the roof.
+          final golf = golfing && c.peer.floor != roof;
+          if (golf == (c.peer.golfing ?? false)) break;
+          c.peer.golfing = golf ? true : null;
+          broadcast(PeerActMsg(c.id, golf: golf), except: c.id, droppable: true);
+          break;
+        }
         final now = _now();
         if (now - c.lastActAt < 100) break;
         c.lastActAt = now;
         toNeighbors(c, PeerActMsg(c.id), true);
+      case 'golf':
+        final now = _now();
+        final (yaw, loft, power) = (_num(msg['yaw']), _num(msg['loft']), _num(msg['power']));
+        if (c.peer.golfing != true ||
+            now - c.lastGolfAt < 800 ||
+            yaw.abs() > 2 ||
+            loft < 0 ||
+            loft > 1.6 ||
+            power < 0 ||
+            power > 1) {
+          break;
+        }
+        c.lastGolfAt = now;
+        toNeighbors(c, GolfMsg(id: c.id, yaw: yaw, loft: loft, power: power));
+      case 'emote':
+        final emote = Emote.tryParse(msg['emote']);
+        if (emote != null && c.emotes.take(_now())) toNeighbors(c, PeerEmoteMsg(c.id, emote), true);
       case 'sit':
         // Everyone sees them sit down (or get up), and anyone who comes in later finds them sitting.
+        // Only on a seat where they are: the roof's up on the roof, the office's on a floor.
         final key = _str(msg['seat'], 40);
-        final seat = seatAt(key) != null ? key : null;
+        final seat = seatHere(key, c.peer.floor == roof) != null ? key : null;
         if (seat == c.peer.seat) break;
         c.peer.seat = seat;
         broadcast(PeerUpdateMsg(c.peer.info), except: c.id);
+      case 'carry':
+        // Everyone on the floor sees the issue card in their hands, and whoever comes in later too.
+        final issue = _issueNumber(msg['issue']);
+        if (issue == c.peer.carrying?.issue) break;
+        c.peer.carrying = issue != null ? CarriedIssue(issue: issue, title: _str(msg['title'], 200)) : null;
+        broadcast(PeerUpdateMsg(c.peer.info), except: c.id);
+      case 'doing':
+        final what = _str(msg['what'], 60).trim();
+        final reading = msg['reading'] == true ? true : null;
+        if ((what.isEmpty ? null : what) == c.peer.doing && reading == c.peer.reading) break;
+        c.peer
+          ..doing = what.isEmpty ? null : what
+          ..reading = reading;
+        broadcast(PeerUpdateMsg(c.peer.info));
       case 'profile':
         final name = _str(msg['name'], 24).trim();
         if (name.isNotEmpty && c.accountId == null) c.peer.name = name;
@@ -1143,6 +1259,14 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         chat.add(line);
         broadcast(ChatMsg(line));
       case 'floor.go':
+        if (msg['floor'] == roof) {
+          if (floors.isNotEmpty) {
+            goToRoof(c);
+          } else {
+            warn(c, 'There is no building to go up on yet');
+          }
+          break;
+        }
         final floor = floors[_str(msg['floor'], 64)];
         if (floor == null) {
           warn(
@@ -1152,7 +1276,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
                 : 'No such floor',
           );
         } else {
-          goToFloor(c, floor);
+          goToFloor(c, floor, _arrivalSpot(msg['at']));
         }
       case 'floor.repos':
         unawaited(
@@ -1361,6 +1485,13 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         if (floor == null || now - c.lastGongAt < 500) break;
         c.lastGongAt = now;
         toFloor(floor, GongMsg(GongWhy.hit, by: who));
+      case 'horn':
+        final now = _now();
+        if (c.peer.floor != roof || now - c.lastHornAt < 1500) break;
+        c.lastHornAt = now;
+        for (final o in List.of(clients.values)) {
+          if (o.peer.floor == roof) sendTo(o, HornMsg(who));
+        }
       case 'gh.close':
         final floor = here();
         final n = _num(msg['number']);
@@ -1628,7 +1759,10 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
   void onConnection(RelicWebSocket ws, Uri url, Session session) {
     final id = _randomHex(5);
     // Back where they were before a reload or a restart, else the first floor. Everyone arrives by elevator.
-    final floor = arrivalFloor(_query(url, 'floor'));
+    final wanted = _query(url, 'floor');
+    // Up on the roof, as long as there's a building under it.
+    final onRoof = wanted == roof && floors.isNotEmpty;
+    final floor = onRoof ? null : arrivalFloor(wanted);
     final spot = elevatorSpot();
     final account = session.account;
     // An account's name is its own; on the shared password people pick one.
@@ -1658,7 +1792,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         x: spot.x,
         z: spot.z,
         account: account != null ? true : null,
-        floor: floor?.id,
+        floor: onRoof ? roof : floor?.id,
       ),
       accountId: account?.id,
       admin: me.admin,
@@ -1686,7 +1820,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         me: me,
         notify: webhook.state(),
         sky: sky.state,
-        view: floorView(floor),
+        view: onRoof ? roofView() : floorView(floor),
       ),
     );
     screensOf(client, floor);
