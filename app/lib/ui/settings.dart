@@ -34,13 +34,7 @@ const Map<WebhookKind, String> _webhookName = {
 };
 
 /// A copy to change, the way the TS spread `{ ...settings }`.
-Settings _copy(Settings s) => Settings()
-  ..view = s.view
-  ..volume = s.volume
-  ..muted = s.muted
-  ..music = s.music
-  ..musicMuted = s.musicMuted
-  ..notify = s.notify;
+Settings _copy(Settings s) => s.copy();
 
 /// `outside` describes the sky over the office (see describeSky), once the server has said.
 ModalHandle openSettings(

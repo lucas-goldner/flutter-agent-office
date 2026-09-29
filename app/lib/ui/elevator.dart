@@ -242,7 +242,7 @@ class _ElevatorWindowState extends State<_ElevatorWindow> with ListenTo {
       );
     }
     final pick = _choice();
-    final dir = store.projectsDir;
+    final dir = store.projectsDir.dir;
     final dest = pick != null ? '$dir/$pick' : '$dir/<owner>/<repo>';
     final note = heavy(12, color: Swatch.muted, weight: FontWeight.w700);
     return Column(
