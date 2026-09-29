@@ -16,6 +16,11 @@ const _sessionTtlMs = 1000 * 60 * 60 * 24 * 14;
 const _maxAttempts = 10;
 const _windowMs = 5 * 60000;
 
+/// Sign-in links not used yet; making one more forgets the oldest.
+const _maxLinks = 8;
+
+String _linkHash(String key) => toHex(sha256.convert(utf8.encode(key)).bytes);
+
 /// A signed-in browser: with its own account, or (no account) with the shared office password.
 class Session {
   const Session([this.account]);
@@ -53,6 +58,9 @@ class Auth {
   final int Function() _now;
   final Map<String, _Attempts> _attempts = {};
 
+  /// Hashes of the one-time sign-in links' keys that haven't been used yet (oldest first).
+  final Set<String> _links = {};
+
   /// Signs shared-password sessions. Derived from the password too, so changing it logs those out.
   final Uint8List _key;
 
@@ -88,6 +96,18 @@ class Auth {
   }
 
   void recordSuccess(String ip) => _attempts.remove(ip);
+
+  /// The key of a sign-in link that works once, for whoever started the office in a terminal: it
+  /// signs in like the shared password. Only its hash is kept, in memory, so a restart forgets it.
+  String linkKey() {
+    final key = base64UrlNoPad(randomBytes(24));
+    if (_links.length >= _maxLinks) _links.remove(_links.first);
+    _links.add(_linkHash(key));
+    return key;
+  }
+
+  /// Uses up a sign-in link: true the first time its key is given, never again.
+  bool useLinkKey(String key) => key.isNotEmpty && _links.remove(_linkHash(key));
 
   /// A session cookie's value: for that account, or for the shared password when there's none.
   String issue([String? accountId]) {

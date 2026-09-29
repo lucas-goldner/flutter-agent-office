@@ -1,13 +1,19 @@
-// The elevator's panel: a button for every floor (every project), and "add a project", which clones
-// one of the repositories the office's gh login can see and makes it a new floor. The first time
-// the office runs there are no floors, and this is where you start (ui/elevator.ts).
+// The elevator's panel: a button for every floor (every project), top floor first with the rooftop
+// bar over them, and "add a project", which clones one of the repositories the office's gh login can
+// see and makes it a new floor. The first time the office runs there are no floors, and this is
+// where you start: the workspace folder, GitHub, then your first project. Admins can blow a floor
+// off the building here too (💣); its checkout stays on disk (ui/elevator.ts).
 
 import 'package:flutter/material.dart';
 
 import '../office_scope.dart';
+
 import 'package:office_shared/floors.dart';
 import 'package:office_shared/protocol.dart';
+import 'package:office_shared/rooftop.dart' show roof, roofName;
+
 import '../state/store.dart';
+import 'confirm.dart';
 import 'hud_parts.dart' show cssColor;
 import 'modal.dart';
 import 'theme.dart';
@@ -20,6 +26,53 @@ const _shown = 60;
 const _reposStaleMs = 5 * 60000;
 
 ModalHandle? _current;
+
+/// What the 💣 asks before a floor comes off the building: (title, body).
+(String, String) blowUpText(FloorInfo f, List<FloorInfo> floors) {
+  FloorInfo? next;
+  for (final o in floors) {
+    if (o.id != f.id && o.cloning != true) {
+      next = o;
+      break;
+    }
+  }
+  final n = f.workers;
+  final workers = n > 0 ? 'Its $n worker${n == 1 ? '' : 's'} stop${n == 1 ? 's' : ''}. ' : '';
+  final people = f.people > 0 ? 'Everyone on it rides the elevator to ${next?.name ?? 'the lobby'}. ' : '';
+  // The office was started in it: its accounts, password and chat live in that .agent-office too, and stay.
+  final own = f.local == true
+      ? ' The office keeps its own settings there too, so it carries on as before, just without this floor.'
+      : '';
+  return (
+    'Blow up ${f.name}?',
+    '$workers${people}Nothing is deleted: its checkout stays in ${f.dir}, .agent-office folder and all.$own',
+  );
+}
+
+/// The onboarding steps a new office shows over its first project: (done, title, what).
+List<(bool, String, String)> setupSteps({
+  required String dir,
+  required bool custom,
+  required ({List<RepoChoice> list, String? error, bool loading, int at}) repos,
+}) => [
+  (
+    custom,
+    '📁 Where projects go',
+    custom ? 'Cloned into $dir/<owner>/<repo>.' : 'Cloned into $dir/<owner>/<repo> unless you pick another folder.',
+  ),
+  (
+    repos.list.isNotEmpty && repos.error == null,
+    '🐙 GitHub',
+    repos.error != null
+        ? "The office's gh login can't list your repositories: run gh auth login on the office's machine, then ↻."
+        : repos.loading && repos.list.isEmpty
+        ? 'Asking GitHub for your repositories…'
+        : repos.list.isEmpty
+        ? 'No repositories yet: type owner/name to clone any public one.'
+        : "Signed in: ${repos.list.length} repositor${repos.list.length == 1 ? 'y' : 'ies'} to pick from.",
+  ),
+  (false, '🏗️ Your first project', 'Pick one below: it becomes the first floor of the building.'),
+];
 
 bool elevatorPanelOpen() => _current != null;
 
@@ -56,12 +109,22 @@ class _ElevatorWindowState extends State<_ElevatorWindow> with ListenTo {
   String _error = '';
   late bool _showAdd = widget.setup || store.floors.isEmpty;
 
+  /// Moving the workspace folder, right here (an admin, before the first project especially).
+  bool _editDir = false;
+  final _dir = TextEditingController();
+  final _dirFocus = FocusNode();
+
   Store get store => widget.scope.store;
 
   @override
   void initState() {
     super.initState();
-    listenTo(store.topics(const [Topic.floors, Topic.repos, Topic.floor]), () => setState(() {}));
+    listenTo(
+      store.topics(const [Topic.floors, Topic.repos, Topic.floor, Topic.peers, Topic.me]),
+      () => setState(() {}),
+    );
+    // The folder moved (here or by someone else): done editing it.
+    listenTo(store.topic(Topic.projectsDir), () => setState(() => _editDir = false));
     listenStream(widget.scope.net.messages, (msg) {
       if (msg is FloorAddedMsg) _onAdded(msg);
     });
@@ -73,6 +136,8 @@ class _ElevatorWindowState extends State<_ElevatorWindow> with ListenTo {
 
   @override
   void dispose() {
+    _dir.dispose();
+    _dirFocus.dispose();
     _input.dispose();
     _inputFocus.dispose();
     super.dispose();
@@ -89,6 +154,30 @@ class _ElevatorWindowState extends State<_ElevatorWindow> with ListenTo {
 
   /// What "Add floor" would add: the row picked, else what's typed if it's owner/name.
   String? _choice() => _selected ?? normalizeRepo(_filter);
+
+  void _startEditDir() {
+    setState(() {
+      _editDir = true;
+      _dir.text = store.projectsDir.dir;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _dirFocus.requestFocus());
+  }
+
+  void _saveDir() {
+    final dir = _dir.text.trim();
+    if (dir.isEmpty) return _dirFocus.requestFocus();
+    // The server says why it can't, if it can't; the folder moving closes this.
+    if (dir == store.projectsDir.dir) {
+      setState(() => _editDir = false);
+    } else {
+      widget.scope.net.send(FloorProjectsDirCmd(dir));
+    }
+  }
+
+  void _blowUp(FloorInfo f) {
+    final (title, body) = blowUpText(f, store.floors);
+    confirmDialog(title, body, '💣 Blow it up', () => widget.scope.net.send(FloorRemoveCmd(f.id)));
+  }
 
   void _go(String floorId) {
     widget.modal.close();
@@ -147,16 +236,43 @@ class _ElevatorWindowState extends State<_ElevatorWindow> with ListenTo {
                 style: heavy(16, weight: FontWeight.w700),
               ),
             ),
+          if (setup && store.floors.isEmpty) ..._steps(),
+          // The roof over every floor: the rooftop bar.
+          if (store.floors.any((f) => f.cloning != true))
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: _RoofButton(
+                here: store.floor == roof,
+                people: store.peers.values.where((p) => p.floor == roof).length,
+                onRide: () => _go(roof),
+              ),
+            ),
           if (store.floors.isEmpty)
             Text(
               'No floors yet.',
               style: heavy(13, color: Swatch.muted, weight: FontWeight.w600),
             )
           else
-            for (final (i, f) in store.floors.indexed)
+            // Top floor first, the way an elevator's buttons stack, with floor 1 at the bottom.
+            for (final (i, f) in store.floors.indexed.toList().reversed)
               Padding(
-                padding: EdgeInsets.only(top: i == 0 ? 0 : 8),
-                child: _FloorButton(f, i, here: f.id == store.floor, onRide: () => _go(f.id)),
+                padding: EdgeInsets.only(top: i == store.floors.length - 1 ? 0 : 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: _FloorButton(f, i, here: f.id == store.floor, onRide: () => _go(f.id)),
+                    ),
+                    if (store.me.admin && f.cloning != true) ...[
+                      const SizedBox(width: 8),
+                      OfficeButton(
+                        key: ValueKey('blow-${f.id}'),
+                        label: '💣',
+                        tooltip: 'Blow ${f.name} off the building',
+                        onPressed: () => _blowUp(f),
+                      ),
+                    ],
+                  ],
+                ),
               ),
           Padding(padding: const EdgeInsets.only(top: 16), child: _showAdd ? _addSection(setup) : _openAdd()),
         ],
@@ -182,6 +298,47 @@ class _ElevatorWindowState extends State<_ElevatorWindow> with ListenTo {
       ),
     );
   }
+
+  /// A new office's walk-through: where projects go, GitHub, then the first project.
+  List<Widget> _steps() => [
+    for (final (i, (done, title, what)) in setupSteps(
+      dir: store.projectsDir.dir,
+      custom: store.projectsDir.custom,
+      repos: store.repos,
+    ).indexed)
+      Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 26,
+              height: 26,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: done ? Swatch.good : Colors.white,
+                shape: BoxShape.circle,
+                border: Border.all(color: Swatch.ink, width: 2),
+              ),
+              child: Text(done ? '✓' : '${i + 1}', style: heavy(12, color: done ? Colors.white : Swatch.ink)),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: heavy(14, weight: FontWeight.w900)),
+                  Text(
+                    what,
+                    style: heavy(12, color: Swatch.muted, weight: FontWeight.w700),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+  ];
 
   Widget _openAdd() => Align(
     alignment: Alignment.centerLeft,
@@ -242,7 +399,7 @@ class _ElevatorWindowState extends State<_ElevatorWindow> with ListenTo {
       );
     }
     final pick = _choice();
-    final dir = store.projectsDir;
+    final dir = store.projectsDir.dir;
     final dest = pick != null ? '$dir/$pick' : '$dir/<owner>/<repo>';
     final note = heavy(12, color: Swatch.muted, weight: FontWeight.w700);
     return Column(
@@ -300,11 +457,46 @@ class _ElevatorWindowState extends State<_ElevatorWindow> with ListenTo {
                   '⏳ Cloning $_adding into $dir/$_adding… A big repository can take a minute.',
                   style: note.copyWith(color: Swatch.ink),
                 )
-              : Text(
-                  "Cloned into $dest with this machine's gh login. Everything on the new floor works in that checkout.",
-                  style: note,
+              : Wrap(
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: 6,
+                  runSpacing: 4,
+                  children: [
+                    Text(
+                      "Cloned into $dest with this machine's gh login. Everything on the new floor works in that checkout.",
+                      style: note,
+                    ),
+                    if (store.me.admin && !_editDir)
+                      SmallButton(
+                        key: const ValueKey('dir-change'),
+                        label: '📁 Change folder',
+                        tooltip: 'Clone new projects into another folder on the office’s machine',
+                        onPressed: _startEditDir,
+                      ),
+                  ],
                 ),
         ),
+        if (_editDir)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: BoxInput(
+                    key: const ValueKey('dir-input'),
+                    controller: _dir,
+                    focusNode: _dirFocus,
+                    hint: '~/Workspace',
+                    onSubmitted: (_) => _saveDir(),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                OfficeButton(label: 'Save', kind: BtnKind.primary, onPressed: _saveDir),
+                const SizedBox(width: 8),
+                OfficeButton(label: 'Cancel', onPressed: () => setState(() => _editDir = false)),
+              ],
+            ),
+          ),
         for (final e in [r.error, _error].where((e) => e != null && e.isNotEmpty))
           Padding(
             padding: const EdgeInsets.only(top: 8),
@@ -549,4 +741,68 @@ class _RepoRowState extends State<_RepoRow> {
       ),
     );
   }
+}
+
+/// The roof, over every floor: the rooftop bar.
+class _RoofButton extends StatelessWidget {
+  const _RoofButton({required this.here, required this.people, required this.onRide});
+
+  final bool here;
+  final int people;
+  final VoidCallback onRide;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+    message: here ? "You're up on the roof" : 'Ride up to the ${roofName.toLowerCase()}',
+    waitDuration: const Duration(milliseconds: 600),
+    child: InkWell(
+      key: const ValueKey('ride-roof'),
+      onTap: here ? null : onRide,
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        decoration: BoxDecoration(
+          color: here ? Swatch.paper2 : Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Swatch.ink, width: kBorder),
+          boxShadow: [if (!here) const BoxShadow(color: Swatch.ink, offset: Offset(0, 3))],
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: Swatch.ink,
+                shape: BoxShape.circle,
+                border: Border.all(color: Swatch.ink, width: kBorder),
+              ),
+              child: const Text('🍸'),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(here ? '$roofName · you are here' : roofName, style: heavy(15, weight: FontWeight.w900)),
+                  Text(
+                    'The roof: a DJ playing drum and bass, a bar, and the city all around',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: heavy(12, color: Swatch.muted, weight: FontWeight.w700),
+                  ),
+                ],
+              ),
+            ),
+            if (people > 0)
+              Tooltip(
+                message: 'People up there',
+                child: Text('🧑 $people', style: heavy(13)),
+              ),
+          ],
+        ),
+      ),
+    ),
+  );
 }

@@ -61,6 +61,23 @@ class Smoke {
     }
   }
 
+  /// An explosion's cloud: big dark puffs thrown out from [at] and rolling up (a floor blown up).
+  void plume(vm.Vector3 at, {int n = 40}) {
+    for (var i = 0; i < n; i++) {
+      final a = _r() * math.pi * 2;
+      final out = 1.5 + _r() * 3.5;
+      final v = vm.Vector3(math.cos(a) * out, 0.8 + _r() * 2.8, math.sin(a) * out);
+      _emit(
+        at + vm.Vector3((_r() - 0.5) * 0.6, _r() * 0.8, (_r() - 0.5) * 0.6),
+        v,
+        0.6,
+        2.2 + _r() * 1.6,
+        2.4 + _r() * 1.4,
+        0.85,
+      );
+    }
+  }
+
   void _emit(vm.Vector3 at, vm.Vector3 vel, double size0, double size1, double life, double alpha) {
     // The oldest puff makes way when all are in use.
     final i = _next;

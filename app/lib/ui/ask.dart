@@ -4,7 +4,9 @@
 import 'package:flutter/material.dart';
 
 import '../office_scope.dart';
+
 import 'package:office_shared/protocol.dart';
+
 import '../world/laptop_screen.dart' show kTermFont, kTermFontFallback;
 import 'child_button.dart';
 import 'modal.dart';
@@ -55,14 +57,25 @@ class AskOptions {
   final bool providerOption;
 
   /// `to` is a worker id, or null for a new worker.
-  final void Function(String prompt, String? to, bool worktree, AgentProvider? provider, String? model) onSubmit;
+  final void Function(
+    String prompt,
+    String? to,
+    bool worktree,
+    AgentProvider? provider,
+    String? model,
+    AgentEffort? effort,
+  )
+  onSubmit;
 }
 
-ModalHandle openAsk(OfficeScope scope, AskOptions opts) =>
-    ModalStack.instance.show((m) => _AskWindow(modal: m, opts: opts, project: scope.store.project));
+ModalHandle openAsk(OfficeScope scope, AskOptions opts) => ModalStack.instance.show(
+  (m) => _AskWindow(modal: m, opts: opts, project: scope.store.project, office: scope.store.prompts.agent),
+);
 
 class _AskWindow extends StatefulWidget {
-  const _AskWindow({required this.modal, required this.opts, required this.project});
+  const _AskWindow({required this.modal, required this.opts, required this.project, this.office});
+
+  final PromptsAgent? office;
 
   final ModalHandle modal;
   final AskOptions opts;
@@ -78,7 +91,9 @@ class _AskWindowState extends State<_AskWindow> {
   final _focus = FocusNode();
   // Shared with the hire prompt, so the choice sticks either way.
   late bool _worktree = worktreePref();
-  late final ProviderPickerController? _provider = widget.opts.providerOption ? ProviderPickerController(widget.project) : null;
+  late final ProviderPickerController? _provider = widget.opts.providerOption
+      ? ProviderPickerController(widget.project, office: widget.office)
+      : null;
   bool _contextOpen = false;
 
   @override
@@ -112,6 +127,7 @@ class _AskWindowState extends State<_AskWindow> {
       _to == null && o.worktreeOption && _worktree,
       _to == null ? p?.value() : null,
       _to == null ? p?.model() : null,
+      _to == null ? p?.effort() : null,
     );
   }
 
@@ -154,7 +170,10 @@ class _AskWindowState extends State<_AskWindow> {
                       Text(w.name),
                       Opacity(
                         opacity: 0.75,
-                        child: Text(statusLabel(w.status), style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700)),
+                        child: Text(
+                          statusLabel(w.status),
+                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
+                        ),
                       ),
                     ],
                   ),
@@ -218,7 +237,13 @@ class _AskWindowState extends State<_AskWindow> {
             ),
             child: SelectableText(
               text,
-              style: const TextStyle(fontFamily: kTermFont, fontFamilyFallback: kTermFontFallback, fontSize: 12, height: 1.5, color: Swatch.ink),
+              style: const TextStyle(
+                fontFamily: kTermFont,
+                fontFamilyFallback: kTermFontFallback,
+                fontSize: 12,
+                height: 1.5,
+                color: Swatch.ink,
+              ),
             ),
           ),
       ],

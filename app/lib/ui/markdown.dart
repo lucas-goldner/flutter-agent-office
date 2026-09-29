@@ -23,6 +23,10 @@ TextStyle mono(double size, {Color color = Swatch.ink, FontWeight weight = FontW
 const _link = Color(0xFF1D6FD6);
 const _rule = Color(0xFFDDD0BF);
 
+/// A heading's anchor, as GitHub makes them: lower case, punctuation dropped, spaces to dashes.
+String headingSlug(String text) =>
+    text.trim().toLowerCase().replaceAll(RegExp(r'[^\p{L}\p{M}\p{N}\p{Pc} -]', unicode: true), '').replaceAll(' ', '-');
+
 /// https://github.com/owner/repo from an issue or PR URL.
 String repoUrlOf(String itemUrl) => itemUrl.replaceFirst(RegExp(r'/(pull|issues)/\d+.*$'), '');
 
@@ -79,13 +83,14 @@ class _RawHtmlSyntax extends md.InlineHtmlSyntax {
 }
 
 /// Parses GFM the way the old client's marked did (breaks: true is applied when drawing).
-List<md.Node> parseMarkdown(String src, {String? itemUrl}) {
+List<md.Node> parseMarkdown(String src, {String? itemUrl, bool file = false}) {
   final doc = md.Document(
     extensionSet: md.ExtensionSet(
       const [md.FencedCodeBlockSyntax(), md.TableSyntax(), md.UnorderedListWithCheckboxSyntax(), md.OrderedListWithCheckboxSyntax()],
       [_RawHtmlSyntax(), md.StrikethroughSyntax(), md.AutolinkExtensionSyntax()],
     ),
-    inlineSyntaxes: [RefSyntax(itemUrl == null ? null : repoUrlOf(itemUrl))],
+    // In a file from the project (the bookshelf's), #123 and @name are just text, as GitHub shows them.
+    inlineSyntaxes: [if (!file) RefSyntax(itemUrl == null ? null : repoUrlOf(itemUrl))],
     encodeHtml: false,
   );
   final nodes = doc.parse(src.replaceAll('\r\n', '\n'));
@@ -160,7 +165,20 @@ class MarkdownView extends StatefulWidget {
     this.fontSize = 14.5,
     this.onLink,
     this.selectable = true,
+    this.file = false,
+    this.pictureSrc,
+    this.anchors,
   });
+
+  /// A Markdown file from the project (the bookshelf's), shown the way GitHub shows it in the repo:
+  /// a lone newline is only a space, and #123 is just text.
+  final bool file;
+
+  /// Where a picture's `src` loads from, in place of the usual (the bookshelf's come from the project).
+  final String Function(String src)? pictureSrc;
+
+  /// Filled with each heading's anchor (as GitHub makes them) and a key on it, to jump to.
+  final Map<String, ({int level, String text, GlobalKey key})>? anchors;
 
   final String src;
   final String? itemUrl;
@@ -188,10 +206,11 @@ class _MarkdownViewState extends State<MarkdownView> {
   @override
   void didUpdateWidget(MarkdownView old) {
     super.didUpdateWidget(old);
-    if (old.src != widget.src || old.itemUrl != widget.itemUrl) _parse();
+    if (old.src != widget.src || old.itemUrl != widget.itemUrl || old.file != widget.file) _parse();
   }
 
-  void _parse() => _nodes = widget.src.trim().isEmpty ? const [] : parseMarkdown(widget.src, itemUrl: widget.itemUrl);
+  void _parse() =>
+      _nodes = widget.src.trim().isEmpty ? const [] : parseMarkdown(widget.src, itemUrl: widget.itemUrl, file: widget.file);
 
   void _dropTaps() {
     for (final t in _taps) {
@@ -219,6 +238,9 @@ class _MarkdownViewState extends State<MarkdownView> {
         itemUrl: widget.itemUrl,
         taps: _taps,
         onLink: widget.onLink ?? openUrl,
+        file: widget.file,
+        pictureSrc: widget.pictureSrc,
+        anchors: widget.anchors?..clear(),
       );
       body = r.blocks(_nodes);
     }
@@ -236,8 +258,19 @@ class _Block {
 }
 
 class _Renderer {
-  _Renderer({required this.base, required this.itemUrl, required this.taps, required this.onLink});
+  _Renderer({
+    required this.base,
+    required this.itemUrl,
+    required this.taps,
+    required this.onLink,
+    this.file = false,
+    this.pictureSrc,
+    this.anchors,
+  });
 
+  final bool file;
+  final String Function(String src)? pictureSrc;
+  final Map<String, ({int level, String text, GlobalKey key})>? anchors;
   final TextStyle base;
   final String? itemUrl;
   final List<TapGestureRecognizer> taps;
@@ -301,6 +334,19 @@ class _Renderer {
             child: w,
           );
         }
+        final marks = anchors;
+        if (marks != null) {
+          // Its anchor, as GitHub makes them: the same text again gets -1, -2…
+          final text = e.textContent.trim();
+          final base = headingSlug(text);
+          var anchor = base;
+          for (var n = 1; marks.containsKey(anchor); n++) {
+            anchor = '$base-$n';
+          }
+          final key = GlobalKey();
+          marks[anchor] = (level: int.parse(e.tag.substring(1)), text: text, key: key);
+          w = KeyedSubtree(key: key, child: w);
+        }
         return _Block(w, top: 20, bottom: 8);
       case 'hr':
         return _Block(const _DashedRule(), top: 18, bottom: 18);
@@ -341,7 +387,15 @@ class _Renderer {
         decoration: const BoxDecoration(border: Border(left: BorderSide(color: Color(0xFFD9CBB8), width: 4))),
         child: DefaultTextStyle.merge(
           style: const TextStyle(color: Swatch.muted),
-          child: _Renderer(base: base.copyWith(color: Swatch.muted), itemUrl: itemUrl, taps: taps, onLink: onLink).blocks(e.children ?? const []),
+          child: _Renderer(
+            base: base.copyWith(color: Swatch.muted),
+            itemUrl: itemUrl,
+            taps: taps,
+            onLink: onLink,
+            file: file,
+            pictureSrc: pictureSrc,
+            anchors: anchors,
+          ).blocks(e.children ?? const []),
         ),
       );
     }
@@ -491,7 +545,7 @@ class _Renderer {
     TapGestureRecognizer? rec() => href == null ? null : _tap(href);
     if (n is md.Text) {
       if (n.text.isEmpty) return;
-      out.add(TextSpan(text: n.text, style: s, recognizer: rec(), mouseCursor: href == null ? null : SystemMouseCursors.click));
+      out.add(TextSpan(text: file ? n.text.replaceAll('\n', ' ') : n.text, style: s, recognizer: rec(), mouseCursor: href == null ? null : SystemMouseCursors.click));
       return;
     }
     if (n is! md.Element) return;
@@ -620,7 +674,7 @@ class _Renderer {
     final width = double.tryParse(e.attributes['width'] ?? '');
     if (src.isEmpty) return Text(alt, style: base.copyWith(color: Swatch.muted));
     Widget img = Image.network(
-      serverUrl(imageSrc(src, itemUrl)),
+      serverUrl(pictureSrc?.call(src) ?? imageSrc(src, itemUrl)),
       headers: imageHeaders(),
       width: width,
       fit: BoxFit.contain,

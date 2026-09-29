@@ -37,7 +37,24 @@ class _LoginPageState extends State<LoginPage> {
   void initState() {
     super.initState();
     documentTitle = 'Agent Office · Sign in';
+    // A sign-in link from the office's terminal (/login#key=…): it works once, so take it out of the
+    // address bar and trade it for a session. The key is after the #, so it never reaches a server log.
+    final key = linkKey(locationHash);
+    if (key != null) {
+      replaceUrl(locationPath);
+      _signInWithLink(key);
+    }
     _load();
+  }
+
+  Future<void> _signInWithLink(String key) async {
+    try {
+      final r = await Api.postJson('/api/link', {'key': key});
+      if (r.ok) return goTo('/');
+      if (mounted) setState(() => _error = r.error('Could not sign in'));
+    } catch (e) {
+      if (mounted) setState(() => _error = desktopApp ? _unreachable(e) : 'Server unreachable');
+    }
   }
 
   /// Focuses a field once it has been laid out (asking earlier throws on the web).
@@ -187,4 +204,10 @@ class _LoginPageState extends State<LoginPage> {
       ErrorLine(_error),
     ],
   );
+}
+
+/// The one-time key in a sign-in link's fragment (#key=…), if it has one.
+String? linkKey(String hash) {
+  final k = Uri.splitQueryString(hash.startsWith('#') ? hash.substring(1) : hash)['key'];
+  return k == null || k.isEmpty ? null : k;
 }

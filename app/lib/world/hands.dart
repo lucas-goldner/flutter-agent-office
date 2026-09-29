@@ -16,9 +16,19 @@
 import 'dart:math' as math;
 
 import 'package:flutter_scene/scene.dart';
+import 'package:office_shared/emotes.dart';
+import 'package:office_shared/protocol.dart' show HolidayTheme;
 import 'package:vector_math/vector_math.dart' as vm;
 
-import 'character.dart' show cigarette, coffeeMug, dragCurve, kReachTime, kSmokeCycle, reachCurve, setEmissive;
+import 'package:office_shared/rooftop.dart' show Drink, DrinkId;
+
+import 'drinks.dart' show drinkGlass;
+import 'character.dart'
+    show cigarette, coffeeMug, dragCurve, emoteEnvelope, kReachTime, kSmokeCycle, reachCurve, setEmissive;
+import 'costumes.dart';
+import 'package:office_shared/protocol.dart' show CarriedIssue;
+
+import 'card.dart';
 import 'geo.dart';
 import 'toon.dart';
 
@@ -46,14 +56,28 @@ class HandsInput {
 const double _sipTime = 1.1;
 
 class _Arm {
-  _Arm(this.group, this.base, this.baseRot);
+  _Arm(this.group, this.base, this.baseRot, this.side, this.cuff, this.mitten, this.finger);
   final Node group;
   final vm.Vector3 base;
   final vm.Vector3 baseRot;
+  final int side;
+
+  /// The white cuff at the wrist.
+  final Node cuff;
+
+  /// The cartoon hand: palm, thumb, and on the right hand the pointing finger.
+  final List<Node> mitten;
+  final Node? finger;
+
+  /// A holiday hand in place of the mitten (see Hands.setCostume), and the witch-fire round it.
+  Node? dressed;
+  List<Node> fire = const [];
 }
 
 class Hands {
   Hands(String shirt, String skin) {
+    _shirt = shirt;
+    _skinTone = skin;
     _sleeve = toonUnique(hex(shirt));
     _skin = toonUnique(hex(skin));
     _right = _arm(1);
@@ -73,7 +97,95 @@ class Hands {
       ..visible = false;
     _ember = cig.ember;
     _right.group.add(_cig);
+    _thumbUp = mesh(capsule(0.027, 0.035, 4, 10), _skin, -0.035, 0.065, -0.005, false)
+      ..rotation = euler(0, 0, 0.3)
+      ..visible = false;
+    _right.group.add(_thumbUp);
     setLayers(root, layer);
+  }
+
+  /// The emote your character is doing, and how far into it (see Person.emote).
+  Emote? _emote;
+  double _emoteT = 0;
+
+  /// Sticks up out of the right fist for a thumbs up.
+  late final Node _thumbUp;
+
+  /// Your shirt and skin, under whatever costume the hands wear.
+  String _shirt = '#ffffff';
+  String _skinTone = '#ffffff';
+
+  /// An undead warlock's hands for Halloween, mittens for Christmas (see [setCostume]).
+  HolidayTheme? _costume;
+  late final PreprocessedMaterial _rags = toonUnique(hex('#24123a'))..doubleSided = true;
+
+  /// Your hands' half of an emote: a wave, a thumbs up, a clap… in front of your eyes.
+  void emote(Emote e) {
+    _emote = e;
+    _emoteT = 0;
+    _thumbUp.visible = e == Emote.thumbs;
+  }
+
+  Emote? get emoting => _emote;
+
+  HolidayTheme? get costume => _costume;
+
+  /// Dresses your hands up for a holiday: an undead warlock's for Halloween (grey-green and bony, with
+  /// black claws, ragged purple sleeves and green witch-fire round them), red sleeves and green mittens
+  /// for Christmas. Null gives you your own back.
+  void setCostume(HolidayTheme? theme) {
+    if (theme == _costume) return;
+    _costume = theme;
+    final warlock = theme == HolidayTheme.halloween;
+    final xmas = theme == HolidayTheme.christmas;
+    for (final arm in [_right, _left]) {
+      arm.dressed?.detach();
+      arm.dressed = null;
+      arm.fire = const [];
+      for (final m in arm.mitten) {
+        m.visible = !warlock && !(xmas && m == arm.finger);
+      }
+      arm.cuff.visible = !warlock;
+      // A mitten's fluffy cuff.
+      arm.cuff.scale = xmas ? vm.Vector3(1.3, 1.3, 1.9) : vm.Vector3.all(1);
+      if (!warlock) continue;
+      final g = Node(name: 'warlock');
+      g.add(warlockHand(arm.side, _skin));
+      g.add(raggedCuff(_rags));
+      final fire = witchFire(10);
+      g.add(fire.group);
+      arm.fire = fire.sparks;
+      arm.group.add(g);
+      arm.dressed = g;
+    }
+    setLayers(root, layer);
+    _paint();
+  }
+
+  void _paint() {
+    final c = _costume;
+    setToonColor(
+      _sleeve,
+      hex(c == HolidayTheme.halloween ? '#3b1d5a' : (c == HolidayTheme.christmas ? '#d62828' : _shirt)),
+    );
+    var skin = hex(c == HolidayTheme.christmas ? '#2e9e48' : _skinTone);
+    if (c == HolidayTheme.halloween) skin = mixColor(skin, kUndeadSkin, 0.8);
+    setToonColor(_skin, skin);
+  }
+
+  /// Witch-fire curling up round your fingers, and flickering.
+  void _burn(double t) {
+    for (final arm in [_right, _left]) {
+      final n = arm.fire.length;
+      for (var i = 0; i < n; i++) {
+        final rise = (t * 0.45 + i / n) % 1;
+        final a = t * 2.4 * arm.side + i / n * math.pi * 2;
+        final r = 0.055 + math.sin(t * 3 + i * 1.7) * 0.012 - rise * 0.02;
+        arm.fire[i]
+          ..position = vm.Vector3(math.cos(a) * r, -0.015 + rise * 0.11, -0.05 + math.sin(a) * r * 1.3)
+          ..scale = vm.Vector3.all((1 - rise) * (0.8 + 0.4 * math.sin(t * 9 + i)));
+      }
+    }
   }
 
   /// The render layer every hands node is on (bit 5), for drawing them as an overlay.
@@ -88,6 +200,10 @@ class Hands {
   late final _Arm _left;
   double _reachT = -1;
   late final Node _mug;
+  bool _wantsMug = false;
+
+  /// A drink from the rooftop bar, held where the mug goes.
+  ({DrinkId id, Node node})? _glass;
 
   /// Seconds into a sip (negative while it waits for the reach to finish), or null.
   double? _sipT;
@@ -143,9 +259,15 @@ class Hands {
   /// Where the cigarette's lit end is, in the space [root] is placed in (the office's, like [place]).
   vm.Vector3 cigTip() => pointIn(root.parent, _cig, vm.Vector3(0, 0, 0.09));
 
-  void setColor(String shirt) => setToonColor(_sleeve, hex(shirt));
+  void setColor(String shirt) {
+    _shirt = shirt;
+    _paint();
+  }
 
-  void setSkin(String skin) => setToonColor(_skin, hex(skin));
+  void setSkin(String skin) {
+    _skinTone = skin;
+    _paint();
+  }
 
   /// How lit it is where you stand, 0–1 (see Sky.lightAt): your hands go dark out on a night street.
   /// Dims the sleeve and skin (the office's shared light is the hands' light here). Call it after
@@ -165,7 +287,50 @@ class Hands {
   void reach() => _reachT = 0;
 
   /// A mug of coffee in the left hand, or not.
-  void holdMug(bool on) => _mug.visible = on;
+  void holdMug(bool on) {
+    _wantsMug = on;
+    _mug.visible = on && _glass == null && !(_card?.held ?? false);
+    // The glass waits too while the hands are full.
+    _glass?.node.visible = !(_card?.held ?? false);
+  }
+
+  /// A drink from the rooftop bar in the left hand, where the mug goes (and in its place), or none (null).
+  void holdDrink(Drink? d) {
+    if (d?.id == _glass?.id) return;
+    _glass?.node.detach();
+    _glass = null;
+    if (d != null) {
+      final node = drinkGlass(d)
+        ..position = vm.Vector3(0.09, -0.035, -0.03)
+        ..rotation = euler(_left.baseRot.x, _left.baseRot.y, _left.baseRot.z).inverted();
+      setLayers(node, layer);
+      _left.group.add(node);
+      _glass = (id: d.id, node: node);
+    }
+    holdMug(_wantsMug);
+  }
+
+  /// An issue card off the board, held low in front of you in both hands, tipped back so you look
+  /// down onto its front.
+  Node? _cardHolder;
+  HeldCard? _card;
+
+  /// 0 → 1 as the card comes up into view and the hands close in on it.
+  double _carryK = 0;
+
+  /// An issue card in both hands, or none (null). The mug waits while the hands are full.
+  void carry(CarriedIssue? card) {
+    if (card == null && _card == null) return;
+    _card ??= () {
+      final holder = _cardHolder = Node(name: 'card-holder')..rotation = euler(-0.35, 0, 0);
+      root.add(holder);
+      return HeldCard(holder, 0.24, onAdd: (n) => setLayers(n, layer));
+    }();
+    final was = _card!.held;
+    _card!.set(card);
+    if (!was) _carryK = 0;
+    holdMug(_wantsMug);
+  }
 
   /// Raise the mug for a sip, once the right hand is back from the coffee machine.
   void sip() => _sipT = -kReachTime * 0.6;
@@ -174,23 +339,38 @@ class Hands {
     final group = Node(name: side == 1 ? 'right-hand' : 'left-hand');
     // Sleeve runs from the wrist back past the camera, so its far end is always off screen.
     group.add(mesh(capsuleData(0.058, 0.42, 6, 14).rotateX(math.pi / 2).build(), _sleeve, 0, 0, 0.34, false));
-    group.add(mesh(cylinderData(0.068, 0.068, 0.045, 18).rotateX(math.pi / 2).build(), toon(hex('#fffaf3')), 0, 0, 0.075, false));
-    // Cartoon mitten: a chunky palm, a thumb on the inside, and a pointing finger on the right hand.
-    group.add(mesh(sphere(0.062, 18, 14), _skin, 0, 0, 0, false)..scale = vm.Vector3(1, 0.78, 1.18));
-    group.add(
-      mesh(capsuleData(0.02, 0.03, 4, 10).rotateX(math.pi / 2).build(), _skin, -side * 0.05, 0.014, -0.02, false)
-        ..rotation = euler(0, side * 0.55),
+    final cuff = mesh(
+      cylinderData(0.068, 0.068, 0.045, 18).rotateX(math.pi / 2).build(),
+      toon(hex('#fffaf3')),
+      0,
+      0,
+      0.075,
+      false,
     );
-    if (side == 1) {
-      group.add(mesh(capsuleData(0.019, 0.05, 4, 10).rotateX(math.pi / 2).build(), _skin, -0.016, 0.022, -0.085, false));
-    }
+    group.add(cuff);
+    // Cartoon mitten: a chunky palm, a thumb on the inside, and a pointing finger on the right hand.
+    final palm = mesh(sphere(0.062, 18, 14), _skin, 0, 0, 0, false)..scale = vm.Vector3(1, 0.78, 1.18);
+    group.add(palm);
+    final thumb = mesh(
+      capsuleData(0.02, 0.03, 4, 10).rotateX(math.pi / 2).build(),
+      _skin,
+      -side * 0.05,
+      0.014,
+      -0.02,
+      false,
+    )..rotation = euler(0, side * 0.55);
+    group.add(thumb);
+    final finger = side == 1
+        ? mesh(capsuleData(0.019, 0.05, 4, 10).rotateX(math.pi / 2).build(), _skin, -0.016, 0.022, -0.085, false)
+        : null;
+    if (finger != null) group.add(finger);
     final base = vm.Vector3(side * 0.25, -0.185, -0.44);
     final baseRot = vm.Vector3(0.2, side * 0.22, side * -0.25);
     group
       ..position = base
       ..rotation = euler(baseRot.x, baseRot.y, baseRot.z);
     root.add(group);
-    return _Arm(group, base, baseRot);
+    return _Arm(group, base, baseRot, side, cuff, [palm, thumb, ?finger], finger);
   }
 
   void update(double dt, double t, HandsInput s) {
@@ -223,7 +403,9 @@ class Hands {
       if (_sipT! >= _sipTime) _sipT = null;
     }
     final shake = s.jitter * 0.004;
-
+    final held = _card?.held ?? false;
+    _carryK += ((held ? 1 : 0) - _carryK) * math.min(1, dt * 7);
+    final carry = _carryK;
     final pose = <int, (vm.Vector3, vm.Vector3)>{};
     for (final (arm, side) in [(_right, 1), (_left, -1)]) {
       final p = arm.base.clone();
@@ -235,8 +417,18 @@ class Hands {
       p.y += shake * math.sin(t * 131 + side * 2);
       final r = arm.baseRot.clone();
       r.x += _air * 0.2;
+      // Holding the card: both hands in on its bottom corners, palms turned toward it, so the title shows.
+      p.x -= side * 0.08 * carry;
+      p.z -= 0.03 * carry;
+      r.z += side * 0.35 * carry;
       pose[side] = (p, r);
     }
+    // The card rides along with the hands, coming up from below as you take it.
+    _cardHolder?.position = vm.Vector3(
+      _sway.x + step * 0.008,
+      _sway.y + breathe + bounce + _air * 0.05 - 0.115 - 0.3 * (1 - carry),
+      -0.5,
+    );
     // The reach: the right hand jabs out toward the crosshair, the left pulls back a little.
     final (rp, rr) = pose[1]!;
     final (lp, lr) = pose[-1]!;
@@ -264,12 +456,68 @@ class Hands {
       _emberGlow += ((d > 0.9 ? 1.4 : 0.3) - _emberGlow) * math.min(1, dt * 6);
       setEmissive(_ember, hex('#ff3b00'), _emberGlow);
     }
+    if (_emote != null) _emoteStep(dt, rp, rr, lp, lr);
+    if (_costume == HolidayTheme.halloween) _burn(t);
     _right.group
       ..position = rp
       ..rotation = euler(rr.x, rr.y, rr.z);
     _left.group
       ..position = lp
       ..rotation = euler(lr.x, lr.y, lr.z);
+  }
+
+  /// Moves the hands (already posed for this frame: position and rotation of each) through the emote.
+  void _emoteStep(double dt, vm.Vector3 rp, vm.Vector3 rr, vm.Vector3 lp, vm.Vector3 lr) {
+    final e = _emote!;
+    _emoteT += dt;
+    final u = _emoteT;
+    if (u >= e.seconds) {
+      _emote = null;
+      _thumbUp.visible = false;
+      return;
+    }
+    final k = emoteEnvelope(u, e.seconds);
+    switch (e) {
+      case Emote.wave:
+        // Up in front of your shoulder (in from the edge, clear of the sidebar), rocking side to side.
+        rp.x += (-0.09 + math.sin(u * 12) * 0.035) * k;
+        rp.y += 0.2 * k;
+        rr.x += 0.9 * k;
+        rr.z += math.sin(u * 12) * 0.35 * k;
+      case Emote.thumbs:
+        // Up in front of you, fist level and thumb up, with a little pump.
+        rp.x -= 0.13 * k;
+        rp.y += (0.12 + math.exp(-u * 3) * math.sin(u * 14) * 0.03) * k;
+        rr.z += 0.25 * k;
+      case Emote.clap:
+        final c = 0.5 - 0.5 * math.cos(u * 19);
+        for (final (p, r, side) in [(rp, rr, 1), (lp, lr, -1)]) {
+          p.x -= side * (0.1 + 0.085 * c) * k;
+          p.y += 0.06 * k;
+          r.z += side * 0.9 * k;
+        }
+      case Emote.dance:
+        // Up and down by turns, two beats a second.
+        final s = math.sin(u * math.pi * 2);
+        rp.y += (0.1 + 0.1 * s) * k;
+        lp.y += (0.1 - 0.1 * s) * k;
+        rp.x += s * 0.03 * k;
+        lp.x += s * 0.03 * k;
+      case Emote.point:
+        // Out toward the crosshair, like a reach you hold.
+        final jab = 1 + math.exp(-u * 4) * math.sin(u * 16) * 0.15;
+        rp.x -= 0.16 * k;
+        rp.y += 0.09 * k;
+        rp.z -= 0.2 * k * jab;
+        rr.x += 0.3 * k;
+        rr.y += 0.15 * k;
+      case Emote.facepalm:
+        // Palm up to your face, covering a corner of the view.
+        rp.x -= 0.12 * k;
+        rp.y += (0.17 + math.sin(u * 5) * 0.01) * k;
+        rp.z += 0.2 * k;
+        rr.x += 0.9 * k;
+    }
   }
 }
 

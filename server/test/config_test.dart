@@ -142,4 +142,20 @@ void main() {
     expect(splitArgs(''), isEmpty);
     expect(splitArgs(''' a 'b c' "d e" f'''), ['a', 'b c', 'd e', 'f']);
   });
+
+  test('the office listens on loopback unless --host says otherwise', () {
+    expect(loadConfig(['--home', home.path, '--password', 'hunter22']).host, '127.0.0.1');
+    expect(loadConfig(['--home', home.path, '--password', 'hunter22', '--host', '0.0.0.0']).host, '0.0.0.0');
+  });
+
+  test('--no-open leaves the browser alone', () {
+    expect(loadConfig(['--home', home.path, '--password', 'hunter22']).open, isTrue);
+    expect(loadConfig(['--home', home.path, '--password', 'hunter22', '--no-open']).open, isFalse);
+  });
+
+  test('--projects picks the projects folder, the default stays where it was', () {
+    final cfg = loadConfig(['--home', home.path, '--password', 'hunter22', '--projects', p.join(home.path, 'ws')]);
+    expect(cfg.projects, p.join(home.path, 'ws'));
+    expect(cfg.projectsDir, home.path);
+  });
 }

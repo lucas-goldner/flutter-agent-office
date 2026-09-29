@@ -28,7 +28,20 @@ const List<(String, String)> helpRows = [
   ),
   (
     '🎉',
-    'The gong next to the PR board rings, and confetti flies over the desk, whenever a pull request merges. Walk up and press E to bang it yourself',
+    'Whenever a pull request merges, the gong next to the PR board rings, confetti rains down all over the floor and every worker gets up on its desk for a quick dance. Walk up to the gong and press E to bang it yourself',
+  ),
+  (
+    '🤖',
+    'An agent stands by the issues board, the PR board and the task queue. Press E at one and type what you want: it runs as an agent that knows that board. O there opens its terminal, X sends it home',
+  ),
+  ('🕹️', 'The arcade cabinet in the lounge: E plays BLOCKFALL (arrows move and turn, Space drops, C holds, P pauses), or watches whoever is on it'),
+  ('🏀', 'The ball under the hoop on the west wall: E picks it up, hold E (or click) and let go in the green to shoot, Q drops it'),
+  ('⛳', 'The golf tee on the balcony: E steps up, A/D aim, W/S loft, hold Space and let go to swing, E puts the club back'),
+  ('📚', "The bookshelf on the south wall: E reads the project's Markdown docs"),
+  ('🤝', 'The meeting room under the boss office: E at its table calls a meeting of 2 to 5 workers, or shows how it is going'),
+  (
+    '🍸',
+    'The elevator goes up to the rooftop bar: a DJ playing drum and bass under the lights, and the city all around. Press E at the bar for a drink (it goes to your head for a bit) and at the DJ booth for the air horn',
   ),
   ('Drag / wheel', 'Orbit and zoom the camera in third person'),
   ('P', 'Prompt: give a task to a new or existing worker at the desk you face'),
@@ -36,6 +49,9 @@ const List<(String, String)> helpRows = [
   ('B', 'Open a shared shell (dev servers, git, tests) at an empty desk'),
   ('R', 'Resume a sleeping worker'),
   ('X', 'Send a worker home (frees the desk)'),
+  ('👥', 'Click someone under "In the office" to walk over to them (on another floor, you ride the elevator first). The line under their name says what they have open or where they are'),
+  ('N', "Next worker that needs you: go to whoever has waited longest (needs input, or done and nobody's looked), and again for the next one. Arrows at the edge of the screen point to the ones out of sight"),
+  ('Q', 'Put back the issue card in your hands (E at a note on the issues board, or ✋ Pick it up in an issue; then E at an empty desk, a worker or the queue board)'),
   ('F', 'Hang a picture from the web on a wall. Look at a picture and press E to move, edit or take it down'),
   (
     '🐶',
@@ -43,11 +59,17 @@ const List<(String, String)> helpRows = [
   ),
   ('O', 'Open a pull request for a worker on its own branch, or see the one it has'),
   ('T', 'Chat'),
+  (
+    'G / 1–6',
+    'Emote: hold G, point at one and let go (or tap G and click one), or press 1–6: wave, thumbs up, clap, dance, point, facepalm. Everyone on your floor sees it',
+  ),
   ('/', 'Search the chat and every terminal on your floor, back to before the office last restarted'),
-  ('V / M', 'Join voice / mute'),
+  ('V', 'Join voice. In voice, hold V to talk (push to talk): you’re muted once you let go. Leave voice from the ☰ menu'),
+  ('M', 'Mute or unmute your mic in voice. ⚙️ Settings can have you join muted, for push to talk'),
+  ('Tab', 'The ☰ menu, top right: every window, and what shows on screen. Pin what you use most to the top bar'),
   ('Esc', 'Close any window and get back to looking around'),
   ('Ctrl + [', 'Send Esc to a terminal (e.g. to interrupt Claude)'),
-  ('⚙️', 'Settings: switch between first and third person'),
+  ('⚙️', 'Settings (in the ☰ menu): switch between first and third person'),
 ];
 
 ModalHandle openHelp() => ModalStack.instance.show(

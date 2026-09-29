@@ -10,6 +10,7 @@ import 'package:vector_math/vector_math.dart' as vm;
 
 import 'package:office_shared/floors.dart';
 import 'package:office_shared/layout.dart' hide Elevator, Gong, Jukebox, Whiteboard;
+
 import '../collider.dart';
 import '../text.dart';
 import '../toon.dart';
@@ -23,8 +24,13 @@ class Door {
   Door(this.x, this.y, this.z, this.show);
 
   final double x;
-  final double y;
+
+  /// Mutable for the exit door, which is further down the higher your floor is.
+  double y;
   final double z;
+
+  /// Stays shut: the exit door, seen from a floor above it.
+  bool locked = false;
 
   /// 0 shut, 1 wide open.
   double open = 0;
@@ -56,7 +62,10 @@ Future<Texture2D> planksTexture(FloorPalette p) => canvasTexture(512, 512, (g) {
     final offset = (row % 2) * 128.0;
     for (var col = -1; col < 3; col++) {
       final x = col * 256 + offset;
-      g.drawRect(Rect.fromLTWH(x + 2, row * 64 + 2, 252, 60), fill(linColor((row + col) % 3 == 0 ? p.floorAlt : p.floor)));
+      g.drawRect(
+        Rect.fromLTWH(x + 2, row * 64 + 2, 252, 60),
+        fill(linColor((row + col) % 3 == 0 ? p.floorAlt : p.floor)),
+      );
     }
     g.drawRect(Rect.fromLTWH(0, row * 64.0, 512, 3), fill(linColor(p.seam)));
   }
@@ -174,8 +183,10 @@ Node doorFrame(Opening o) {
   final at = onWall(o.wall, o.u);
   // Over the landing, where it lights the way down at night.
   final lampAt = vm.Vector3(at.x - wallT / 2 - 0.14, o.y1 + 0.33, at.z);
-  night.halos.add(Halo(at: lampAt, size: 0.9, color: '#ffe08a'));
-  night.lamps.add(Lamp(x: lampAt.x - 0.6, y: lampAt.y, z: lampAt.z, reach: 5, color: '#ffe3a3', power: 2.2));
+  night.halos.add(Halo(at: lampAt, size: 0.9, color: '#ffe08a', ground: true));
+  night.lamps.add(
+    Lamp(x: lampAt.x - 0.6, y: lampAt.y, z: lampAt.z, reach: 5, color: '#ffe3a3', power: 2.2, ground: true),
+  );
   final door = Door(at.x, 0, at.z, (k) => hinge.rotation = yaw(-1.8 * k * k * (3 - 2 * k)));
   return (group: mount(g, o), door: door);
 }
@@ -256,13 +267,14 @@ void buildBalcony(Node group, List<Interactable> interactables, NightParts night
   // Everything that doesn't move and isn't textured goes in here, merged at the end.
   final parts = Node(name: 'balcony');
   parts.add(mesh(box(w, slab - 0.01, d), tc(Palette.wallTrim), cx, -slab / 2 - 0.005, cz));
-  group.add(place(plankedFloor(w, d, color: '#d6a574'), x: cx, y: 0.002, z: cz));
-
-  // Posts down to the street at the outer corners.
-  const postH = -slab - streetY;
-  for (final x in [minX + 0.25, maxX - 0.25]) {
-    parts.add(mesh(cyl(0.12, 0.12, postH, 12), tc('#e6e8ee'), x, streetY + postH / 2, maxZ - 0.25));
-  }
+  group.add(
+    place(
+      plankedFloor(w, d, color: '#d6a574'),
+      x: cx,
+      y: 0.002,
+      z: cz,
+    ),
+  );
 
   // The railing: posts, a wooden top rail and glass between, on the three open sides.
   const railH = 1.05;
@@ -276,11 +288,25 @@ void buildBalcony(Node group, List<Interactable> interactables, NightParts night
       final t = i / n;
       parts.add(mesh(box(0.06, railH, 0.06), ink, x0 + (x1 - x0) * t, railH / 2, z0 + (z1 - z0) * t, false));
     }
-    parts.add(mesh(alongX ? box(len + 0.1, 0.07, 0.12) : box(0.12, 0.07, len + 0.1), wood, (x0 + x1) / 2, railH + 0.02, (z0 + z1) / 2));
+    parts.add(
+      mesh(
+        alongX ? box(len + 0.1, 0.07, 0.12) : box(0.12, 0.07, len + 0.1),
+        wood,
+        (x0 + x1) / 2,
+        railH + 0.02,
+        (z0 + z1) / 2,
+      ),
+    );
     for (var i = 0; i < n; i++) {
       final t = (i + 0.5) / n;
       parts.add(
-        place(glassPane(len / n - 0.1, railH - 0.2), x: x0 + (x1 - x0) * t, y: (railH - 0.2) / 2 + 0.08, z: z0 + (z1 - z0) * t, rot: yaw(alongX ? 0 : math.pi / 2)),
+        place(
+          glassPane(len / n - 0.1, railH - 0.2),
+          x: x0 + (x1 - x0) * t,
+          y: (railH - 0.2) / 2 + 0.08,
+          z: z0 + (z1 - z0) * t,
+          rot: yaw(alongX ? 0 : math.pi / 2),
+        ),
       );
     }
   }
@@ -292,7 +318,9 @@ void buildBalcony(Node group, List<Interactable> interactables, NightParts night
   for (final p in [sw, se]) {
     parts.add(mesh(cyl(0.035, 0.035, poleH - railH, 6), ink, p.x, (poleH + railH) / 2, p.z, false));
   }
-  final bulbs = [for (final c in ['#ffd166', '#ff8fa3', '#8ecae6', '#caffbf']) (c, bulb(night, c, 0.4) as Material)];
+  final bulbs = [
+    for (final c in ['#ffd166', '#ff8fa3', '#8ecae6', '#caffbf']) (c, bulb(night, c, 0.4) as Material),
+  ];
   final wallPoint = vm.Vector3(-6.5, 3.5, minZ + 0.02);
   parts.add(stringLights(sw, se, 0.35, bulbs, night));
   parts.add(stringLights(sw, wallPoint, 0.3, bulbs, night));
@@ -346,7 +374,9 @@ void buildBalcony(Node group, List<Interactable> interactables, NightParts night
   tray.add(mesh(cyl(0.18, 0.18, 0.02, 16), tc('#e9d8a6'), 0, 0.965, 0, false));
   final buttGeo = transformed(cyl(0.014, 0.014, 0.07, 6), rotZ(math.pi / 2));
   for (final (bx, bz, a) in [(0.06, 0.02, 0.4), (-0.05, -0.06, 2.1), (-0.02, 0.08, 1.2)]) {
-    tray.add(place(mesh(buttGeo, tc(a > 1 ? '#fffaf3' : '#e9a03b'), 0, 0, 0, false), x: bx, y: 0.98, z: bz, rot: yaw(a)));
+    tray.add(
+      place(mesh(buttGeo, tc(a > 1 ? '#fffaf3' : '#e9a03b'), 0, 0, 0, false), x: bx, y: 0.98, z: bz, rot: yaw(a)),
+    );
   }
   tray.position = vm.Vector3(Ashtray.x, 0, Ashtray.z);
   group.add(tray);
@@ -354,8 +384,44 @@ void buildBalcony(Node group, List<Interactable> interactables, NightParts night
   interactables.add(it);
   tagInteract(tray, it);
 
-  final sign = textPlane('🚬 Smoke break', const TextOpts(bg: '#2b2d42', color: '#fffaf3', size: 56, border: '#fffaf3'));
+  final sign = textPlane(
+    '🚬 Smoke break',
+    const TextOpts(bg: '#2b2d42', color: '#fffaf3', size: 56, border: '#fffaf3'),
+  );
   group.add(place(sign, x: -6.5, y: 2.2, z: minZ + 0.02, scale: 0.8));
+}
+
+/// The bottom floor's balcony stands on posts down to the street, at its outer corners (the ones
+/// above it hang off their walls). Their colliders are [balconyPostColliders].
+void buildBalconyPosts(Node group) {
+  const postH = -slab - streetY;
+  for (final x in [Balcony.minX + 0.25, Balcony.maxX - 0.25]) {
+    group.add(mesh(cyl(0.12, 0.12, postH, 12), tc('#e6e8ee'), x, streetY + postH / 2, Balcony.maxZ - 0.25));
+  }
+}
+
+/// Wall where the exit door is, for the floors above the bottom one: painted like the rest of the
+/// wall, inside and out, with its baseboard.
+({Node group, Collider collider}) exitPlug(Looks looks) {
+  const o = exitDoor;
+  final at = onWall(o.wall, o.u);
+  final g = Node(name: 'exit-plug');
+  // A box's faces go +x, -x, +y, -y, +z, -z; on the west wall, -x is outdoors.
+  final outside = tc(Palette.exterior);
+  final mats = [for (var i = 0; i < 6; i++) i == 1 ? outside : looks.wall];
+  g.add(place(boxFaces(wallT, o.y1 - o.y0, o.width, mats), x: at.x, y: (o.y0 + o.y1) / 2, z: at.z));
+  g.add(mesh(box(wallT + 0.04, 0.25, o.width), looks.trim, at.x, 0.125, at.z, false));
+  g.visible = false;
+  return (
+    group: g,
+    collider: Collider(
+      minX: Floor.minX - wallT,
+      maxX: Floor.minX,
+      minZ: o.u - o.width / 2,
+      maxZ: o.u + o.width / 2,
+      top: 99,
+    ),
+  );
 }
 
 /// Outside the exit: a concrete landing level with the office floor, and steps running south
@@ -391,11 +457,20 @@ void buildExitStairs(Node group) {
   final ink = tc(Palette.deskLeg);
   const railX = minX + 0.06;
   const railH = 1.0;
-  void post(double x, double y, double z) => group.add(mesh(cyl(0.03, 0.03, railH, 6), ink, x, y + railH / 2, z, false));
+  void post(double x, double y, double z) =>
+      group.add(mesh(cyl(0.03, 0.03, railH, 6), ink, x, y + railH / 2, z, false));
   void rail(double xa, double ya, double za, double xb, double yb, double zb) {
     final dir = vm.Vector3(xb - xa, yb - ya, zb - za);
     final r = mesh(cyl(0.035, 0.035, dir.length, 6), ink, 0, 0, 0, false);
-    group.add(place(r, x: (xa + xb) / 2, y: (ya + yb) / 2 + railH, z: (za + zb) / 2, rot: vm.Quaternion.fromTwoVectors(vm.Vector3(0, 1, 0), dir.normalized())));
+    group.add(
+      place(
+        r,
+        x: (xa + xb) / 2,
+        y: (ya + yb) / 2 + railH,
+        z: (za + zb) / 2,
+        rot: vm.Quaternion.fromTwoVectors(vm.Vector3(0, 1, 0), dir.normalized()),
+      ),
+    );
   }
 
   const nz = z0 + 0.06;
@@ -413,8 +488,7 @@ void buildExitStairs(Node group) {
 }
 
 /// The four outside walls, built in pieces around their windows and doors (see [wallsPlan]). Each
-/// is painted inside in the floor's colours and outside in the building's. Behind the loft they
-/// carry on up past the ceiling downstairs, to the loft's roof.
+/// is painted inside in the floor's colours and outside in the building's, all the way up to the ceiling.
 void buildWalls(Node group, Looks looks) {
   final inside = looks.wall;
   final outside = tc(Palette.exterior);
@@ -426,17 +500,25 @@ void buildWalls(Node group, Looks looks) {
   final casting = Node(name: 'walls'), above = Node(name: 'walls-above'), trim = Node(name: 'baseboards');
   for (final p in plan.pieces) {
     final out = outFace[p.side]!;
-    final mats = [for (var i = 0; i < 6; i++) i == out ? outside : inside];
+    // So do the ends of the north and south walls, which run on past the east and west ones to the corners.
+    final ends = p.alongX
+        ? [if (p.u0 <= Floor.minX - t + 0.001) 1, if (p.u1 >= Floor.maxX + t - 0.001) 0]
+        : const <int>[];
+    final mats = [for (var i = 0; i < 6; i++) i == out || ends.contains(i) ? outside : inside];
     final len = p.u1 - p.u0, h = p.y1 - p.y0;
     final um = (p.u0 + p.u1) / 2, ym = (p.y0 + p.y1) / 2;
     final n = p.alongX ? boxFaces(len, h, t, mats) : boxFaces(t, h, len, mats);
-    n.castsShadows = p.y1 <= wallHeight;
-    (n.castsShadows ? casting : above).add(p.alongX ? place(n, x: um, y: ym, z: p.at) : place(n, x: p.at, y: ym, z: um));
+    n.castsShadows = p.y1 <= shadeHeight;
+    (n.castsShadows ? casting : above).add(
+      p.alongX ? place(n, x: um, y: ym, z: p.at) : place(n, x: p.at, y: ym, z: um),
+    );
   }
   for (final r in plan.runs) {
     final len = r.u1 - r.u0, um = (r.u0 + r.u1) / 2;
     trim.add(
-      r.alongX ? mesh(box(len, 0.25, t + 0.04), looks.trim, um, 0.125, r.at, false) : mesh(box(t + 0.04, 0.25, len), looks.trim, r.at, 0.125, um, false),
+      r.alongX
+          ? mesh(box(len, 0.25, t + 0.04), looks.trim, um, 0.125, r.at, false)
+          : mesh(box(t + 0.04, 0.25, len), looks.trim, r.at, 0.125, um, false),
     );
   }
   for (final n in [casting, above, trim]) {

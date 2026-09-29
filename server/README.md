@@ -9,7 +9,8 @@ office that ran on the Node server carries on with its data, sessions and worker
 
 - `bin/agent_office.dart` is the one executable, compiled with `dart compile exe` by
   `tool/build.dart`. It is the server, and its subcommands are the PTY host (`__ptyhost`), the
-  agents' status hook (`hook`), `prune` and `accounts`.
+  agents' status hook (`hook`), `setup` (the first-start walkthrough, `setup.dart`), `prune` and
+  `accounts`.
 - `lib/src/server.dart` is the HTTP and WebSocket server (on `package:relic`); the other modules
   in `lib/src` are the pieces it wires together: `workers.dart` and `ptys.dart`/`ptyhost.dart` the
   workers and their terminals, `floor.dart` everything one floor (project) has, `config.dart`,

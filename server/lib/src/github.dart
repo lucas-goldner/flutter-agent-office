@@ -7,6 +7,9 @@ import 'package:office_shared/shared.dart';
 
 const Duration _refreshEvery = Duration(milliseconds: 90000);
 
+/// How long the repo's list of labels is kept before the label picker asks GitHub again.
+const _labelsMs = 60000;
+
 /// Turns gh's stderr into something a person standing at the board can act on.
 String _friendly(String raw) {
   if (RegExp(r'no git remotes found|none of the git remotes', caseSensitive: false).hasMatch(raw)) {
@@ -80,33 +83,6 @@ List<GhLabel> _labels(Object? raw) => [
     for (final l in raw)
       if (l is Map) GhLabel(name: '${l['name']}', color: '#${l['color'] ?? '888888'}'),
 ];
-
-final RegExp _pShort = RegExp(r'^p([0-3])$');
-final RegExp _pLong = RegExp(r'^priority\W*p?([0-3])$');
-
-/// How urgent an issue's labels say it is, 0 (critical) to 3 (low); 4 when it has no priority label.
-/// Reads "priority: high", "priority/low", "P1", "critical" and the like.
-int priorityRank(List<GhLabel> labels) {
-  var best = 4;
-  for (final l in labels) {
-    final n = l.name.toLowerCase().trim();
-    final p = _pShort.firstMatch(n) ?? _pLong.firstMatch(n);
-    var rank = p != null ? int.parse(p.group(1)!) : 4;
-    if (p == null && (n.contains('priority') || RegExp(r'^(critical|urgent|blocker)$').hasMatch(n))) {
-      if (RegExp(r'critical|urgent|blocker|highest').hasMatch(n)) {
-        rank = 0;
-      } else if (RegExp(r'high').hasMatch(n)) {
-        rank = 1;
-      } else if (RegExp(r'medium|\bmed\b|normal|moderate').hasMatch(n)) {
-        rank = 2;
-      } else if (RegExp(r'low|minor').hasMatch(n)) {
-        rank = 3;
-      }
-    }
-    if (rank < best) best = rank;
-  }
-  return best;
-}
 
 String _upper(Object? v) => (v == null ? '' : '$v').toUpperCase();
 
@@ -206,18 +182,6 @@ class MergeWatch {
   }
 }
 
-/// A stable sort (List.sort isn't guaranteed to be).
-void _stableSort<T>(List<T> xs, int Function(T a, T b) compare) {
-  final indexed = [for (var i = 0; i < xs.length; i++) (i, xs[i])];
-  indexed.sort((a, b) {
-    final c = compare(a.$2, b.$2);
-    return c != 0 ? c : a.$1 - b.$1;
-  });
-  for (var i = 0; i < xs.length; i++) {
-    xs[i] = indexed[i].$2;
-  }
-}
-
 class GitHub {
   GitHub(this._dir, this._onIssues, this._onPulls);
 
@@ -230,6 +194,10 @@ class GitHub {
   Timer? _timer;
   Future<GhRepoInfo>? _repo;
   Future<String>? _login;
+  ({int at, Future<List<GhLabel>> list})? _labelList;
+
+  /// Labels just changed from the office, by "issue:N" or "pull:N", and when.
+  final _relabeled = <String, ({List<GhLabel> labels, int at})>{};
 
   void start() {
     unawaited(refresh());
@@ -463,6 +431,134 @@ class GitHub {
     return url;
   }
 
+  /// Every label the repository has, for the label picker. Asked again after a minute (or a failure).
+  Future<List<GhLabel>> repoLabels() {
+    final known = _labelList;
+    if (known != null && _now() - known.at <= _labelsMs) return known.list;
+    final list =
+        gh([
+          'api',
+          'repos/{owner}/{repo}/labels?per_page=100',
+          '--paginate',
+          '--jq',
+          '.[] | {name, color, description}',
+        ], _dir).then(
+          (out) => [
+            for (final line in out.split('\n'))
+              if (line.trim().isNotEmpty)
+                if (jsonDecode(line) case final Map l)
+                  GhLabel(
+                    name: '${l['name']}',
+                    color: '#${l['color'] ?? '888888'}',
+                    description: l['description'] is String && (l['description'] as String).isNotEmpty
+                        ? l['description'] as String
+                        : null,
+                  ),
+          ],
+        );
+    _labelList = (at: _now(), list: list);
+    list.catchError((Object _) {
+      if (identical(_labelList?.list, list)) _labelList = null;
+      return const <GhLabel>[];
+    });
+    return list;
+  }
+
+  /// Puts labels on an issue or PR and takes others off (to GitHub a PR is an issue too), as whoever
+  /// gh is signed in as. Returns the labels it has now, or why they didn't change.
+  Future<({List<GhLabel>? labels, String? error})> setLabels(
+    GhKind kind,
+    int n,
+    List<String> add,
+    List<String> remove,
+  ) async {
+    final path = 'repos/{owner}/{repo}/issues/$n/labels';
+    const jq = '[.[] | {name, color}]';
+    List<GhLabel>? now;
+    try {
+      // -f labels[]=… sends a JSON array of plain strings: no @file reading, no {owner} filling in.
+      if (add.isNotEmpty) {
+        now = _labels(
+          jsonDecode(
+            await gh([
+              'api',
+              '--method',
+              'POST',
+              path,
+              for (final l in add) ...['-f', 'labels[]=$l'],
+              '--jq',
+              jq,
+            ], _dir),
+          ),
+        );
+      }
+      for (final l in remove) {
+        try {
+          now = _labels(
+            jsonDecode(await gh(['api', '--method', 'DELETE', '$path/${Uri.encodeComponent(l)}', '--jq', jq], _dir)),
+          );
+        } catch (err) {
+          // Someone took it off already, which is what was asked for.
+          if (!RegExp('label does not exist', caseSensitive: false).hasMatch(_messageOf(err))) rethrow;
+        }
+      }
+      now ??= _labels(jsonDecode(await gh(['api', '$path?per_page=100', '--jq', jq], _dir)));
+    } catch (err) {
+      // Some may have changed before it failed.
+      unawaited(kind == GhKind.issue ? _refreshIssues() : _refreshPulls());
+      return (labels: null, error: _messageOf(err));
+    }
+    // The board shows them at once, before the next look at GitHub (see _relabel).
+    final at = _now();
+    _relabeled['${kind.wire}:$n'] = (labels: now, at: at);
+    if (kind == GhKind.issue) {
+      issues = GhState(
+        items: _relabel(GhKind.issue, issues.items, at),
+        error: issues.error,
+        fetchedAt: issues.fetchedAt,
+        loading: issues.loading,
+      );
+      _onIssues(issues);
+      unawaited(_refreshIssues());
+    } else {
+      pulls = GhState(
+        items: _relabel(GhKind.pull, pulls.items, at),
+        error: pulls.error,
+        fetchedAt: pulls.fetchedAt,
+        loading: pulls.loading,
+      );
+      _onPulls(pulls);
+      unawaited(_refreshPulls());
+    }
+    return (labels: now, error: null);
+  }
+
+  /// A list asked for before a label change made here still has the old labels, so the new ones are
+  /// kept over it; a list asked for after the change is believed, and the change forgotten.
+  List<T> _relabel<T extends JsonObject>(GhKind kind, List<T> items, int asked) => [
+    for (final it in items) _relabelOne(kind, it, asked),
+  ];
+
+  T _relabelOne<T extends JsonObject>(GhKind kind, T it, int asked) {
+    final number = switch (it) {
+      GhIssue(:final number) => number,
+      GhPull(:final number) => number,
+      _ => 0,
+    };
+    final key = '${kind.wire}:$number';
+    final r = _relabeled[key];
+    if (r == null) return it;
+    if (r.at < asked) {
+      _relabeled.remove(key);
+      return it;
+    }
+    final json = {
+      ...it.toJson(),
+      'labels': [for (final l in r.labels) l.toJson()],
+    };
+    return (it is GhIssue ? GhIssue.fromJson(json) : GhPull.fromJson(json)) as T;
+  }
+
   /// Assigns the issue to whoever gh is signed in as, which moves it to In progress on the board.
   Future<String?> claim(int issue) async {
     try {
@@ -478,6 +574,7 @@ class GitHub {
     if (issues.loading) return;
     issues = GhState(items: issues.items, error: issues.error, fetchedAt: issues.fetchedAt, loading: true);
     _onIssues(issues);
+    final asked = _now();
     try {
       // Open and closed separately, so old open issues are never crowded out by recent closed ones.
       const fields = 'number,title,state,url,author,labels,assignees,createdAt,updatedAt,body,comments';
@@ -505,10 +602,7 @@ class GitHub {
               comments: i['comments'] is List ? (i['comments'] as List).length : asInt(i['comments']),
             ),
       ];
-      // Highest priority first, so the board (and the notes that fit on the wall) lead with it.
-      // The sort is stable: within a priority, gh's newest-first order stays.
-      _stableSort(items, (a, b) => priorityRank(a.labels) - priorityRank(b.labels));
-      issues = GhState(items: items, fetchedAt: _now(), loading: false);
+      issues = GhState(items: _relabel(GhKind.issue, items, asked), fetchedAt: _now(), loading: false);
     } catch (err) {
       issues = GhState(items: issues.items, loading: false, error: _messageOf(err), fetchedAt: _now());
     }
@@ -519,6 +613,7 @@ class GitHub {
     if (pulls.loading) return;
     pulls = GhState(items: pulls.items, error: pulls.error, fetchedAt: pulls.fetchedAt, loading: true);
     _onPulls(pulls);
+    final asked = _now();
     try {
       const fields =
           'number,title,state,isDraft,url,author,labels,reviewDecision,headRefName,headRefOid,baseRefName,createdAt,updatedAt,additions,deletions,statusCheckRollup,body,closingIssuesReferences';
@@ -565,7 +660,7 @@ class GitHub {
             ],
           ),
       ];
-      pulls = GhState(items: items, fetchedAt: _now(), loading: false);
+      pulls = GhState(items: _relabel(GhKind.pull, items, asked), fetchedAt: _now(), loading: false);
     } catch (err) {
       pulls = GhState(items: pulls.items, loading: false, error: _messageOf(err), fetchedAt: _now());
     }

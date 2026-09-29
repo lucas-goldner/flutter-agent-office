@@ -326,3 +326,9 @@ _Buffers _buffers(web.BaseAudioContext ctx) {
   _made = b;
   return b;
 }
+
+/// The tunes' noise and small room, shared with the DJ on the roof (dnb.dart).
+({web.AudioBuffer noise, web.AudioBuffer room}) tuneBuffers(web.BaseAudioContext ctx) {
+  final b = _buffers(ctx);
+  return (noise: b.noise, room: b.room);
+}

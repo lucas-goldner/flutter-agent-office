@@ -15,6 +15,28 @@ import 'sky_model.dart';
 import 'text.dart' show verticalPlane;
 import 'toon.dart' show hex;
 
+/// The furthest off the haze ever is, however high up you are: past that nothing's built (the grass
+/// and the road round the office end there, the city round the roof just past it), so it hides that.
+const double hazeMax = 300;
+
+/// The haze thins out with height over the street: past [_hazeClear] meters up, every [_hazeAbove]
+/// meters more you see as far again as down on the street (from the roof of six floors, 3.4 times).
+const double _hazeClear = 6;
+const double _hazeAbove = 17.5;
+
+/// How many times as far off the haze is for an eye at [eyeY], with the street at [street], as down
+/// on the street. The engine's fog is one distance for the whole view, so it goes by the eye alone
+/// (sky.ts took the higher of the eye and what it looks at).
+double hazeReach(double eyeY, double street) => 1 + math.max(eyeY - street - _hazeClear, 0) / _hazeAbove;
+
+/// The fog's start and end for an eye at [eyeY]: the sky's [near] and [far] pushed out by [hazeReach],
+/// never past [hazeMax].
+({double start, double end}) hazeFog(double near, double far, double eyeY, double street) {
+  final k = hazeReach(eyeY, street);
+  final end = math.min(far * k, hazeMax);
+  return (start: math.min(near * k, end * 0.45), end: end);
+}
+
 /// The building, walls included: the office upstairs and the garage under it.
 abstract final class _B {
   static const double minX = Floor.minX - wallT, maxX = Floor.maxX + wallT;
@@ -93,6 +115,9 @@ class SkyView {
   final NightParts _night;
   final math.Random _rnd;
   final Node _dome = Node(name: 'sky-dome');
+  /// Up on the roof: rain and snow fall on it, and the office's bulbs (under your feet) have no halos.
+  bool roof = false;
+
   late final Node _stars, _sun, _moon, _haloNode, _rainNode, _snowNode;
   late final UnlitMaterial _starMat, _sunMat, _moonMat, _haloMat, _rainMat, _snowMat;
   late final InstancedMesh _halos, _rain, _snow;
@@ -133,18 +158,25 @@ class SkyView {
     final sc = m.sunDiscColor;
     _sunMat.baseColorFactor = vm.Vector4(sc.r, sc.g, sc.b, m.sunDiscOpacity);
     _sun.visible = m.sunDiscOpacity > 0.01;
-    _moon.position = up(-m.sunEl, m.sunAz + math.pi);
-    _moonMat.baseColorFactor = _lin(0xf2f1ea, m.moonDiscOpacity);
+    _moon.position = m.moonDir * 160;
+    _moon.scale = vm.Vector3.all(m.moonScale);
+    final mc = m.moonColor;
+    final plain = _lin(0xf2f1ea, m.moonDiscOpacity);
+    _moonMat.baseColorFactor = vm.Vector4(plain.x * mc.r, plain.y * mc.g, plain.z * mc.b, plain.w);
     _moon.visible = m.moonDiscOpacity > 0.01;
 
     // Halos round the bulbs, when the lamps are on.
-    _haloNode.visible = m.lampsOn > 0.01 && _night.halos.isNotEmpty;
+    _haloNode.visible = m.lampsOn > 0.01 && _night.halos.isNotEmpty && !roof;
     if (_haloNode.visible) {
       _haloMat.baseColorFactor = vm.Vector4(1, 1, 1, m.lampsOn * 0.85);
       final halos = _night.halos;
+      // The ones down by the street are as far down as the street is from the floor you're on.
+      final drop = _night.street - streetY;
       for (var i = 0; i < halos.length; i++) {
+        final h = halos[i];
+        final at = h.ground ? vm.Vector3(h.at.x, h.at.y + drop, h.at.z) : h.at;
         // Points in three.js were sized in world units at a 1 px ratio: roughly this big up close.
-        _halos.setInstanceTransform(i, _facing(halos[i].at, cam, halos[i].size));
+        _halos.setInstanceTransform(i, _facing(at, cam, h.size));
       }
     }
 
@@ -159,6 +191,8 @@ class SkyView {
 
   void _fall(double dt, double t, SkyModel m, vm.Vector3 cam) {
     double wrap(double v, double c, double half) => v - c > half ? v - 2 * half : (v - c < -half ? v + 2 * half : v);
+    // Down to the street, or to a little below you when that's a long way down.
+    final floor = math.max(_night.street, cam.y - 12);
 
     final rainN = (_rainN * m.rain).round();
     _rainNode.visible = rainN > 0;
@@ -174,8 +208,8 @@ class SkyView {
         var x = wrap(_drops[d] + slant * speed * dt, cam.x, 24);
         var y = _drops[d + 1] - speed * dt;
         var z = wrap(_drops[d + 2], cam.z, 24);
-        if (y < streetY) {
-          y += 26;
+        if (y < floor) {
+          y = floor + 26;
           x = cam.x + _rand(-24, 24);
           z = cam.z + _rand(-24, 24);
         }
@@ -183,7 +217,7 @@ class SkyView {
           ..[d] = x
           ..[d + 1] = y
           ..[d + 2] = z;
-        if (_sheltered(x, z)) {
+        if (!roof && _sheltered(x, z)) {
           _rain.setInstanceTransform(i, _hidden);
           continue;
         }
@@ -211,8 +245,8 @@ class SkyView {
         var x = wrap(_flakes[f] + math.sin(t * 0.9 + i) * 0.3 * dt + 0.15 * dt, cam.x, 20);
         var y = _flakes[f + 1] - speed * dt;
         var z = wrap(_flakes[f + 2] + math.cos(t * 0.7 + i * 1.3) * 0.3 * dt, cam.z, 20);
-        if (y < streetY) {
-          y += 22;
+        if (y < floor) {
+          y = floor + 22;
           x = cam.x + _rand(-20, 20);
           z = cam.z + _rand(-20, 20);
         }
@@ -220,7 +254,7 @@ class SkyView {
           ..[f] = x
           ..[f + 1] = y
           ..[f + 2] = z;
-        _snow.setInstanceTransform(i, _sheltered(x, z) ? _hidden : _facing(vm.Vector3(x, y, z), cam, 1));
+        _snow.setInstanceTransform(i, !roof && _sheltered(x, z) ? _hidden : _facing(vm.Vector3(x, y, z), cam, 1));
       }
     }
   }

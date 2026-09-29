@@ -29,7 +29,10 @@ class OfficeSound implements DogSounds {
   void removeTypist(String id) {}
   void step([StepKind kind = StepKind.walk]) {}
   void stepAt(double x, double z, [double y = 0]) {}
+  void paper() {}
   void coffee() {}
+  void arcade(String kind, [int lines = 1]) {}
+  void ball(String kind, double x, double y, double z, double speed) {}
   @override
   void bark(double x, double z, int times) {}
   @override
@@ -39,6 +42,15 @@ class OfficeSound implements DogSounds {
   void ding(Ding kind) {}
   void setJukebox(JukeboxPlay? play) {}
   void setMusicVolume(double volume, bool muted) {}
+
+  /// Up on the roof, or inside on a floor.
+  void setOutdoors(bool on) {}
+
+  /// The DJ's set on the roof (see djTime); null stops it. The lights still follow it (dnb_score.dart).
+  void setDj(double Function()? clock) {}
+  void horn() {}
+  void pour(double x, double y, double z) {}
+  void hiccup() {}
 
   /// The jukebox's lights stay still.
   double beat() => 0;

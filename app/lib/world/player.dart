@@ -7,7 +7,9 @@ import 'dart:math' as math;
 import 'package:vector_math/vector_math.dart' as vm;
 
 import 'package:office_shared/layout.dart';
+
 import 'collider.dart';
+import 'drunk.dart' show drunkStagger, drunkSway;
 
 const double kRadius = 0.32;
 
@@ -31,6 +33,9 @@ const double kLookSpeed = 0.0022; // radians per pixel while the pointer is lock
 const double kDragLookSpeed = 0.005;
 
 enum ViewMode { first, third }
+
+/// Why a walk along a path ended.
+enum PathEnd { arrived, cancelled, stuck }
 
 /// What the keyboard is doing this frame, as physical keys (layout-independent, like e.code).
 class PlayerInput {
@@ -74,13 +79,85 @@ class PlayerController {
 
   /// 0 (steady) to 1: how hard the view trembles after one coffee too many.
   double jitter = 0;
+
+  /// How drunk you are (see booze.dart): the view rolls and sways, and you stagger as you walk.
+  double drunk = 0;
   double _jitterT = 0;
 
   /// Where you're sitting, or null on your feet.
   SeatPlace? seat;
 
+  /// How far below the floor you're on the street is: further down the higher your floor (see streetBelow).
+  double street = streetY;
+
+  /// Something that has hold of you instead of your legs (the ladder, a fire pole): it moves you
+  /// each frame, with no walking, falling or bumping into things, and the camera follows.
+  void Function(double dt)? rig;
+
   /// You got up by walking off or jumping (not by [stand]).
   void Function()? onStand;
+
+  /// Corners still to walk through on your own (see [walkPath]), or null while you're steering.
+  List<({double x, double z})>? _path;
+
+  /// How long a walk along [_path] has been getting nowhere, and whether it's running.
+  double _stuckFor = 0;
+  bool _pathRun = false;
+
+  /// A walk along a path ended: at its end, by a key of yours, or up against something.
+  void Function(PathEnd why)? onPathEnd;
+
+  /// Whether you're walking a path by yourself.
+  bool get walkingPath => _path != null;
+
+  /// Walks you through these corners by yourself until you get there, or take a step or a jump of your own.
+  void walkPath(List<({double x, double z})> points) {
+    _path = points.isEmpty ? null : [...points];
+    _stuckFor = 0;
+  }
+
+  void stopWalking() => _path = null;
+
+  /// A step along [_path]: toward its next corner, turning (and in first person, looking) the way you go.
+  void _followPath(double dt) {
+    final path = _path!;
+    final next = path.first;
+    final dx = next.x - pos.x, dz = next.z - pos.z;
+    final dist = math.sqrt(dx * dx + dz * dz);
+    if (dist < 0.25) {
+      path.removeAt(0);
+      if (path.isEmpty) {
+        _path = null;
+        onPathEnd?.call(PathEnd.arrived);
+      }
+      return;
+    }
+    // Run the long way round, walk the last few meters.
+    var left = dist;
+    for (var i = 1; i < path.length; i++) {
+      left += math.sqrt(math.pow(path[i].x - path[i - 1].x, 2) + math.pow(path[i].z - path[i - 1].z, 2));
+    }
+    _pathRun = left > 6;
+    final step = math.min(dist, (_pathRun ? kRun : kWalk) * speedBoost * dt);
+    final x0 = pos.x, z0 = pos.z;
+    _tryMove(pos.x + dx / dist * step, pos.z);
+    _tryMove(pos.x, pos.z + dz / dist * step);
+    moving = true;
+    final want = math.atan2(dx, dz);
+    final ease = math.min(1.0, dt * 8);
+    if (view == ViewMode.first) {
+      camYaw += math.atan2(math.sin(want + math.pi - camYaw), math.cos(want + math.pi - camYaw)) * ease;
+    } else {
+      facing += math.atan2(math.sin(want - facing), math.cos(want - facing)) * ease;
+    }
+    // Up against something the map didn't know about: give up rather than walk on the spot.
+    final moved = math.sqrt(math.pow(pos.x - x0, 2) + math.pow(pos.z - z0, 2));
+    _stuckFor = moved < step * 0.2 ? _stuckFor + dt : 0;
+    if (_stuckFor > 1) {
+      _path = null;
+      onPathEnd?.call(PathEnd.stuck);
+    }
+  }
   bool enabled = true;
   final PlayerInput input = PlayerInput();
 
@@ -152,9 +229,24 @@ class PlayerController {
   /// How far sitting moves your hips (and eyes) from where they are standing.
   double get _lift => seat == null ? 0 : seat!.hips - kHips;
 
+  /// Whether up (W, ↑), down (S, ↓) or jump (Space) is held down, and you have the controls.
+  bool holding({bool up = false, bool down = false, bool jump = false}) =>
+      enabled && ((up && input.forward) || (down && input.back) || (jump && input.jump));
+
   void update(double dt) {
     dt = math.min(dt, 0.05);
     final k = input;
+    final r = rig;
+    if (r != null) {
+      r(dt);
+      vy = 0;
+      grounded = false;
+      stepOffset *= math.exp(-dt * 16);
+      _bob = 0;
+      _jitterT += dt;
+      updateCamera();
+      return;
+    }
     if (seat != null) {
       if (!enabled || !k.any) {
         moving = false;
@@ -173,14 +265,22 @@ class PlayerController {
       if (k.left) ix -= 1;
       if (k.right) ix += 1;
     }
-    moving = ix != 0 || iz != 0;
+    final steering = ix != 0 || iz != 0;
+    moving = steering;
+    if (_path != null && (steering || (enabled && k.jump))) {
+      _path = null;
+      onPathEnd?.call(PathEnd.cancelled);
+    }
+    if (_path != null && enabled) _followPath(dt);
     if (view == ViewMode.first) facing = math.atan2(math.sin(camYaw + math.pi), math.cos(camYaw + math.pi));
-    if (moving) {
+    if (steering) {
       final len = math.sqrt(ix * ix + iz * iz);
       ix /= len;
       iz /= len;
       // Camera-relative: "forward" is where the camera looks.
-      final sin = math.sin(camYaw), cos = math.cos(camYaw);
+      // Drunk, your feet wander off to one side and then the other.
+      final stagger = drunkStagger(drunk, _jitterT);
+      final sin = math.sin(camYaw + stagger), cos = math.cos(camYaw + stagger);
       final dx = ix * cos + iz * sin;
       final dz = -ix * sin + iz * cos;
       final speed = (k.run ? kRun : kWalk) * speedBoost;
@@ -194,7 +294,8 @@ class PlayerController {
       }
     }
 
-    final ground = groundAt(colliders, pos.x, pos.z, pos.y);
+    // Never below the street: past the edge of the grass there's nothing else to stand on.
+    final ground = math.max(groundAt(colliders, pos.x, pos.z, pos.y), street);
     final jump = enabled && k.jump && grounded;
     if (jump) {
       vy = kJumpV * jumpBoost;
@@ -220,7 +321,7 @@ class PlayerController {
     }
     stepOffset *= math.exp(-dt * 16);
     final walking = moving && grounded;
-    walkPhase += dt * (walking ? (k.run ? 14 : 11) * speedBoost : 0);
+    walkPhase += dt * (walking ? ((_path != null ? _pathRun : k.run) ? 14 : 11) * speedBoost : 0);
     final bob = walking ? math.sin(walkPhase).abs() * 0.035 : 0.0;
     _bob += (bob - _bob) * math.min(1, dt * 18);
     _jitterT += dt;
@@ -230,7 +331,9 @@ class PlayerController {
   void updateCamera({bool snap = false}) {
     if (view == ViewMode.first) {
       camPos.setValues(pos.x, pos.y + kEyeHeight + _bob + stepOffset + _lift, pos.z);
-      final (yaw, pitch) = _shaken(camYaw, lookPitch);
+      final (shakenYaw, shakenPitch) = _shaken(camYaw, lookPitch);
+      final sway = drunkSway(drunk, _jitterT);
+      final yaw = shakenYaw + sway.yaw, pitch = shakenPitch + sway.pitch;
       // three.js's camera with rotation (pitch, yaw, 0) in YXZ order looks down -z turned by yaw.
       final dir = vm.Vector3(-math.sin(yaw) * math.cos(pitch), math.sin(pitch), -math.cos(yaw) * math.cos(pitch));
       camTarget.setFrom(camPos + dir);
@@ -247,23 +350,44 @@ class PlayerController {
     // room while you're in the office, out of the building while you're outside or on the balcony.
     // And under the loft, its roof or the garage ceiling.
     const m = 0.4;
-    final indoors = pos.y > -slab - 0.5 && pos.x > Floor.minX && pos.x < Floor.maxX && pos.z > Floor.minZ && pos.z < Floor.maxZ;
+    // On the ladder or a pole you can be down in a shaft under the floor, but you're still indoors.
+    final rigged = rig != null;
+    final indoors =
+        (rigged || pos.y > -slab - 0.5) &&
+        pos.x > Floor.minX &&
+        pos.x < Floor.maxX &&
+        pos.z > Floor.minZ &&
+        pos.z < Floor.maxZ;
     if (indoors) {
       cam.x = cam.x.clamp(Floor.minX + m, Floor.maxX - m);
       cam.z = cam.z.clamp(Floor.minZ + m, Floor.maxZ - m);
     }
-    final floorY = groundAt(colliders, pos.x, pos.z, pos.y);
+    final floorY = rigged ? 0.0 : math.max(groundAt(colliders, pos.x, pos.z, pos.y), street);
     final roof = ceilingAt(colliders, cam.x, cam.z, floorY) - 0.3;
     cam.y = cam.y.clamp(floorY + 0.6, math.max(floorY + 0.6, math.min(floorY + 3.5, roof)));
     // Down on the street, stay under the garage ceiling so its edge never cuts across the view.
-    if (pos.y < -slab - 1) cam.y = math.min(cam.y, math.max(floorY + 0.6, -slab - 0.3));
+    final garage = street - streetY - slab;
+    if (pos.y < garage - 1 && !rigged) cam.y = math.min(cam.y, math.max(floorY + 0.6, garage - 0.3));
     // How far you are out past each outside wall (west, east, north, south), and how far inside them the camera is.
     const e = wallT + m;
-    final out = [Floor.minX - wallT - pos.x, pos.x - Floor.maxX - wallT, Floor.minZ - wallT - pos.z, pos.z - Floor.maxZ - wallT];
+    final out = [
+      Floor.minX - wallT - pos.x,
+      pos.x - Floor.maxX - wallT,
+      Floor.minZ - wallT - pos.z,
+      pos.z - Floor.maxZ - wallT,
+    ];
     final side = out.indexOf(out.reduce(math.max));
-    final camIn = [cam.x - (Floor.minX - e), Floor.maxX + e - cam.x, cam.z - (Floor.minZ - e), Floor.maxZ + e - cam.z].reduce(math.min) > 0;
-    // Outside, back the camera out through the wall you're standing beyond.
-    if (!indoors && out[side] > 0 && camIn && (cam.y > -slab || side == 0 || side == 2)) {
+    final camIn =
+        [
+          cam.x - (Floor.minX - e),
+          Floor.maxX + e - cam.x,
+          cam.z - (Floor.minZ - e),
+          Floor.maxZ + e - cam.z,
+        ].reduce(math.min) >
+        0;
+    // Outside, back the camera out through the wall you're standing beyond: above the garage always,
+    // and down in it where it's walled in (the west and north sides).
+    if (!indoors && out[side] > 0 && camIn && (cam.y > garage || side == 0 || side == 2)) {
       switch (side) {
         case 0:
           cam.x = Floor.minX - e;
@@ -285,7 +409,14 @@ class PlayerController {
       final (yaw, pitch) = _shaken(0, 0);
       camTarget.add(vm.Vector3(yaw, pitch, 0) * camDist);
     }
+    if (drunk > 0) {
+      final sway = drunkSway(drunk, _jitterT);
+      camTarget.add(vm.Vector3(sway.yaw, sway.pitch, 0) * camDist);
+    }
   }
+
+  /// Drunk, the view rolls this far (radians) about where you look: for the camera's up.
+  double get roll => drunkSway(drunk, _jitterT).roll;
 
   /// The jitters: the view trembles a little, on top of wherever you're looking.
   (double, double) _shaken(double yaw, double pitch) {
@@ -327,7 +458,10 @@ class PlayerController {
     }
     // A stair: step up onto it if there's room there.
     final up = hit.top - pos.y;
-    if (grounded && up <= kStep && _blocker(x, z, hit.top) == null && pos.y + kHeight + up <= ceilingAt(colliders, x, z, pos.y)) {
+    if (grounded &&
+        up <= kStep &&
+        _blocker(x, z, hit.top) == null &&
+        pos.y + kHeight + up <= ceilingAt(colliders, x, z, pos.y)) {
       pos.setValues(x, hit.top, z);
       stepOffset -= up;
       return;
@@ -379,9 +513,10 @@ bool touches(Collider c, double x, double z, double r) {
   return (x - nx) * (x - nx) + (z - nz) * (z - nz) < r * r;
 }
 
-/// The floor under someone standing at (x, z) with their feet at [y]: the highest top they're on or above, else the street.
+/// The floor under someone standing at (x, z) with their feet at [y]: the highest top they're on or
+/// above (out of doors, the street's; see streetColliders).
 double groundAt(List<Collider> colliders, double x, double z, double y) {
-  var g = streetY;
+  var g = double.negativeInfinity;
   for (final c in colliders) {
     if (c.top > 50 || y < c.top - 0.1 || c.top <= g) continue;
     if (touches(c, x, z, kRadius)) g = c.top;

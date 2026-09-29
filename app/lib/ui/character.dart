@@ -29,7 +29,7 @@ ModalHandle openCharacter(
   (modal) => _CharacterWindow(scope: scope, modal: modal, first: first, onSave: onSave, preview: preview),
   escCloses: !first,
   backdropCloses: !first,
-);
+)..doing = '🪞 picking a new look';
 
 class _CharacterWindow extends StatefulWidget {
   const _CharacterWindow({

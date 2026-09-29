@@ -196,4 +196,34 @@ void main() {
       expect(auth.allowAttempt('1.2.3.4'), isTrue);
     });
   });
+
+  group('sign-in links', () {
+    Auth fresh() => Auth(randomBytes(32), randomBytes(16), 'secret', accounts);
+
+    test('a sign-in link works once', () {
+      final a = fresh();
+      final key = a.linkKey();
+      expect(key, matches(RegExp(r'^[\w-]{32}$')));
+      expect(a.useLinkKey(key), isTrue);
+      expect(a.useLinkKey(key), isFalse);
+    });
+
+    test("a made-up or empty key isn't a sign-in link, and another office's isn't either", () {
+      final a = fresh();
+      a.linkKey();
+      expect(a.useLinkKey(''), isFalse);
+      expect(a.useLinkKey('x' * 32), isFalse);
+      expect(a.useLinkKey(fresh().linkKey()), isFalse);
+    });
+
+    test('only the newest sign-in links are kept', () {
+      final a = fresh();
+      final first = a.linkKey();
+      final later = [for (var i = 0; i < 8; i++) a.linkKey()];
+      expect(a.useLinkKey(first), isFalse);
+      for (final key in later) {
+        expect(a.useLinkKey(key), isTrue);
+      }
+    });
+  });
 }

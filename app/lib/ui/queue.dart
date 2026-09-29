@@ -7,12 +7,15 @@ import 'package:flutter/material.dart';
 
 import '../interop/portable.dart';
 import '../office_scope.dart';
+
 import 'package:office_shared/protocol.dart';
+
 import '../state/store.dart';
 import 'child_button.dart';
 import 'modal.dart';
 import 'prompt.dart';
 import 'provider.dart';
+import 'worker_limit.dart' show queueFullNote;
 import 'queue_logic.dart';
 import 'theme.dart';
 
@@ -68,7 +71,7 @@ class _QueueWindow extends StatefulWidget {
 class _QueueWindowState extends State<_QueueWindow> {
   final _text = TextEditingController();
   final _focus = FocusNode();
-  late final _provider = ProviderPickerController(widget.scope.store.project);
+  late final _provider = ProviderPickerController(widget.scope.store.project, office: widget.scope.store.prompts.agent);
   late final Timer _tick;
 
   Store get store => widget.scope.store;
@@ -79,11 +82,16 @@ class _QueueWindowState extends State<_QueueWindow> {
     super.initState();
     // Keeps the "started 5m ago"s fresh.
     _tick = Timer.periodic(const Duration(seconds: 30), (_) => setState(() {}));
+    // The office's default worker changed in Settings while this is open.
+    store.topic(Topic.prompts).addListener(_office);
   }
+
+  void _office() => _provider.office = store.prompts.agent;
 
   @override
   void dispose() {
     _tick.cancel();
+    store.topic(Topic.prompts).removeListener(_office);
     _text.dispose();
     _focus.dispose();
     _provider.dispose();
@@ -97,7 +105,7 @@ class _QueueWindowState extends State<_QueueWindow> {
       return;
     }
     if (!_provider.valid()) return;
-    _send(QueueAddCmd(prompt: text, provider: _provider.value(), model: _provider.model()));
+    _send(QueueAddCmd(prompt: text, provider: _provider.value(), model: _provider.model(), effort: _provider.effort()));
     _text.clear();
   }
 
@@ -112,36 +120,36 @@ class _QueueWindowState extends State<_QueueWindow> {
       mainAxisSize: MainAxisSize.min,
       children: [
         // The form stays put and only the list below it re-renders, so worker updates don't pull focus out of the box.
-        LayoutBuilder(
-          builder: (context, box) => Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.end,
-            children: [
-              SizedBox(
-                width: (box.maxWidth - 8 - 210 - 8 - 130).clamp(180, box.maxWidth),
-                child: PromptField(
-                  controller: _text,
-                  focusNode: _focus,
-                  onSend: _add,
-                  hint: 'Describe a task for the next free worker…',
-                  minLines: 2,
-                  maxLines: 6,
-                  autofocus: true,
-                ),
-              ),
-              SizedBox(
-                width: 210,
-                child: ProviderPicker(controller: _provider, label: 'Queue provider', compact: true),
-              ),
-              OfficeButton(label: 'Add to queue', kind: BtnKind.primary, onPressed: _add),
-            ],
-          ),
+        // The prompt gets its own row; the provider, model and effort share the line under it with Add (#116).
+        PromptField(
+          controller: _text,
+          focusNode: _focus,
+          onSend: _add,
+          hint: 'Describe a task for the next free worker…',
+          minLines: 3,
+          maxLines: 6,
+          autofocus: true,
         ),
-        ListenableBuilder(listenable: store.topics([Topic.queue, Topic.workers, Topic.issues]), builder: (context, _) => _list()),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: ProviderPicker(controller: _provider, compact: true)),
+            const SizedBox(width: 8),
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: OfficeButton(label: 'Add to queue', kind: BtnKind.primary, onPressed: _add),
+            ),
+          ],
+        ),
+        ListenableBuilder(
+          listenable: store.topics([Topic.queue, Topic.workers, Topic.issues]),
+          builder: (context, _) => _list(),
+        ),
       ],
     ),
-    footer: const Row(children: [FooterNote('The queue keeps going while you are away. Set “workers at once” to 0 to pause it.')]),
+    footer: const Row(
+      children: [FooterNote('The queue keeps going while you are away. Set “workers at once” to 0 to pause it.')],
+    ),
   );
 
   Widget _limit() {
@@ -203,12 +211,25 @@ class _QueueWindowState extends State<_QueueWindow> {
                 TextSpan(text: q.maxWorkers == 0 ? '0' : '${q.maxWorkers}', style: b),
                 const TextSpan(
                   text:
-                      ' workers are busy, the next task gets a fresh worker in its own git worktree. '
+                      " of its tasks are running, the next task gets a fresh worker in its own git worktree (workers you hire yourself don't count). "
                       'Issues are assigned on GitHub when they start, and the pull request is linked when it shows up.',
                 ),
               ],
             ),
           ),
+        ),
+        // Only whether the office is full shows here; the machine reports every few seconds.
+        ListenableBuilder(
+          listenable: store.topic(Topic.machine),
+          builder: (context, _) {
+            final full = queueFullNote(store.machine, queued.length);
+            return full == null
+                ? const SizedBox.shrink()
+                : Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(full, style: note),
+                  );
+          },
         ),
         ?_section('🤖 Working on it', running, queued),
         ?_section('⏳ Up next', queued, queued),
@@ -263,7 +284,8 @@ class _QueueWindowState extends State<_QueueWindow> {
     final w = t.workerId != null ? store.workers[t.workerId] : null;
     final buttons = <Widget>[];
     String? pos;
-    Widget btn(String label, VoidCallback? onPressed, {String? tip}) => OfficeButton(label: label, dense: true, tooltip: tip, onPressed: onPressed);
+    Widget btn(String label, VoidCallback? onPressed, {String? tip}) =>
+        OfficeButton(label: label, dense: true, tooltip: tip, onPressed: onPressed);
     switch (t.status) {
       case TaskStatus.running:
         if (w != null) {

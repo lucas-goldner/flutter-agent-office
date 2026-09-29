@@ -1,6 +1,7 @@
 // The queue window's words (see queue.dart), apart so they are tested on the VM.
 
 import 'package:office_shared/protocol.dart';
+
 import 'modal.dart' show timeAgo;
 import 'provider.dart';
 import 'worker_text.dart';
@@ -31,7 +32,8 @@ String _usageSuffix(AgentProvider? provider, Usage? usage, ProjectInfo? project)
 /// The grey line under a task: provider, who, where, when.
 String taskMeta(QueueTask t, {WorkerInfo? w, ProjectInfo? project}) {
   final meta = <String>[];
-  final model = t.model != null ? ' · initial: ${t.model}' : '';
+  final badge = modelBadge(t.provider, t.model, t.effort);
+  final model = badge != null ? ' · initial: $badge' : '';
   switch (t.status) {
     case TaskStatus.running:
       final p = t.provider ?? w?.provider;
