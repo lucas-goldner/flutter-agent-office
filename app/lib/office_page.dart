@@ -191,6 +191,15 @@ class _OfficePageState extends State<OfficePage> {
                 Positioned(
                   left: 0,
                   right: 0,
+                  top: 70,
+                  child: ValueListenableBuilder(
+                    valueListenable: c.rooms.golfPanel,
+                    builder: (context, g, _) => g == null ? const SizedBox.shrink() : Center(child: GolfPanelView(g)),
+                  ),
+                ),
+                Positioned(
+                  left: 0,
+                  right: 0,
                   bottom: 120,
                   child: ValueListenableBuilder(
                     valueListenable: c.rooms.meter,

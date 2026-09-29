@@ -53,3 +53,47 @@ class ShotMeterBar extends StatelessWidget {
     ),
   );
 }
+
+/// The golf panel at the top while you're on the tee: which hole, the power meter (with your last
+/// shot marked), the loft and the aim.
+class GolfPanelView extends StatelessWidget {
+  const GolfPanelView(this.panel, {super.key});
+
+  final ({double power, double last, String info}) panel;
+
+  @override
+  Widget build(BuildContext context) => IgnorePointer(
+    child: Container(
+      padding: const EdgeInsets.fromLTRB(14, 8, 14, 10),
+      decoration: BoxDecoration(
+        color: Swatch.paper,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Swatch.ink, width: kBorder),
+        boxShadow: const [BoxShadow(color: Swatch.ink, offset: Offset(0, 4))],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('⛳ Hole 1 · 43 m · Par 1', style: heavy(14)),
+          const SizedBox(height: 6),
+          Stack(
+            clipBehavior: Clip.none,
+            children: [
+              ShotMeterBar(at: panel.power),
+              if (panel.last >= 0)
+                Positioned(
+                  left: 3 + panel.last.clamp(0, 1) * (ShotMeterBar.width - 6) - 1.5,
+                  top: -3,
+                  bottom: -3,
+                  width: 3,
+                  child: const ColoredBox(color: Swatch.ink),
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(panel.info, style: heavy(12.5, color: Swatch.muted)),
+        ],
+      ),
+    ),
+  );
+}

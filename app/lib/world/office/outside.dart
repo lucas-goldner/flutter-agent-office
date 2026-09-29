@@ -270,6 +270,34 @@ void _streetLamp(Node parts, NightParts night, Material glass, double x, double 
   night.lamps.add(Lamp(x: x, y: _g + h - 0.6, z: hz, reach: 10, color: '#ffcf8a', power: 4));
 }
 
+/// The neighbours' buildings: (x, z, width, height, depth, paint), across the street and further out
+/// behind and beside the office. The gap across the street from the balcony is the golf hole's
+/// (GolfHole in layout).
+const List<(double, double, double, double, double, String)> neighbours = [
+  (-38.0, 45.0, 12.0, 10.0, 9.0, '#8ecae6'),
+  (-22.0, 46.0, 14.0, 16.0, 10.0, '#ffb4a2'),
+  (12.0, 47.0, 16.0, 19.0, 12.0, '#cdb4db'),
+  (30.0, 45.0, 12.0, 9.0, 9.0, '#ffd6a5'),
+  (-20.0, -42.0, 18.0, 14.0, 10.0, '#a2d2ff'),
+  (8.0, -44.0, 16.0, 20.0, 12.0, '#f4acb7'),
+  (-48.0, -6.0, 10.0, 12.0, 16.0, '#ffe5b4'),
+  (50.0, 4.0, 10.0, 15.0, 18.0, '#bde0fe'),
+];
+
+/// Which way a neighbour at (x, z) is turned: its front to the office.
+double _facing(double x, double z) => x.abs() > 40 ? (x > 0 ? -math.pi / 2 : math.pi / 2) : (z > 0 ? math.pi : 0.0);
+
+/// The neighbours' footprints, and how tall each stands (roof cap included) above the street.
+List<({double minX, double maxX, double minZ, double maxZ, double top})> neighbourBoxes() => [
+  for (final (x, z, w, h, d, _) in neighbours)
+    () {
+      // Turned a quarter, its width runs along z.
+      final quarter = math.sin(_facing(x, z)).abs() > 0.5;
+      final hx = quarter ? d / 2 : w / 2, hz = quarter ? w / 2 : d / 2;
+      return (minX: x - hx - 0.2, maxX: x + hx + 0.2, minZ: z - hz - 0.2, maxZ: z + hz + 0.2, top: h + 0.4);
+    }(),
+];
+
 /// Everything outside, down on the street: grass, the lot in front of the garage, a road with
 /// sidewalks and street lamps, trees, neighbours' buildings and some clouds. Its colliders are
 /// [streetColliders].
@@ -327,22 +355,9 @@ void buildStreet(Node group, NightParts night) {
   group.add(mergeByMaterial(lamps));
 
   // The neighbours: across the street, and further out behind and beside the office.
-  const blocks = [
-    (-38.0, 45.0, 12.0, 10.0, 9.0, '#8ecae6'),
-    (-22.0, 46.0, 14.0, 16.0, 10.0, '#ffb4a2'),
-    (-5.0, 45.0, 12.0, 12.0, 9.0, '#b5e48c'),
-    (12.0, 47.0, 16.0, 19.0, 12.0, '#cdb4db'),
-    (30.0, 45.0, 12.0, 9.0, 9.0, '#ffd6a5'),
-    (-20.0, -42.0, 18.0, 14.0, 10.0, '#a2d2ff'),
-    (8.0, -44.0, 16.0, 20.0, 12.0, '#f4acb7'),
-    (-48.0, -6.0, 10.0, 12.0, 16.0, '#ffe5b4'),
-    (50.0, 4.0, 10.0, 15.0, 18.0, '#bde0fe'),
-  ];
   final rnd = math.Random(11);
-  for (final (x, z, w, h, d, color) in blocks) {
-    // Face the office.
-    final rotY = x.abs() > 40 ? (x > 0 ? -math.pi / 2 : math.pi / 2) : (z > 0 ? math.pi : 0.0);
-    group.add(place(_building(w, h, d, color, night, rnd), x: x, y: _g, z: z, rot: yaw(rotY)));
+  for (final (x, z, w, h, d, color) in neighbours) {
+    group.add(place(_building(w, h, d, color, night, rnd), x: x, y: _g, z: z, rot: yaw(_facing(x, z))));
   }
 
   // Puffy clouds, far off.

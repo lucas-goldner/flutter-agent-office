@@ -16,6 +16,7 @@ import 'package:vector_math/vector_math.dart' as vm;
 
 import '../../ui/screen_paint.dart';
 import '../collider.dart';
+import '../golf.dart';
 import '../hoop.dart';
 import '../text.dart';
 import '../toon.dart';
@@ -37,6 +38,7 @@ const Map<StationKind, String> _kioskSign = {
 /// What [addRooms] built that the office needs to reach later.
 class RoomsView {
   RoomsView({
+    required this.teeBall,
     required this.meetingBoard,
     required this.meetingSign,
     required this.cabinetScreen,
@@ -44,6 +46,9 @@ class RoomsView {
     required this.idleAgentSpots,
     required this.hoop,
   });
+
+  /// The golf tee's ball, waiting to be hit.
+  final Node teeBall;
 
   /// The meeting room's board (its output as it's written) and the sign by its door.
   final Face meetingBoard;
@@ -125,11 +130,18 @@ RoomsView addRooms(Office office) {
     Hoop.board.top - Hoop.board.bottom + 0.7,
   );
 
+  // Golf: the tee on the balcony, and the hole across the street.
+  final tee = buildTee();
+  group.add(tee.group);
+  office.interactables.add(tee.interactable);
+  buildGreen(group, streetY);
+
   // Under the loft: the meeting room.
   final meeting = buildMeetingRoom(office);
   fixture(Side.south, MeetingBoard.x, MeetingBoard.y, MeetingBoard.width + 0.4, MeetingBoard.height + 0.4);
 
   return RoomsView(
+    teeBall: tee.ball,
     meetingBoard: meeting.board,
     meetingSign: meeting.sign,
     hoop: hoop,

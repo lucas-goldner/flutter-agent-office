@@ -29,6 +29,7 @@ import '../world/machine.dart';
 import '../world/meeting.dart';
 import '../world/office/rooms.dart';
 import 'ball_play.dart';
+import 'golf_play.dart';
 import 'controller.dart';
 
 /// What each board agent is for: its board's icon, what it offers on the card over its head, and an example ask.
@@ -64,6 +65,7 @@ class RoomsHub {
   late final RoomsView view;
   late final ArcadeCabinet cabinet;
   late final BallPlay ball;
+  late final GolfPlay golf;
   late final ScreenTexture _machine;
   late final ScreenTexture _meetingBoard;
   late final ScreenTexture _meetingSign;
@@ -122,6 +124,10 @@ class RoomsHub {
     c.office.interactables.add(ball.ball.interactable);
     c.store.rooms.ballChanged.addListener(ball.news);
 
+    // Golf off the balcony.
+    golf = GolfPlay(c, view.teeBall);
+    c.office.group.add(golf.balls.group);
+
     // The board agents waiting by their boards before anyone has asked them anything.
     for (final def in stations) {
       final kind = def.station!;
@@ -134,13 +140,19 @@ class RoomsHub {
     }
   }
 
-  void dispose() => cabinet.dispose();
+  void dispose() {
+    cabinet.dispose();
+    golf.dispose();
+  }
+
+  /// The golf panel while you're at the tee (null otherwise).
+  ValueListenable<GolfPanel?> get golfPanel => golf.panel;
 
   /// The wind-up meter to show over the hint (null when you're not winding up).
   ValueListenable<ShotMeter?> get meter => ball.meterShown;
 
   /// Anywhere between your view and a screen you're using: your first-person hands would cover it.
-  bool get zoomed => cabinet.zoomed;
+  bool get zoomed => cabinet.zoomed || golf.active;
 
   /// Moves things on, and the camera toward whichever screen you're using. Returns the camera to draw with.
   PerspectiveCamera update(PerspectiveCamera camera, double dt, double t, Size size) {
@@ -150,7 +162,8 @@ class RoomsHub {
       final desk = c.office.desks[a.deskId];
       if (desk != null && desk.vacancy.visible) a.model.update(dt, t);
     }
-    return cabinet.update(camera, dt, size);
+    camera = cabinet.update(camera, dt, size);
+    return golf.update(camera, dt);
   }
 
   /// A worker's status changed to [w]'s: one of yours needing input stops your game at the arcade.
@@ -185,19 +198,26 @@ class RoomsHub {
       case InteractKind.meeting:
         if (key == DeskKey.e) showMeeting();
         return true;
+      case InteractKind.golf:
+        if (key == DeskKey.e) golf.start();
+        return true;
       default:
         return false;
     }
   }
 
   /// A key (down or up) before the office's own: the ball in your hands takes E and Q.
-  bool key(KeyEvent e) => ball.key(e);
+  bool key(KeyEvent e) => golf.key(e) || ball.key(e);
 
   /// A click on the scene: with the ball in your hands, it winds up and shoots.
-  bool click() => ball.click();
+  bool click() => golf.active || ball.click();
 
   /// What the hint says whatever you look at: with the ball in hand, how to shoot.
-  (String, List<HintPart>)? heldHint() => ball.holding ? ball.hint() : null;
+  (String, List<HintPart>)? heldHint() => golf.active
+      ? golf.hint()
+      : ball.holding
+      ? ball.hint()
+      : null;
 
   /// Something to use that's near without aiming at it: the ball at your feet.
   Interactable? nearby() => ball.atFeet();
@@ -259,6 +279,8 @@ class RoomsHub {
     switch (it.kind) {
       case InteractKind.ball:
         return ball.ballHint();
+      case InteractKind.golf:
+        return golf.teeHint();
       case InteractKind.meeting:
         final m = c.store.rooms.meeting.current;
         if (m == null) {

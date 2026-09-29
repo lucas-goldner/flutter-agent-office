@@ -7,6 +7,7 @@ import 'package:office_shared/layout.dart';
 import 'package:office_shared/nav.dart' show deskPoint;
 
 import '../collider.dart';
+import '../golf.dart' show golfBagCollider;
 import '../hoop.dart' show hoopColliders;
 import 'bookshelf.dart' show bookshelfCollider;
 import 'meeting_room.dart' show meetingColliders;
@@ -41,6 +42,7 @@ List<Collider> roomsColliders() => [
   for (final d in stations) kioskCollider(d),
   cabinetCollider(),
   bookshelfCollider(),
+  golfBagCollider(),
   ...hoopColliders(),
   ...meetingColliders(),
 ];
