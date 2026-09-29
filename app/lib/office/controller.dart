@@ -54,6 +54,7 @@ import '../ui/terminal.dart';
 import '../ui/title.dart' show waitingElsewhere;
 import '../ui/upgrade.dart';
 import '../ui/whiteboard.dart';
+import '../ui/worker_limit.dart' show pressureNote;
 import '../ui/whiteboard_logic.dart' show othersDrawing, whiteboardHint;
 import '../ui/usage.dart' show hiringPaused, usageLabel, usageTitle;
 import '../ui/worker_text.dart' show statusLabel;
@@ -1025,8 +1026,17 @@ class OfficeController implements OfficeActions {
   }
 
   @override
-  void hire(String deskId, {String? prompt, bool worktree = false, AgentProvider? provider, String? model}) {
-    net.send(WorkerSpawnCmd(deskId: deskId, prompt: prompt, worktree: worktree, provider: provider, model: model));
+  void hire(
+    String deskId, {
+    String? prompt,
+    bool worktree = false,
+    AgentProvider? provider,
+    String? model,
+    AgentEffort? effort,
+  }) {
+    net.send(
+      WorkerSpawnCmd(deskId: deskId, prompt: prompt, worktree: worktree, provider: provider, model: model, effort: effort),
+    );
     // The moment notifications start to matter: ask once (it has to come from a key press or click).
     if (settings.notify && notifier.permission == NotifyPermission.ask && !_askedToNotify) {
       _askedToNotify = true;
@@ -1048,7 +1058,10 @@ class OfficeController implements OfficeActions {
           providerOption: true,
           worktreeOption: store.project?.branch != null,
           project: store.project,
-          onSubmit: (text, o) => hire(deskId, prompt: text, worktree: o.worktree, provider: o.provider, model: o.model),
+          office: store.prompts.agent,
+          warning: pressureNote(store.machine),
+          onSubmit: (text, o) =>
+              hire(deskId, prompt: text, worktree: o.worktree, provider: o.provider, model: o.model, effort: o.effort),
         ),
       );
     } else if (isAsleep(w.status)) {
@@ -1088,12 +1101,15 @@ class OfficeController implements OfficeActions {
         providerOption: true,
         worktreeOption: store.project?.branch != null,
         project: store.project,
+        office: store.prompts.agent,
+        warning: pressureNote(store.machine),
         onSubmit: (text, o) => hire(
           deskId,
           prompt: text.isEmpty ? null : text,
           worktree: o.worktree,
           provider: o.provider,
           model: o.model,
+          effort: o.effort,
         ),
       ),
     );
@@ -1223,11 +1239,11 @@ class OfficeController implements OfficeActions {
         workers: [for (final w in awake) AskWorker(id: w.id, name: w.name, color: w.color, status: w.status)],
         worktreeOption: store.project?.branch != null,
         providerOption: true,
-        onSubmit: (prompt, to, worktree, provider, model) {
+        onSubmit: (prompt, to, worktree, provider, model, effort) {
           if (to != null) {
             net.send(WorkerPromptCmd(to, prompt));
           } else if (desk != null) {
-            hire(desk, prompt: prompt, worktree: worktree, provider: provider, model: model);
+            hire(desk, prompt: prompt, worktree: worktree, provider: provider, model: model, effort: effort);
           }
         },
       ),

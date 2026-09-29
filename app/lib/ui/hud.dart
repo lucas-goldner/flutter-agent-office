@@ -744,6 +744,7 @@ String workerSub(WorkerInfo w, ProjectInfo? project) {
   final provider = agent ? providerLabel(w.provider, project) : null;
   final kind = agent ? resolvedProvider(w.provider, project) : null;
   final state = agent ? providerUsageState(w.provider, project, w.usage) : null;
+  final badge = agent ? modelBadge(kind, w.model, w.effort) : null;
   final note = state == ProviderUsageState.untracked
       ? ' · usage untracked'
       : state == ProviderUsageState.waiting && kind == AgentProvider.opencode
@@ -753,7 +754,7 @@ String workerSub(WorkerInfo w, ProjectInfo? project) {
       : '';
   final doing = [w.activity, w.title, w.prompt].firstWhere((s) => s != null && s.isNotEmpty, orElse: () => null);
   return [
-    if (provider != null) '⚙️ $provider$note',
+    if (provider != null) '⚙️ $provider${badge != null ? ' · $badge' : ''}$note',
     if (w.worktree != null) '🌿 ${w.worktree!.branch}',
     if (w.pr != null) '🔀 PR #${w.pr!.number}',
     ?doing,

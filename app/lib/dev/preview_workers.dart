@@ -10,9 +10,11 @@ import 'package:flutter/material.dart';
 
 import '../net/office_socket.dart';
 import '../office_scope.dart';
+
 import 'package:office_shared/avatar.dart';
 import 'package:office_shared/layout.dart' as layout;
 import 'package:office_shared/protocol.dart';
+
 import '../state/store.dart';
 import '../ui/ask.dart';
 import '../ui/changes.dart';
@@ -94,7 +96,8 @@ class _Actions implements OfficeActions {
       openTerminal(scope, workerId, onChanges: () => openWorkerChanges(workerId), find: find);
 
   @override
-  void openWorkerChanges(String workerId) => openChanges(scope, workerId, onTerminal: () => openWorkerTerminal(workerId));
+  void openWorkerChanges(String workerId) =>
+      openChanges(scope, workerId, onTerminal: () => openWorkerTerminal(workerId));
 
   @override
   void showQueue() => openQueue(scope);
@@ -157,7 +160,8 @@ class _OfficeState extends State<_Office> {
     super.dispose();
   }
 
-  OfficeScope get scope => OfficeScope(store: store, net: net, settings: Settings(), actions: actions, child: const SizedBox());
+  OfficeScope get scope =>
+      OfficeScope(store: store, net: net, settings: Settings(), actions: actions, child: const SizedBox());
 
   /// Real mode: open the first shell worker's terminal, hiring one at a free desk if there is none.
   void _realStep() {
@@ -232,10 +236,12 @@ class _OfficeState extends State<_Office> {
             context: 'GitHub issue #42 in acme/app: "Login button does nothing on Safari"\nhttps://github.com/acme/app/issues/42',
             initial: 'Please look into this issue and fix it.',
             newDesk: 'Desk 5',
-            workers: [for (final w in store.workers.values) AskWorker(id: w.id, name: w.name, color: w.color, status: w.status)],
+            workers: [
+              for (final w in store.workers.values) AskWorker(id: w.id, name: w.name, color: w.color, status: w.status),
+            ],
             worktreeOption: true,
             providerOption: true,
-            onSubmit: (p, to, wt, provider, model) => debugPrint('ask: $to $wt $provider $model\n$p'),
+            onSubmit: (p, to, wt, provider, model, effort) => debugPrint('ask: $to $wt $provider $model $effort\n$p'),
           ),
         );
       case 'queue':
@@ -261,7 +267,9 @@ class _OfficeState extends State<_Office> {
       children: [
         Overlay(
           key: _overlay,
-          initialEntries: [OverlayEntry(builder: (_) => const Center(child: Text('Agent Office · worker windows preview')))],
+          initialEntries: [
+            OverlayEntry(builder: (_) => const Center(child: Text('Agent Office · worker windows preview'))),
+          ],
         ),
         const Positioned(top: 16, left: 0, right: 0, child: Center(child: ToastLayer())),
       ],
