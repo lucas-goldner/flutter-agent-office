@@ -552,8 +552,9 @@ void _table(Pen g, List<HighScore> scores, double x, double width, double y, dou
   for (var i = 0; i < scores.length; i++) {
     final s = scores[i];
     final cy = y + i * step;
-    if (s.game == mine)
+    if (s.game == mine) {
       g.roundRect(x - 8, cy - step / 2 + 2, width + 16, step - 4, 8, css('rgba(255, 209, 102, 0.22)'));
+    }
     final score = scoreText(s.score);
     final place = size * 1.6;
     TextStyle st(String color) => g.style(size, weight: FontWeight.w900, color: css(color));
