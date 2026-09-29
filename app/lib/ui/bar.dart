@@ -1,5 +1,4 @@
-// 🍸 The rooftop bar's menu: pick a drink and the bartender pours it (ui/bar.ts). And the roof's
-// button in the elevator's panel, over every floor.
+// 🍸 The rooftop bar's menu: pick a drink and the bartender pours it (ui/bar.ts).
 
 import 'package:flutter/material.dart';
 
@@ -117,74 +116,6 @@ class _DrinkRowState extends State<_DrinkRow> {
                   ),
                 ],
               ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// The roof, over every floor, in the elevator's panel: the rooftop bar. [people] are up there now.
-class RoofButton extends StatefulWidget {
-  const RoofButton({super.key, required this.here, required this.people, required this.onRide});
-  final bool here;
-  final int people;
-  final VoidCallback onRide;
-
-  @override
-  State<RoofButton> createState() => _RoofButtonState();
-}
-
-class _RoofButtonState extends State<RoofButton> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final here = widget.here;
-    return Tooltip(
-      message: here ? "You're up on the roof" : 'Ride up to the ${roofName.toLowerCase()}',
-      waitDuration: const Duration(milliseconds: 600),
-      child: MouseRegion(
-        cursor: here ? SystemMouseCursors.basic : SystemMouseCursors.click,
-        onEnter: (_) => setState(() => _hover = true),
-        onExit: (_) => setState(() => _hover = false),
-        child: GestureDetector(
-          onTap: here ? null : widget.onRide,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-            decoration: BoxDecoration(
-              color: here || _hover ? Swatch.paper2 : Colors.white,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: Swatch.ink, width: kBorder),
-              boxShadow: [if (!here) const BoxShadow(color: Swatch.ink, offset: Offset(0, 3))],
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: 34,
-                  height: 34,
-                  alignment: Alignment.center,
-                  decoration: const BoxDecoration(color: Swatch.ink, shape: BoxShape.circle),
-                  child: const Text('🍸', style: TextStyle(fontSize: 17)),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(here ? '$roofName · you are here' : roofName, style: heavy(16, weight: FontWeight.w900)),
-                      Text(
-                        'The roof: a DJ playing drum and bass, a bar, and the city all around',
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: heavy(12, color: Swatch.muted, weight: FontWeight.w700),
-                      ),
-                    ],
-                  ),
-                ),
-                if (widget.people > 0) Text('🧑 ${widget.people}', style: heavy(13)),
-              ],
             ),
           ),
         ),

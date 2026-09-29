@@ -8,7 +8,9 @@ import 'package:flutter/services.dart';
 
 import '../interop/portable.dart';
 import '../office_scope.dart';
+
 import 'package:office_shared/protocol.dart';
+
 import 'child_button.dart';
 import 'modal.dart';
 import 'prompt_logic.dart';
@@ -16,12 +18,13 @@ import 'provider.dart';
 import 'theme.dart';
 
 /// What came with the text: the worktree box and the provider picker, when they were offered.
-typedef PromptChoice = ({bool worktree, AgentProvider? provider, String? model});
+typedef PromptChoice = ({bool worktree, AgentProvider? provider, String? model, AgentEffort? effort});
 
 class PromptOptions {
   const PromptOptions({
     required this.title,
     this.subtitle,
+    this.warning,
     this.placeholder,
     this.initial,
     this.submitLabel,
@@ -29,11 +32,15 @@ class PromptOptions {
     this.worktreeOption = false,
     this.providerOption = false,
     this.project,
+    this.office,
     required this.onSubmit,
   });
 
   final String title;
   final String? subtitle;
+
+  /// A warning over the prompt, e.g. that the machine is under pressure.
+  final String? warning;
   final String? placeholder;
   final String? initial;
   final String? submitLabel;
@@ -47,6 +54,9 @@ class PromptOptions {
   /// Offer the configured agent provider choice (only when hiring a new worker); needs [project].
   final bool providerOption;
   final ProjectInfo? project;
+
+  /// The office's default worker as picked in ⚙️ Settings (store.prompts.agent).
+  final PromptsAgent? office;
   final void Function(String text, PromptChoice opts) onSubmit;
 }
 
@@ -70,7 +80,9 @@ class _PromptWindowState extends State<_PromptWindow> {
   late final _text = TextEditingController(text: widget.opts.initial ?? '');
   final _focus = FocusNode();
   late bool _worktree = worktreePref();
-  late final ProviderPickerController? _provider = widget.opts.providerOption ? ProviderPickerController(widget.opts.project) : null;
+  late final ProviderPickerController? _provider = widget.opts.providerOption
+      ? ProviderPickerController(widget.opts.project, office: widget.opts.office)
+      : null;
 
   @override
   void initState() {
@@ -98,7 +110,12 @@ class _PromptWindowState extends State<_PromptWindow> {
     if (p != null && !p.valid()) return;
     widget.modal.close();
     if (o.worktreeOption) saveWorktreePref(_worktree);
-    o.onSubmit(text, (worktree: o.worktreeOption && _worktree, provider: p?.value(), model: p?.model()));
+    o.onSubmit(text, (
+      worktree: o.worktreeOption && _worktree,
+      provider: p?.value(),
+      model: p?.model(),
+      effort: p?.effort(),
+    ));
   }
 
   @override
@@ -111,6 +128,14 @@ class _PromptWindowState extends State<_PromptWindow> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (o.warning != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Text(
+                o.warning!,
+                style: heavy(14, color: Swatch.bad, weight: FontWeight.w800),
+              ),
+            ),
           if (o.subtitle != null)
             Padding(
               padding: const EdgeInsets.only(bottom: 10),
@@ -119,7 +144,13 @@ class _PromptWindowState extends State<_PromptWindow> {
                 style: heavy(14, color: Swatch.muted, weight: FontWeight.w700),
               ),
             ),
-          PromptField(controller: _text, focusNode: _focus, onSend: _send, hint: o.placeholder ?? 'What should the worker work on?', minLines: 7),
+          PromptField(
+            controller: _text,
+            focusNode: _focus,
+            onSend: _send,
+            hint: o.placeholder ?? 'What should the worker work on?',
+            minLines: 7,
+          ),
           if (_provider != null) ProviderPicker(controller: _provider),
           if (o.worktreeOption)
             WorktreeToggle(
@@ -212,7 +243,14 @@ ModalHandle confirmDialog(String title, String body, String confirmLabel, VoidCa
 }
 
 class SendHomeOptions {
-  const SendHomeOptions({required this.workerId, required this.name, required this.where, required this.worktree, required this.onConfirm, this.ask});
+  const SendHomeOptions({
+    required this.workerId,
+    required this.name,
+    required this.where,
+    required this.worktree,
+    required this.onConfirm,
+    this.ask,
+  });
 
   final String workerId;
   final String name;
@@ -234,7 +272,9 @@ Future<WorktreeState> _inspectWorktree(OfficeScope scope, String workerId, VoidC
   final timer = Timer(const Duration(seconds: 8), () {
     sub.cancel();
     if (!done.isCompleted) {
-      done.complete(const WorktreeState(exists: true, dirty: 0, ahead: 0, unpushed: 0, error: 'the office did not answer'));
+      done.complete(
+        const WorktreeState(exists: true, dirty: 0, ahead: 0, unpushed: 0, error: 'the office did not answer'),
+      );
     }
   });
   sub = scope.net.messages.listen((m) {
@@ -371,7 +411,11 @@ class _Choice extends StatelessWidget {
           children: [
             Padding(
               padding: const EdgeInsets.only(top: 2),
-              child: Icon(on ? Icons.radio_button_checked : Icons.radio_button_off, size: 16, color: on ? Swatch.accent : Swatch.ink),
+              child: Icon(
+                on ? Icons.radio_button_checked : Icons.radio_button_off,
+                size: 16,
+                color: on ? Swatch.accent : Swatch.ink,
+              ),
             ),
             Expanded(
               child: Column(

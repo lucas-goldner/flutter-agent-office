@@ -125,4 +125,4 @@ ModalHandle openViewer(Share share) => ModalStack.instance.show(
       },
     ),
   ),
-);
+)..doing = "🖥️ watching ${share.who}'s screen";

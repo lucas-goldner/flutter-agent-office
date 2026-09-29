@@ -3,12 +3,15 @@
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_scene/scene.dart' hide Material;
 
 import 'interop/pointer_lock.dart';
 import 'office/controller.dart';
 import 'office_scope.dart';
 import 'ui/arcade.dart';
+import 'ui/compass.dart';
+import 'ui/emote_wheel.dart';
 import 'ui/hud.dart';
 import 'ui/modal.dart';
 import 'world/drunk.dart';
@@ -28,17 +31,19 @@ class _OfficePageState extends State<OfficePage> {
   final FocusNode _focus = FocusNode(debugLabel: 'office');
   late final PointerLock _lock = PointerLock(
     onMove: (dx, dy) {
+      // While the emote wheel is open, the mouse points at an emote instead of looking around.
+      if (c.emoteWheel.isOpen) return c.emoteWheel.move(dx, dy);
       if (c.player.enabled) c.player.look(dx * kLookSpeed, dy * kLookSpeed);
     },
     onChange: (locked) {
       c.pointerLocked = locked;
-      // A lock that lands after a window opened (the whiteboard's Excalidraw needs the real mouse) lets go.
+      if (locked) c.relookOnKey = false;
+      // A lock that lands with a window open (the one yieldMouse takes, or a relock racing the next
+      // window) lets go: the whiteboard's Excalidraw, a terminal's text need the real mouse.
       if (locked && ModalStack.instance.open) _lock.unlock();
     },
   );
 
-  /// Whether the mouse was captured when the windows opened, so closing them gives it back.
-  bool _relook = false;
   Offset? _drag;
   double _dragMoved = 0;
   Size _view = Size.zero;
@@ -47,7 +52,9 @@ class _OfficePageState extends State<OfficePage> {
   void initState() {
     super.initState();
     c.init();
-    _lock.attach();
+    _lock
+      ..mayLock = (() => !ModalStack.instance.open && c.player.view == ViewMode.first)
+      ..attach();
     ModalStack.instance.changes.addListener(_onModals);
     WidgetsBinding.instance.addPostFrameCallback((_) => ModalStack.instance.attach(Overlay.of(context)));
   }
@@ -65,20 +72,38 @@ class _OfficePageState extends State<OfficePage> {
     c.player.enabled = !open;
     c.player.input.clear();
     if (open) {
-      if (_lock.locked) _relook = true;
-      _lock.unlock();
+      c.emoteWheel.close();
+      // A phone has no mouse to take back afterwards.
+      _lock.finePointer ? _lock.yieldMouse() : _lock.unlock();
     } else {
-      // Once the last window is closed, the game has the keyboard again and, in first person, the mouse.
-      Future(() {
-        if (ModalStack.instance.open) return;
-        _focus.requestFocus();
-        if (c.player.view == ViewMode.first && _relook) _lock.lock();
-        _relook = false;
-      });
+      // A tick later, so closing one window to open the next (Settings → character) doesn't grab
+      // the mouse in between.
+      Future(_backToGame);
     }
   }
 
-  KeyEventResult _onKey(FocusNode node, KeyEvent e) => c.onKey(e) ? KeyEventResult.handled : KeyEventResult.ignored;
+  /// Once the last window is closed, the game has the keyboard again and, in first person, the mouse.
+  void _backToGame() {
+    if (ModalStack.instance.open) return;
+    _focus.requestFocus();
+    if (c.player.view != ViewMode.first || !_lock.canLock || _lock.hasMouse) return;
+    // The browser lets a page re-capture the mouse it let go of itself (see yieldMouse), even on Esc,
+    // and any time after a click, like one on ✕. When it won't, the next key you press does.
+    _lock.lock();
+    c.relookOnKey = true;
+  }
+
+  KeyEventResult _onKey(FocusNode node, KeyEvent e) {
+    if (c.relookOnKey &&
+        e is KeyDownEvent &&
+        e.logicalKey != LogicalKeyboardKey.escape &&
+        !ModalStack.instance.open &&
+        !c.hud.typing &&
+        _lock.canLock) {
+      _lock.lock();
+    }
+    return c.onKey(e) ? KeyEventResult.handled : KeyEventResult.ignored;
+  }
 
   void _down(PointerDownEvent e) {
     _focus.requestFocus();
@@ -86,6 +111,8 @@ class _OfficePageState extends State<OfficePage> {
     final mouse = e.kind == PointerDeviceKind.mouse;
     if (c.player.view == ViewMode.first && mouse && _lock.canLock) {
       if (_lock.locked) {
+        // No cursor while it's captured: a click picks what the emote wheel points at.
+        if (c.emoteWheel.isOpen) return c.emoteWheel.click();
         if (e.buttons == kPrimaryMouseButton) c.onClick(Offset(_view.width / 2, _view.height / 2), _view);
         return;
       }
@@ -182,6 +209,16 @@ class _OfficePageState extends State<OfficePage> {
                   child: LabelLayer(hub: c.labels, camera: () => c.camera, blocked: c.labelBlocked),
                 ),
                 Positioned.fill(
+                  child: CompassLayer(
+                    camera: () => c.camera,
+                    bearings: c.waitingBearings,
+                    waiting: c.waitingChip,
+                    onNext: c.goToNextWaiting,
+                    // The dock on the top bar has it (the ☰ HUD's 'waiting' action).
+                    chip: false,
+                  ),
+                ),
+                Positioned.fill(
                   child: IgnorePointer(
                     child: ValueListenableBuilder<bool>(
                       valueListenable: c.fade,
@@ -190,6 +227,17 @@ class _OfficePageState extends State<OfficePage> {
                         duration: const Duration(milliseconds: 300),
                         child: const ColoredBox(color: Color(0xFF14151F)),
                       ),
+                    ),
+                  ),
+                ),
+                // A floor blown up under you: the white-hot flash.
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: ValueListenableBuilder<double>(
+                      valueListenable: c.flash,
+                      builder: (context, v, _) => v <= 0
+                          ? const SizedBox.shrink()
+                          : ColoredBox(color: const Color(0xFFFFF4D6).withValues(alpha: v * 0.9)),
                     ),
                   ),
                 ),
@@ -207,6 +255,8 @@ class _OfficePageState extends State<OfficePage> {
                     clock: () => c.clockSeconds,
                   ),
                 ),
+                Positioned.fill(child: EmotePop(pop: c.emotePop)),
+                Positioned.fill(child: EmoteWheelView(wheel: c.emoteWheel)),
               ],
             ],
           ),

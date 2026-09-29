@@ -14,7 +14,7 @@ import 'window_parts.dart';
 
 /// [openVolume] opens your own volume (⚙️ Settings).
 ModalHandle openJukebox(OfficeScope scope, {required VoidCallback openVolume}) =>
-    ModalStack.instance.show((modal) => _JukeboxWindow(scope: scope, modal: modal, openVolume: openVolume));
+    ModalStack.instance.show((modal) => _JukeboxWindow(scope: scope, modal: modal, openVolume: openVolume))..doing = '🎵 at the jukebox';
 
 class _JukeboxWindow extends StatefulWidget {
   const _JukeboxWindow({required this.scope, required this.modal, required this.openVolume});

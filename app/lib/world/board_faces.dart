@@ -89,19 +89,90 @@ class _Face extends StatelessWidget {
 
 enum CorkKind { issues, pulls }
 
+/// The issues board's notes that aren't where they usually are: cards someone on the floor is
+/// carrying around (missing from the cork), and the one you're reaching for (lifted off it).
+class CorkMarks extends ChangeNotifier {
+  Set<int> _off = const {};
+  int? _lifted;
+
+  Set<int> get off => _off;
+  int? get lifted => _lifted;
+
+  set off(Set<int> v) {
+    if (v.length == _off.length && v.containsAll(_off)) return;
+    _off = v;
+    notifyListeners();
+  }
+
+  set lifted(int? v) {
+    if (v == _lifted) return;
+    _lifted = v;
+    notifyListeners();
+  }
+}
+
 /// The 📌 issues or 🔀 PR cork board, from the store.
 class CorkBoardFace extends StatelessWidget {
-  const CorkBoardFace({super.key, required this.store, required this.kind});
+  const CorkBoardFace({super.key, required this.store, required this.kind, this.marks});
   final Store store;
   final CorkKind kind;
 
+  /// Cards off the issues board and the note being reached for.
+  final CorkMarks? marks;
+
   @override
   Widget build(BuildContext context) => ListenableBuilder(
-        listenable: store.topics(kind == CorkKind.issues ? const [Topic.issues] : const [Topic.pulls, Topic.workers]),
+        listenable: Listenable.merge([
+          store.topics(kind == CorkKind.issues ? const [Topic.issues] : const [Topic.pulls, Topic.workers]),
+          ?marks,
+        ]),
         builder: (context, _) => _Face(kind == CorkKind.issues
-            ? CorkBoardPainter.issues(store.issues)
+            ? CorkBoardPainter.issues(store.issues, off: marks?.off ?? const {}, lifted: marks?.lifted)
             : CorkBoardPainter.pulls(store.pulls, store.workers)),
       );
+}
+
+/// A note as it's drawn on a cork board's 1200x600 face: its middle, size and tilt.
+typedef CorkSpot = ({int number, double x, double y, double w, double h, double tilt});
+
+/// Where the notes go (the first 15 at most, and fewer rows than that when they'd get too small):
+/// fewer notes are bigger notes, so a quiet board is still readable from across the room.
+({List<CorkSpot> spots, double scale, int cols, int rows}) corkLayout(List<int> numbers) {
+  const w = 1200.0, h = 600.0;
+  final n = math.min(numbers.length, 15);
+  if (n == 0) return (spots: const [], scale: 1, cols: 0, rows: 0);
+  final cols = n <= 2 ? n : n <= 4 ? 2 : n <= 6 ? 3 : n <= 8 ? 4 : 5;
+  final rows = math.min(3, (n / cols).ceil());
+  final scale = math.min(2.0, math.max(1.0, 3 / math.max(cols.toDouble(), rows * 1.3)));
+  final nw = math.min(208 * scale, (w - 40) / cols - 30);
+  final nh = math.min(164 * scale, (h - 40) / rows - 30);
+  final gx = (w - cols * nw) / (cols + 1);
+  final gy = (h - rows * nh) / (rows + 1);
+  final spots = <CorkSpot>[
+    for (var i = 0; i < math.min(numbers.length, cols * rows); i++)
+      (
+        number: numbers[i],
+        x: gx + (i % cols) * (nw + gx) + nw / 2,
+        y: gy + (i ~/ cols) * (nh + gy) + nh / 2,
+        w: nw,
+        h: nh,
+        tilt: ((numbers[i] * 37) % 7 - 3) * 0.012,
+      ),
+  ];
+  return (spots: spots, scale: scale, cols: cols, rows: rows);
+}
+
+/// The note at [uv] on a board's face (u right, v down, 0–1), or null over bare cork.
+int? corkNoteAt(List<CorkSpot> spots, double u, double v) {
+  final px = u * kFaceSize.width, py = v * kFaceSize.height;
+  // Topmost first: later notes are drawn over earlier ones.
+  for (final n in spots.reversed) {
+    // Into the note's own (tilted) frame.
+    final dx = px - n.x, dy = py - n.y;
+    final c = math.cos(-n.tilt), s = math.sin(-n.tilt);
+    if ((dx * c - dy * s).abs() <= n.w / 2 && (dx * s + dy * c).abs() <= n.h / 2) return n.number;
+  }
+  return null;
 }
 
 class CorkNote {
@@ -116,16 +187,22 @@ class CorkNote {
 
 /// Paints a cork board with pinned sticky notes (BoardTexture.render).
 class CorkBoardPainter extends CustomPainter {
-  CorkBoardPainter._(this.kind, this.notes, this.error, this.loading, this.fetchedAt)
-      : key = '${kind.name}|$error|$loading|${fetchedAt > 0}|${notes.map((n) => '${n.number}:${n.title}:${n.draft}:${n.worker}').join('\n')}';
+  CorkBoardPainter._(this.kind, this.notes, this.error, this.loading, this.fetchedAt, {this.lifted})
+      : key = '${kind.name}|$error|$loading|${fetchedAt > 0}|$lifted|${notes.map((n) => '${n.number}:${n.title}:${n.draft}:${n.worker}').join('\n')}';
 
-  factory CorkBoardPainter.issues(GhState<GhIssue> st) => CorkBoardPainter._(
+  /// [off]: cards someone is carrying, missing from the cork; [lifted]: the note being reached for.
+  factory CorkBoardPainter.issues(GhState<GhIssue> st, {Set<int> off = const {}, int? lifted}) => CorkBoardPainter._(
         CorkKind.issues,
-        [for (final i in st.items.where((i) => i.state == 'OPEN')) CorkNote(i.number, i.title)],
+        [for (final i in st.items.where((i) => i.state == 'OPEN' && !off.contains(i.number))) CorkNote(i.number, i.title)],
         st.error,
         st.loading,
         st.fetchedAt,
+        lifted: lifted,
       );
+
+  /// The open notes on the board, in the order they're pinned up (see [corkLayout]).
+  static List<int> issueNumbers(GhState<GhIssue> st, Set<int> off) =>
+      [for (final i in st.items) if (i.state == 'OPEN' && !off.contains(i.number)) i.number];
 
   /// [workers] lets PR notes name the desk they came from.
   factory CorkBoardPainter.pulls(GhState<GhPull> st, Map<String, WorkerInfo> workers) => CorkBoardPainter._(
@@ -149,6 +226,9 @@ class CorkBoardPainter extends CustomPainter {
 
   final CorkKind kind;
   final List<CorkNote> notes;
+
+  /// The note drawn lifted off the cork, the one you're about to take.
+  final int? lifted;
   final String? error;
   final bool loading;
   final int fetchedAt;
@@ -201,29 +281,35 @@ class CorkBoardPainter extends CustomPainter {
       return;
     }
     // Fewer notes -> bigger notes, so a quiet board is still readable from across the room.
-    final n = math.min(notes.length, 15);
-    final cols = n <= 2 ? n : n <= 4 ? 2 : n <= 6 ? 3 : n <= 8 ? 4 : 5;
-    final rows = math.min(3, (n / cols).ceil());
-    final scale = math.min(2.0, math.max(1.0, 3 / math.max(cols.toDouble(), rows * 1.3)));
-    final nw = math.min(208 * scale, (w - 40) / cols - 30);
-    final nh = math.min(164 * scale, (h - 40) / rows - 30);
-    final gx = (w - cols * nw) / (cols + 1);
-    final gy = (h - rows * nh) / (rows + 1);
-    final shown = notes.take(cols * rows).toList();
-    for (var i = 0; i < shown.length; i++) {
-      final it = shown[i];
-      final c = i % cols;
-      final r = i ~/ cols;
-      final x = gx + c * (nw + gx);
-      final y = gy + r * (nh + gy);
+    final layout = corkLayout([for (final n in notes) n.number]);
+    final (:cols, :rows, :scale) = (cols: layout.cols, rows: layout.rows, scale: layout.scale);
+    for (var i = 0; i < layout.spots.length; i++) {
+      final it = notes[i];
+      final spot = layout.spots[i];
+      final nw = spot.w, nh = spot.h;
+      final up = it.number == lifted;
       g.save();
-      g.translate(x + nw / 2, y + nh / 2);
-      g.rotate(((it.number * 37) % 7 - 3) * 0.012);
-      g.drawRect(Rect.fromLTWH(-nw / 2 + 5, -nh / 2 + 7, nw, nh), Paint()..color = const Color(0x40000000));
+      g.translate(spot.x, spot.y);
+      g.rotate(spot.tilt);
+      // Lifted: a little bigger, with its shadow further off, as if it's coming away from the cork.
+      if (up) g.scale(1.06, 1.06);
+      g.drawRect(
+        Rect.fromLTWH(-nw / 2 + (up ? 12 : 5), -nh / 2 + (up ? 16 : 7), nw, nh),
+        Paint()..color = up ? const Color(0x52000000) : const Color(0x40000000),
+      );
       g.drawRect(
         Rect.fromLTWH(-nw / 2, -nh / 2, nw, nh),
         Paint()..color = it.draft ? const Color(0xFFE9ECEF) : kNoteColors[it.number % kNoteColors.length],
       );
+      if (up) {
+        g.drawRect(
+          Rect.fromLTWH(-nw / 2, -nh / 2, nw, nh),
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 6
+            ..color = _ink,
+        );
+      }
       final fs = (22 * math.min(scale, nh / 164)).roundToDouble();
       final wk = it.worker;
       final footer = wk != null ? fs * 1.3 : 0;

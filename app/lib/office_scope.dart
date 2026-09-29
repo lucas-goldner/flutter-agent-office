@@ -13,10 +13,20 @@ import 'state/store.dart';
 abstract class OfficeActions {
   void openWorkerTerminal(String workerId, {({int row, String needle})? find});
   void openWorkerChanges(String workerId);
-  void hire(String deskId, {String? prompt, bool worktree = false, AgentProvider? provider, String? model});
+  void hire(
+    String deskId, {
+    String? prompt,
+    bool worktree = false,
+    AgentProvider? provider,
+    String? model,
+    AgentEffort? effort,
+  });
   void killWorker(String workerId);
   void resumeWorker(WorkerInfo w);
   void goToDesk(String deskId);
+
+  /// ✋ Pick it up: the issue's card comes off the board and into your hands.
+  void pickUp(GhIssue issue);
 
   /// A prompt from the boards to a new worker at a free desk, or to one already at a desk.
   void sendToWorker(String title, {String? context, String? initial});

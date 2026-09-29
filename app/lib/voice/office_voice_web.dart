@@ -88,18 +88,34 @@ class OfficeVoice {
 
   // ---- Buttons and keys -------------------------------------------------------------------------
 
-  /// V, and the Join voice button.
-  Future<void> toggleVoice() async {
+  /// The Join / Leave voice item in the ☰ menu.
+  Future<void> toggleVoice({bool pushToTalk = false}) async {
     if (voice.inVoice) {
       voice.leaveVoice();
     } else {
-      final err = await voice.joinVoice();
-      if (err != null) toast(err, ToastKind.warn);
+      await joinVoice(pushToTalk: pushToTalk);
+    }
+  }
+
+  /// V out of voice: joins it, muted with push to talk.
+  Future<void> joinVoice({bool pushToTalk = false}) async {
+    final err = await voice.joinVoice(muted: pushToTalk);
+    if (err != null) {
+      toast(err, ToastKind.warn);
+    } else if (pushToTalk && voice.inVoice) {
+      toast('🎙️ In voice, muted: hold V to talk');
     }
   }
 
   /// M, and the 🎙️ button.
   void toggleMute() => voice.toggleMute();
+
+  /// Switching push to talk on mutes you; back to an open mic turns it on.
+  void setMuted(bool muted) => voice.setMuted(muted);
+
+  /// V held down in voice, and let go.
+  void startTalking() => voice.startTalking();
+  void stopTalking() => voice.stopTalking();
 
   /// The Share screen button.
   Future<void> toggleShare() async {
