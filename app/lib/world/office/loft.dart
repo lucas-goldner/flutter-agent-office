@@ -27,7 +27,7 @@ class Face {
   final double height;
 }
 
-/// Builds the loft into [group] and returns the boss's monitor, where DEADFALL plays (ui/arcade.ts).
+/// Builds the loft into [group] and returns the boss's monitor, where Minesweeper plays (ui/arcade.dart).
 Face buildLoft(Node group, List<Interactable> interactables, Looks looks) {
   const minX = Loft.minX, maxX = Loft.maxX, minZ = Loft.minZ, maxZ = Loft.maxZ, floorY = Loft.y, height = Loft.height;
   const w = maxX - minX, d = maxZ - minZ;
@@ -125,7 +125,7 @@ Face buildLoft(Node group, List<Interactable> interactables, Looks looks) {
   wood.add(mesh(box(0.08, 0.2, 0.08), tc(Palette.ink), 0, 0.93, -0.2));
   wood.add(mesh(cyl(0.06, 0.05, 0.12, 10), tc('#ffd166'), 0.9, 0.89, 0.15));
   desk.add(mergeByMaterial(wood));
-  // DEADFALL plays on it (ui/arcade.ts).
+  // Minesweeper plays on it (ui/arcade.dart).
   final screenMat = flat('#4cc9f0');
   final screen = mesh(planeXY(0.8, 0.45), screenMat, 0, 1.18, -0.165, false);
   desk.add(screen);

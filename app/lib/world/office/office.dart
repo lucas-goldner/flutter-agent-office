@@ -83,7 +83,7 @@ class Office {
   final Map<String, Face> boardMeshes;
   final Face tvScreen;
 
-  /// The monitor on the boss's desk upstairs, where DEADFALL plays (ui/arcade.ts).
+  /// The monitor on the boss's desk upstairs, where Minesweeper plays (ui/arcade.dart).
   final Face bossScreen;
   final Elevator elevator;
 

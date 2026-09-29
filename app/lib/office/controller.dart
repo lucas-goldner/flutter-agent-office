@@ -318,7 +318,7 @@ class OfficeController implements OfficeActions {
       },
     );
     notifier = DesktopNotifier(enabled: () => settings.notify, openWorker: openWorkerTerminal);
-    // Pictures on the walls (and the one you're hanging), and DEADFALL on the boss's monitor.
+    // Pictures on the walls (and the one you're hanging), and Minesweeper on the boss's monitor.
     gallery = Gallery();
     office.group.add(gallery.group);
     hanger = Hanger(scope: scope, player: player, office: office, gallery: gallery, camera: () => camera);
@@ -1358,7 +1358,7 @@ class OfficeController implements OfficeActions {
             [
               HintTitle(seat.label),
               const HintAside('sitting'),
-              if (seat.game) ...[const HintKey('E', 'Play DEADFALL'), const HintKey('W A S D', 'Get up')]
+              if (seat.game) ...[const HintKey('E', 'Play Minesweeper'), const HintKey('W A S D', 'Get up')]
               else const HintKey('E', 'Get up'),
             ],
           );
@@ -1368,7 +1368,7 @@ class OfficeController implements OfficeActions {
           '${seat.id}|$full',
           [
             HintTitle(seat.label),
-            if (seat.game) const HintAside('🌲 DEADFALL on the monitor'),
+            if (seat.game) const HintAside('💣 Minesweeper on the monitor'),
             full ? const HintAside('no room') : const HintKey('E', 'Sit down'),
           ],
         );

@@ -158,10 +158,9 @@ class _OfficePageState extends State<OfficePage> {
                         onPointerUp: _up,
                         onPointerSignal: _wheel,
                         onPointerHover: (e) => c.hanger.mouse = e.localPosition,
-                        // Playing DEADFALL, the office around the monitor is drawn every third frame.
                         child: FrameSkipSceneView(
                           c.scene,
-                          every: () => c.arcade.settled ? 3 : 1,
+                          every: () => 1,
                           onTick: (elapsed, dt) => c.tick(dt, _view),
                           viewsBuilder: (_) => [
                             RenderView(camera: c.camera, layerMask: kRenderLayerAll & ~Hands.layer),

@@ -83,7 +83,7 @@ class _Backdrop extends StatelessWidget {
 
   final Widget child;
 
-  /// Not dimmed, and the window gets the whole page to lay itself out in (DEADFALL over the monitor).
+  /// Not dimmed, and the window gets the whole page to lay itself out in (Minesweeper over the monitor).
   final bool clear;
   final VoidCallback? onTapOutside;
   final VoidCallback? onEsc;

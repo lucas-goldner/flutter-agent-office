@@ -1,80 +1,49 @@
-// DEADFALL on the boss's monitor (ui/arcade.ts): the three.js survival game, from its GitHub Pages
-// build. It draws at a fixed 960×540 (scaled up to the monitor) on medium quality and at most
-// 60 fps, so it costs the same whatever the window size and leaves the GPU room for the office.
+// Screens in the office you play on up close (ui/arcade.ts): [ScreenZoom] glides the camera up to a
+// screen and says where it is on the page, and [Arcade] is the boss's monitor, which plays
+// Minesweeper (ui/minesweeper.dart). It is all Flutter, so it plays the same in the desktop app.
 
 import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart' show kMiddleMouseButton, kPrimaryButton, kSecondaryButton;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_scene/scene.dart' hide Material;
 import 'package:vector_math/vector_math.dart' as vm;
 
-import '../interop/browser.dart' show desktopApp, notInDesktopApp;
-import '../interop/game_frame.dart';
 import '../world/office/office.dart' show Face;
 import '../world/text.dart' show pictureTexture;
+import 'minesweeper.dart';
 import 'modal.dart';
 import 'theme.dart';
 
-const String _gameSrc = 'https://webdevcody.github.io/deadfall/?quality=medium&maxfps=60';
-const int _gameWidth = 960, _gameHeight = 540;
-
-/// How much of the view (across or down, whichever runs out first) the monitor fills while you play.
+/// How much of the view (across or down, whichever runs out first) a screen fills while you use it.
 const double _fill = 0.8;
 
-/// The boss's monitor. It shows a title card until you sit down and play. Then the camera glides up
-/// to it and the game loads into a frame laid exactly over the screen's projected rectangle.
-/// Stopping throws the frame away, so the game costs nothing while nobody's playing.
-class Arcade {
-  Arcade(this.screen) {
-    _titleCard().then((t) {
-      screen.material
-        ..baseColorTexture = t
-        ..baseColorFactor = vm.Vector4(1, 1, 1, 1);
-    });
-  }
+/// Glides the camera up to a screen in the office while you use it, and back after, and keeps
+/// [rect] on where that screen is on the page, for whatever is laid over it.
+class ScreenZoom {
+  ScreenZoom(this.screen);
 
   final Face screen;
 
-  /// 0 is your own view, 1 is right up at the monitor. It eases between them.
+  /// 0 is your own view, 1 is right up at the screen. It eases between them.
   double _zoom = 0;
-  ModalHandle? _modal;
 
-  /// Where the screen is on the page while you play (null otherwise).
+  /// Where the screen is on the page while [update] is told it's on (null otherwise).
   final ValueNotifier<Rect?> rect = ValueNotifier(null);
 
-  /// Right up at the monitor and holding still: the office around it can be redrawn less often.
-  bool get settled => _zoom == 1;
-
-  /// Anywhere between your view and the monitor: your first-person hands would cover the screen.
+  /// Anywhere between your view and the screen: your first-person hands would cover it.
   bool get zoomed => _zoom > 0;
 
-  bool get playing => _modal != null;
-
-  void play() {
-    if (_modal != null) return;
-    // The game is a web page, and the desktop app has no web view yet.
-    if (desktopApp) return toast(notInDesktopApp('DEADFALL'));
-    _modal = ModalStack.instance.show(
-      (modal) => _ArcadeBox(modal: modal, rect: rect),
-      backdropCloses: false,
-      clear: true,
-      onClose: () {
-        _modal = null;
-        rect.value = null;
-      },
-    );
-  }
-
-  void stop() => _modal?.close();
-
-  /// Moves [camera] (engine space) toward the monitor while you play, and back after. Call it once
-  /// the player has placed the camera; returns the camera to draw with.
-  PerspectiveCamera update(PerspectiveCamera camera, double dt, Size view) {
-    final want = _modal != null ? 1.0 : 0.0;
+  /// Moves [camera] (engine space) toward the screen while [on], and back after. Call it once the
+  /// player has placed the camera; returns the camera to draw with.
+  PerspectiveCamera update(PerspectiveCamera camera, double dt, Size view, bool on) {
+    final want = on ? 1.0 : 0.0;
+    if (!on && rect.value != null) rect.value = null;
     if (_zoom == want) {
       if (want == 0) return camera;
     } else {
@@ -89,6 +58,8 @@ class Arcade {
     ];
     final width = corners[0].distanceTo(corners[1]), height = corners[1].distanceTo(corners[2]);
     final normal = (g.transform3(vm.Vector3(0, 0, 1)) - center)..normalize();
+    // The screen's up, so a screen that leans back (the cabinet's) comes out square to the view.
+    final up = ((corners[0] + corners[1]) / 2 - center)..normalize();
     // Straight out from the screen, back just far enough that it fills _fill of the view.
     final span = 2 * math.tan(camera.fovRadiansY / 2) * _fill;
     final aspect = view.isEmpty ? 16 / 9 : view.width / view.height;
@@ -97,14 +68,16 @@ class Arcade {
     final z = _zoom;
     final pos = camera.position + (at - camera.position) * z;
     final dir = ((camera.target - camera.position).normalized() * (1 - z) - normal * z)..normalize();
+    final camUp = (vm.Vector3(0, 1, 0) * (1 - z) + up * z)..normalize();
     final cam = PerspectiveCamera(
       fovRadiansY: camera.fovRadiansY,
       position: pos,
       target: pos + dir,
+      up: camUp,
       fovNear: camera.fovNear,
       fovFar: camera.fovFar,
     );
-    if (_modal != null && !view.isEmpty) {
+    if (on && !view.isEmpty) {
       final pts = [for (final c in corners) cam.worldToScreen(c, view)];
       if (pts.every((p) => p != null)) {
         final xs = pts.map((p) => p!.dx), ys = pts.map((p) => p!.dy);
@@ -124,17 +97,65 @@ class Arcade {
   }
 }
 
-/// The game over the monitor, with its bar underneath: what it is, a tip and the way out.
-class _ArcadeBox extends StatefulWidget {
-  const _ArcadeBox({required this.modal, required this.rect});
-  final ModalHandle modal;
-  final ValueListenable<Rect?> rect;
+/// Paints [draw] ([w] x [h] units) onto [face]'s texture. Paints never overlap: one asked for while
+/// another is on its way goes after it, with whatever is newest by then.
+class ScreenTexture {
+  ScreenTexture(this.face, this.w, this.h, this.draw, {this.pixels = 1});
 
-  @override
-  State<_ArcadeBox> createState() => _ArcadeBoxState();
+  final Face face;
+  final double w, h;
+
+  /// Texture pixels per unit.
+  final double pixels;
+  final void Function(Canvas c) draw;
+  bool _busy = false, _again = false;
+
+  void paint() {
+    if (_busy) {
+      _again = true;
+      return;
+    }
+    _busy = true;
+    final rec = ui.PictureRecorder();
+    final c = Canvas(rec);
+    c.scale(pixels);
+    draw(c);
+    final pic = rec.endRecording();
+    pictureTexture(pic, (w * pixels).round(), (h * pixels).round())
+        .then((t) {
+          face.material
+            ..baseColorTexture = t
+            ..baseColorFactor = vm.Vector4(1, 1, 1, 1);
+        })
+        .catchError((Object _) {})
+        .whenComplete(() {
+          pic.dispose();
+          _busy = false;
+          if (_again) {
+            _again = false;
+            paint();
+          }
+        });
+  }
 }
 
-class _ArcadeBoxState extends State<_ArcadeBox> {
+/// A screen laid over its place on the page ([rect]), with its bar underneath: what it is, a tip
+/// and the way out. It fades in once the camera has got there.
+class ScreenBox extends StatefulWidget {
+  const ScreenBox({super.key, required this.rect, required this.screen, required this.bar, this.over});
+
+  final ValueListenable<Rect?> rect;
+  final Widget screen;
+  final Widget bar;
+
+  /// Laid over the top of the screen (the cabinet's "a worker needs you").
+  final Widget? over;
+
+  @override
+  State<ScreenBox> createState() => _ScreenBoxState();
+}
+
+class _ScreenBoxState extends State<ScreenBox> {
   bool _shown = false;
   late final Timer _fade = Timer(const Duration(milliseconds: 300), () => setState(() => _shown = true));
 
@@ -160,16 +181,20 @@ class _ArcadeBoxState extends State<_ArcadeBox> {
         duration: const Duration(milliseconds: 250),
         child: Stack(
           children: [
-            Positioned.fromRect(
-              rect: r,
-              child: const GameFrame(src: _gameSrc, title: 'DEADFALL', width: _gameWidth, height: _gameHeight),
-            ),
+            Positioned.fromRect(rect: r, child: widget.screen),
+            if (widget.over != null)
+              Positioned(
+                top: r.top + 12,
+                left: r.left,
+                width: r.width,
+                child: Center(child: Material(type: MaterialType.transparency, child: widget.over)),
+              ),
             Positioned(
               top: r.bottom + 10,
               left: 0,
               right: 0,
               child: Center(
-                child: Material(type: MaterialType.transparency, child: _bar()),
+                child: Material(type: MaterialType.transparency, child: widget.bar),
               ),
             ),
           ],
@@ -177,84 +202,196 @@ class _ArcadeBoxState extends State<_ArcadeBox> {
       );
     },
   );
-
-  Widget _bar() => Container(
-    padding: const EdgeInsets.fromLTRB(14, 6, 6, 6),
-    decoration: BoxDecoration(
-      color: Swatch.paper,
-      borderRadius: BorderRadius.circular(14),
-      border: Border.all(color: Swatch.ink, width: kBorder),
-      boxShadow: const [BoxShadow(color: Swatch.ink, offset: Offset(0, 4))],
-    ),
-    child: Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text('🌲 DEADFALL', style: heavy(14)),
-        const SizedBox(width: 12),
-        Text('Esc lets go of the mouse', style: heavy(12, color: Swatch.muted)),
-        const SizedBox(width: 12),
-        OfficeButton(label: '✕ Stop playing', onPressed: widget.modal.close),
-      ],
-    ),
-  );
 }
 
-/// What the monitor shows while nobody's playing: misty old-growth forest at dusk.
-Future<Texture2D> _titleCard() {
-  const w = _gameWidth, h = _gameHeight;
-  final rec = ui.PictureRecorder();
-  final g = Canvas(rec);
-  g.drawRect(
-    const Rect.fromLTWH(0, 0, 960, 540),
-    Paint()
-      ..shader = ui.Gradient.linear(
-        const Offset(0, 0),
-        const Offset(0, 540),
-        const [Color(0xFF1D2B33), Color(0xFF6D7F79), Color(0xFF2C3A2E)],
-        const [0, 0.6, 1],
-      ),
-  );
-  // Rows of conifers, darker the nearer they are.
-  for (final (row, color, size) in const [
-    (330.0, 0xFF3D4D45, 0.7),
-    (420.0, 0xFF26332B, 1.0),
-    (540.0, 0xFF121A15, 1.4),
-  ]) {
-    final paint = Paint()..color = Color(color);
-    for (var x = -20.0; x < w + 40; x += 46 * size) {
-      // As the old client's JS `%`, which keeps the sign.
-      final tall = (150 + (x * 7919).remainder(90)) * size;
-      g.drawPath(
-        Path()
-          ..moveTo(x, row)
-          ..lineTo(x + 22 * size, row - tall)
-          ..lineTo(x + 44 * size, row)
-          ..close(),
-        paint,
-      );
-    }
-  }
-  void text(String s, double size, FontWeight weight, double baseline) {
-    final tp = TextPainter(
-      text: TextSpan(
-        text: s,
-        style: TextStyle(
-          fontFamily: kFont,
-          fontFamilyFallback: kFallback,
-          fontSize: size,
-          fontWeight: weight,
-          color: const Color(0xFFF1EDE4),
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    tp.paint(g, Offset((w - tp.width) / 2, baseline - tp.computeDistanceToActualBaseline(TextBaseline.alphabetic)));
+/// The bar under a screen you're using: its name, a tip, and a button to stop.
+Widget screenBar(String name, String tip, String stop, VoidCallback onStop) => Container(
+  padding: const EdgeInsets.fromLTRB(14, 6, 6, 6),
+  decoration: BoxDecoration(
+    color: Swatch.paper,
+    borderRadius: BorderRadius.circular(14),
+    border: Border.all(color: Swatch.ink, width: kBorder),
+    boxShadow: const [BoxShadow(color: Swatch.ink, offset: Offset(0, 4))],
+  ),
+  child: Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Text(name, style: heavy(14)),
+      const SizedBox(width: 12),
+      Flexible(child: Text(tip, style: heavy(12, color: Swatch.muted))),
+      const SizedBox(width: 12),
+      OfficeButton(label: stop, onPressed: onStop),
+    ],
+  ),
+);
+
+/// The boss's monitor, which plays Minesweeper. The monitor shows the board as it was left. Sit down
+/// and play, and the camera glides up to the screen while a board you can click is laid exactly
+/// over it.
+class Arcade {
+  Arcade(Face screen) : view = ScreenZoom(screen) {
+    _texture = ScreenTexture(screen, msWidth, msHeight, (c) => game.paint(c, idle: true));
+    _texture.paint();
   }
 
-  text('DEADFALL', 110, FontWeight.w900, 250);
-  text('Sit in the boss’s chair and press E to play', 30, FontWeight.w800, 310);
-  final picture = rec.endRecording();
-  return pictureTexture(picture, w, h).whenComplete(picture.dispose);
+  final ScreenZoom view;
+  final Minesweeper game = Minesweeper();
+  late final ScreenTexture _texture;
+  ModalHandle? _modal;
+  Timer? _clock;
+
+  /// Bumped whenever the board changes, for the one you play on.
+  final ValueNotifier<int> version = ValueNotifier(0);
+
+  /// Anywhere between your view and the monitor: your first-person hands would cover the screen.
+  bool get zoomed => view.zoomed;
+
+  bool get playing => _modal != null;
+
+  /// Something changed: the board you play on redraws, and the monitor does once you stop.
+  void changed() {
+    version.value++;
+    if (_modal == null) _texture.paint();
+  }
+
+  void play() {
+    if (_modal != null) return;
+    // A finished game stays up on the monitor until the next player sits down to a fresh one.
+    if (game.over) game.reset();
+    var last = DateTime.now();
+    // The clock only runs while someone's at the monitor.
+    _clock = Timer.periodic(const Duration(milliseconds: 250), (_) {
+      final now = DateTime.now();
+      if (game.tick(now.difference(last).inMicroseconds / 1000)) changed();
+      last = now;
+    });
+    _modal = ModalStack.instance.show(
+      (modal) => ScreenBox(
+        rect: view.rect,
+        screen: _MineBoard(arcade: this),
+        bar: screenBar('💣 Minesweeper', 'Click to dig · right-click to flag', '✕ Stop playing', modal.close),
+      ),
+      backdropCloses: false,
+      clear: true,
+      onClose: () {
+        _modal = null;
+        _clock?.cancel();
+        game.hover = game.pressed = -1;
+        changed();
+      },
+    );
+    changed();
+  }
+
+  void stop() => _modal?.close();
+
+  /// Moves [camera] toward the monitor while you play, and back after. Call it once the player has
+  /// placed the camera; returns the camera to draw with.
+  PerspectiveCamera update(PerspectiveCamera camera, double dt, Size view) =>
+      this.view.update(camera, dt, view, _modal != null);
+}
+
+/// The board you click, drawn at the size it shows on the page so it stays crisp.
+class _MineBoard extends StatefulWidget {
+  const _MineBoard({required this.arcade});
+  final Arcade arcade;
+
+  @override
+  State<_MineBoard> createState() => _MineBoardState();
+}
+
+class _MineBoardState extends State<_MineBoard> {
+  bool _holding = false;
+
+  Minesweeper get game => widget.arcade.game;
+
+  Offset _spot(Offset local, Size size) => Offset(local.dx * msWidth / size.width, local.dy * msHeight / size.height);
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, box) {
+      final size = box.biggest;
+      return MouseRegion(
+        onExit: (_) {
+          if (_holding) return;
+          game.hover = -1;
+          widget.arcade.changed();
+        },
+        child: Listener(
+          onPointerDown: (e) {
+            final p = _spot(e.localPosition, size);
+            final i = game.cellAt(p.dx, p.dy);
+            final keys = HardwareKeyboard.instance;
+            final primary = e.buttons & kPrimaryButton != 0;
+            // Right-click flags, and so do Ctrl- and Shift-click for a trackpad. The middle button chords.
+            if (e.buttons & kSecondaryButton != 0 ||
+                (primary && (keys.isControlPressed || keys.isShiftPressed))) {
+              game.flag(i);
+            } else if (e.buttons & kMiddleMouseButton != 0) {
+              game.chord(i);
+            } else if (primary && game.onFace(p.dx, p.dy)) {
+              game.reset();
+            } else if (primary) {
+              // It digs when you let go, wherever you let go, like the original.
+              _holding = true;
+              game.pressed = i;
+            }
+            widget.arcade.changed();
+          },
+          onPointerHover: (e) => _moved(_spot(e.localPosition, size)),
+          onPointerMove: (e) => _moved(_spot(e.localPosition, size)),
+          onPointerUp: (e) {
+            if (!_holding) return;
+            _holding = false;
+            final i = game.pressed;
+            game.pressed = -1;
+            // A click on a number digs around it, once its mines are all flagged.
+            if (game.isOpen(i)) {
+              game.chord(i);
+            } else {
+              game.open(i);
+            }
+            widget.arcade.changed();
+          },
+          onPointerCancel: (_) {
+            _holding = false;
+            game.pressed = -1;
+            widget.arcade.changed();
+          },
+          child: ValueListenableBuilder<int>(
+            valueListenable: widget.arcade.version,
+            builder: (context, _, _) => CustomPaint(size: size, painter: _MinePainter(game, widget.arcade.version.value)),
+          ),
+        ),
+      );
+    },
+  );
+
+  void _moved(Offset p) {
+    final i = game.cellAt(p.dx, p.dy);
+    if (i == game.hover) return;
+    game.hover = i;
+    if (_holding) game.pressed = i;
+    widget.arcade.changed();
+  }
+}
+
+class _MinePainter extends CustomPainter {
+  _MinePainter(this.game, this.version);
+  final Minesweeper game;
+  final int version;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.save();
+    canvas.clipRect(Offset.zero & size);
+    canvas.scale(size.width / msWidth, size.height / msHeight);
+    game.paint(canvas, idle: false);
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(_MinePainter old) => old.version != version || old.game != game;
 }
 
 /// A SceneView that the page ticks itself, so it can draw the office on only some frames: every
