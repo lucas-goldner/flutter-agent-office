@@ -915,20 +915,8 @@ class OfficeController implements OfficeActions {
   void _blowUp() {
     if (_held != null) return;
     _held = [];
-    ModalStack.instance.closeAll();
-    hanger.cancel();
-    if (player.seat != null) standUp();
-    player.enabled = false;
-    player.input.clear();
-    // Out in front of you, where you'll see it.
-    final fwd = (player.camTarget - player.camPos)
-      ..y = 0
-      ..normalize();
-    final at = vm.Vector3(player.pos.x, 0.2, player.pos.z) + fwd * 5;
-    blast.start();
-    smoke.plume(at);
-    confetti.burst(at.x, at.y + 0.5, at.z, 90, 1.4);
-    sound.thunder(0, 1);
+    // The ride out is set up before anything else: if an effect below fails, the held messages
+    // (the new floor list, where you ride to) must still come through, or the office freezes.
     Timer(Duration(milliseconds: (Blast.ride * 1000).round()), () {
       fade.value = true;
       Timer(const Duration(milliseconds: 350), () {
@@ -944,6 +932,24 @@ class OfficeController implements OfficeActions {
         }
       });
     });
+    try {
+      ModalStack.instance.closeAll();
+      hanger.cancel();
+      if (player.seat != null) standUp();
+      player.enabled = false;
+      player.input.clear();
+      // Out in front of you, where you'll see it.
+      final fwd = (player.camTarget - player.camPos)
+        ..y = 0
+        ..normalize();
+      final at = vm.Vector3(player.pos.x, 0.2, player.pos.z) + fwd * 5;
+      blast.start();
+      smoke.plume(at);
+      confetti.burst(at.x, at.y + 0.5, at.z, 90, 1.4);
+      sound.thunder(0, 1);
+    } catch (e, st) {
+      debugPrint('the blast failed: $e\n$st');
+    }
   }
 
   /// The floor never came (it's gone, or the office is unreachable): open up where you are.
