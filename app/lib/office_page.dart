@@ -1,6 +1,7 @@
 // The office page: the 3D floor, the labels over it and the HUD, plus the keyboard, the mouse and
 // pointer lock (the old index.html and main.ts's input section). The OfficeController does the work.
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -103,7 +104,40 @@ class _OfficePageState extends State<OfficePage> {
         _lock.canLock) {
       _lock.lock();
     }
-    return c.onKey(e) ? KeyEventResult.handled : KeyEventResult.ignored;
+    if (c.onKey(e)) return KeyEventResult.handled;
+    // In the desktop app a key nobody takes goes on to macOS, which beeps for it: every press and
+    // repeat of W/A/S/D (read from the keys held, not here) went "dop dop dop". While you walk
+    // around, the game has the keyboard and keeps them; windows and the chat keep their own keys (Tab
+    // between fields), and ⌘/Ctrl shortcuts still reach the system. The browser gets them back as
+    // before (it doesn't beep, and has its own keys to keep).
+    if (!kIsWeb && !ModalStack.instance.open && !c.hud.typing && !_systemShortcut()) return KeyEventResult.handled;
+    return KeyEventResult.ignored;
+  }
+
+  bool _systemShortcut() {
+    final hk = HardwareKeyboard.instance;
+    return hk.isMetaPressed || hk.isControlPressed;
+  }
+
+  /// The trackpad's two-finger swipe turns the camera the way dragging does, and a pinch zooms the
+  /// third-person camera (macOS sends these as pan/zoom gestures, not as a scroll wheel).
+  double _pinch = 1;
+
+  void _panZoomStart(PointerPanZoomStartEvent e) => _pinch = 1;
+
+  void _panZoom(PointerPanZoomUpdateEvent e) {
+    if (!c.player.enabled || c.hanger.active) return;
+    final d = e.panDelta;
+    if (c.player.view == ViewMode.first) {
+      c.player.look(d.dx * kDragLookSpeed, d.dy * kDragLookSpeed);
+    } else {
+      c.player.orbit(d.dx, d.dy);
+    }
+    if (e.scale != _pinch) {
+      // Fingers apart (scale up) brings the camera in.
+      c.player.zoom((_pinch - e.scale) * 400);
+      _pinch = e.scale;
+    }
   }
 
   void _down(PointerDownEvent e) {
@@ -186,6 +220,8 @@ class _OfficePageState extends State<OfficePage> {
                         onPointerMove: _move,
                         onPointerUp: _up,
                         onPointerSignal: _wheel,
+                        onPointerPanZoomStart: _panZoomStart,
+                        onPointerPanZoomUpdate: _panZoom,
                         onPointerHover: (e) => c.hanger.mouse = e.localPosition,
                         // A few drinks in at the rooftop bar, the frame sways, blurs and warms (world/drunk.dart).
                         child: DrunkVision(
@@ -245,8 +281,11 @@ class _OfficePageState extends State<OfficePage> {
                   bottom: 120,
                   child: ValueListenableBuilder(
                     valueListenable: c.rooms.meter,
-                    builder: (context, m, _) =>
-                        m == null ? const SizedBox.shrink() : Center(child: ShotMeterBar(at: m.at, sweet: m.aimed)),
+                    builder: (context, m, _) => m == null
+                        ? const SizedBox.shrink()
+                        : Center(
+                            child: ShotMeterBar(at: m.at, sweet: m.aimed),
+                          ),
                   ),
                 ),
                 // A floor blown up under you: the white-hot flash.
