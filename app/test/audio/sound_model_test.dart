@@ -8,14 +8,17 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   group('where sounds come from', () {
     test('the office windows, not the loft ones (as sound.ts computes them)', () {
-      expect([for (final w in soundWindows) (w.x, w.y, w.z)], [
-        (-14.0, 2.4, 14.5),
-        (-9.0, 2.4, 14.5),
-        (1.0, 2.4, 14.5),
-        (-19.5, 2.4, -9.0),
-        (-19.5, 2.4, -3.0),
-        (-19.5, 2.4, 3.0),
-      ]);
+      expect(
+        [for (final w in soundWindows) (w.x, w.y, w.z)],
+        [
+          (-14.0, 2.4, 14.5),
+          (-9.0, 2.4, 14.5),
+          (1.0, 2.4, 14.5),
+          (-19.5, 2.4, -9.0),
+          (-19.5, 2.4, -3.0),
+          (-19.5, 2.4, 3.0),
+        ],
+      );
     });
 
     test('the gong and the jukebox', () {

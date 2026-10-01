@@ -143,6 +143,11 @@ class Param {
 
 enum Wave { sine, square, sawtooth, triangle }
 
+/// Web Audio's square and sawtooth are normalized to their band-limited peak (the Gibbs overshoot),
+/// which leaves them this much quieter than the ideal waves (measured in Chromium: RMS 0.845 for a
+/// square, 0.487 for a sawtooth).
+const double _webNorm = 0.844;
+
 double _polyBlep(double t, double dt) {
   if (t < dt) {
     final x = t / dt;
@@ -199,7 +204,7 @@ Float32List osc(
       case Wave.triangle:
         v = phase < 0.25 ? 4 * phase : (phase < 0.75 ? 2 - 4 * phase : 4 * phase - 4);
     }
-    out[i] = v;
+    out[i] = type == Wave.square || type == Wave.sawtooth ? v * _webNorm : v;
     phase += f / sr;
     phase -= phase.floorToDouble();
   }
@@ -433,7 +438,9 @@ Float32List shape(Float32List buf, Float32List curve) {
 // ---- Compressor --------------------------------------------------------------------------------------
 
 /// A DynamicsCompressorNode, after Chromium's: the same knee curve and the same automatic makeup gain
-/// (which makes quiet sounds louder than they went in), with a simpler attack/release.
+/// (which makes quiet sounds louder than they went in), its 6 ms look-ahead, and a detector like its
+/// own, which lets go within a few ms (so the lows, whose peaks are far apart, are squashed less than
+/// the highs), followed by the attack and release.
 class Compressor {
   Compressor({
     this.threshold = -24,
@@ -450,17 +457,23 @@ class Compressor {
     makeup = math.pow(1 / _saturate(1, _k), 0.6).toDouble();
     _attackK = 1 - math.exp(-1 / (math.max(0.001, attack) * sr));
     _releaseK = 1 - math.exp(-1 / (math.max(0.001, release) * sr));
+    _satFrames = 0.0025 * sr;
+    final d = (0.006 * sr).round();
+    _delayL = Float32List(d);
+    _delayR = Float32List(d);
   }
 
   final double threshold, knee, ratio, attack, release;
   final int sr;
   late final double _linThreshold, _kneeThresholdDb, _k, _yKneeDb;
-  late final double _attackK, _releaseK;
+  late final double _attackK, _releaseK, _satFrames;
+  late final Float32List _delayL, _delayR;
+  int _di = 0;
 
   /// The gain Chromium adds back after compressing.
   late final double makeup;
   double _gain = 1;
-  double _env = 0;
+  double _detector = 1;
 
   static double _db2lin(double db) => math.pow(10, db / 20).toDouble();
   static double _lin2db(double x) => x <= 0 ? -1000 : 20 * math.log(x) / math.ln10;
@@ -503,17 +516,29 @@ class Compressor {
   /// The static gain for a level [x] (linear), before makeup.
   double gainFor(double x) => x <= _linThreshold ? 1 : _saturate(x, _k) / x;
 
-  /// Compresses [buf] in place (one channel), or a stereo pair if [right] is given.
+  /// Compresses [left] in place (one channel), or a stereo pair if [right] is given.
   void process(Float32List left, [Float32List? right]) {
+    final n = _delayL.length;
     for (var i = 0; i < left.length; i++) {
-      final a = right == null ? left[i].abs() : math.max(left[i].abs(), right[i].abs());
-      // A peak detector, then the gain eased towards where the curve says.
-      _env = a > _env ? a : _env + (a - _env) * _releaseK;
-      final target = gainFor(_env);
-      _gain += (target - _gain) * (target < _gain ? _attackK : _releaseK);
+      final l = left[i], r = right == null ? l : right[i];
+      final a = math.max(l.abs(), r.abs());
+      final att = a <= 0.0001 ? 1.0 : gainFor(a);
+      if (att < _detector) {
+        _detector = att;
+      } else {
+        final attDb = math.max(2.0, -_lin2db(att));
+        final rate = _db2lin(attDb / _satFrames) - 1;
+        _detector = math.min(1.0, _detector + (att - _detector) * rate);
+      }
+      _gain += (_detector - _gain) * (_detector < _gain ? _attackK : _releaseK);
       final g = _gain * makeup;
-      left[i] *= g;
-      if (right != null) right[i] *= g;
+      // The look-ahead: what comes out is 6 ms old.
+      final dl = _delayL[_di], dr = _delayR[_di];
+      _delayL[_di] = l;
+      _delayR[_di] = r;
+      _di = (_di + 1) % n;
+      left[i] = dl * g;
+      if (right != null) right[i] = dr * g;
     }
   }
 }

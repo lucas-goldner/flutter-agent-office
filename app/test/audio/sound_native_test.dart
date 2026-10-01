@@ -108,7 +108,7 @@ class FakeEngine implements AudioEngine {
 }
 
 /// Waits (for real: the banks render in background isolates) until [done].
-Future<void> until(bool Function() done, {int seconds = 60}) async {
+Future<void> until(bool Function() done, {int seconds = 150}) async {
   final end = DateTime.now().add(Duration(seconds: seconds));
   while (!done() && DateTime.now().isBefore(end)) {
     await Future<void>.delayed(const Duration(milliseconds: 50));

@@ -41,7 +41,7 @@ void main() {
     });
 
     test('square, sawtooth and triangle keep the pitch, and their levels', () {
-      for (final (w, rms) in const [(Wave.square, 1.0), (Wave.sawtooth, 0.577), (Wave.triangle, 0.577)]) {
+      for (final (w, rms) in const [(Wave.square, 0.844), (Wave.sawtooth, 0.487), (Wave.triangle, 0.577)]) {
         final s = osc(sr, sr, w, Param(220));
         expect(crossingsHz(s), closeTo(220, 1), reason: '$w');
         expect(rmsOf(s), closeTo(rms, 0.03), reason: '$w');
