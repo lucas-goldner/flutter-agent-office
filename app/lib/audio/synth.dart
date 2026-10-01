@@ -124,7 +124,9 @@ class Param {
     return _held(t);
   }
 
-  /// The values for [n] samples from time [t0] at [sr].
+  /// The values for [n] samples from time [t0] at [sr]: worked out every 8 samples and joined up in
+  /// between (finer than any of the office's envelopes), which is a lot quicker than every sample, but
+  /// sample by sample around each event, so a jump stays a jump.
   Float32List render(int n, int sr, [double t0 = 0]) {
     final out = Float32List(n);
     if (_events.isEmpty) {
@@ -132,8 +134,28 @@ class Param {
       return out;
     }
     _reset();
-    for (var i = 0; i < n; i++) {
-      out[i] = valueAt(t0 + i / sr);
+    const step = 8;
+    final marks = [for (final e in _events) ((e.time - t0) * sr).floor()];
+    var m = 0;
+    var a = valueAt(t0);
+    for (var i = 0; i < n; i += step) {
+      final end = math.min(n, i + step);
+      while (m < marks.length && marks[m] < i) {
+        m++;
+      }
+      if (m < marks.length && marks[m] <= end) {
+        for (var j = i; j < end; j++) {
+          out[j] = valueAt(t0 + j / sr);
+        }
+        a = valueAt(t0 + end / sr);
+        continue;
+      }
+      final b = valueAt(t0 + end / sr);
+      final d = (b - a) / step;
+      for (var j = i; j < end; j++) {
+        out[j] = a + d * (j - i);
+      }
+      a = b;
     }
     return out;
   }
@@ -147,6 +169,12 @@ enum Wave { sine, square, sawtooth, triangle }
 /// which leaves them this much quieter than the ideal waves (measured in Chromium: RMS 0.845 for a
 /// square, 0.487 for a sawtooth).
 const double _webNorm = 0.844;
+
+/// A sine table, read with linear interpolation (within 3e-7 of math.sin, and much quicker).
+const int _sineSize = 4096;
+final Float64List _sine = Float64List.fromList([
+  for (var i = 0; i <= _sineSize; i++) math.sin(2 * math.pi * i / _sineSize),
+]);
 
 double _polyBlep(double t, double dt) {
   if (t < dt) {
@@ -177,23 +205,28 @@ Float32List osc(
   final out = Float32List(n);
   final i0 = math.max(0, (start * sr).ceil());
   final i1 = math.min(n, stop == null ? n : (stop * sr).ceil());
+  if (i1 <= i0) return out;
+  final freqs = freq.automated ? freq.render(n, sr) : null;
+  final cents = detune != null && detune.automated ? detune.render(n, sr) : null;
+  final fixedCents = detune == null || detune.automated ? 0.0 : detune.value;
+  final fixedRatio = math.pow(2, fixedCents / 1200).toDouble();
   var phase = 0.0;
-  final fixedF = !freq.automated && fm == null && (detune == null || !detune.automated) && detuneMod == null;
-  var f = freq.value * (detune == null ? 1 : math.pow(2, detune.value / 1200));
   for (var i = i0; i < i1; i++) {
-    final t = i / sr;
-    if (!fixedF) {
-      var cents = detune == null ? 0.0 : detune.valueAt(t);
-      if (detuneMod != null) cents += detuneMod[i];
-      f = freq.valueAt(t);
-      if (fm != null) f += fm[i];
-      if (cents != 0) f *= math.pow(2, cents / 1200);
+    var f = freqs == null ? freq.value : freqs[i];
+    if (fm != null) f += fm[i];
+    if (cents != null || detuneMod != null) {
+      final c = (cents == null ? fixedCents : cents[i]) + (detuneMod == null ? 0 : detuneMod[i]);
+      f *= math.pow(2, c / 1200);
+    } else {
+      f *= fixedRatio;
     }
     final dt = (f / sr).abs();
     double v;
     switch (type) {
       case Wave.sine:
-        v = math.sin(2 * math.pi * phase);
+        final x = phase * _sineSize;
+        final k = x.toInt();
+        v = _sine[k] + (_sine[k + 1] - _sine[k]) * (x - k);
       case Wave.square:
         v = phase < 0.5 ? 1 : -1;
         v += _polyBlep(phase, dt);
@@ -272,8 +305,9 @@ Float32List playBuffer(
 /// Multiplies [buf] by [gain]'s values, in place; returns it.
 Float32List gain(Float32List buf, int sr, Param gain, [double t0 = 0]) {
   if (!gain.automated) return scale(buf, gain.value);
+  final g = gain.render(buf.length, sr, t0);
   for (var i = 0; i < buf.length; i++) {
-    buf[i] *= gain.valueAt(t0 + i / sr);
+    buf[i] *= g[i];
   }
   return buf;
 }

@@ -57,19 +57,22 @@ class OfficeRender {
     final f0 = 118 * _rand(0.98, 1.02);
     final ringLevel = 0.3 * strength;
     final long = 0.6 + 0.4 * strength;
+    final at = _at(t0);
     for (final (ratio, amp, decay) in gongPartials) {
       final f = f0 * ratio;
-      final end = t0 + decay * long;
+      final end = decay * long;
+      // Each partial only as long as it rings, added in at t0.
+      final m = math.min(n - at, _n(end + 0.05));
       for (final cents in const [-1, 1]) {
         final freq = Param(f)
-          ..setValueAtTime(f * (1 + 0.012 * strength), t0)
-          ..exponentialRampToValueAtTime(f, t0 + 1.2);
-        final o = _osc(n, Wave.sine, freq, start: t0, stop: end + 0.05, detune: Param(cents * _rand(2, 5)));
+          ..setValueAtTime(f * (1 + 0.012 * strength), 0)
+          ..exponentialRampToValueAtTime(f, 1.2);
+        final o = _osc(m, Wave.sine, freq, detune: Param(cents * _rand(2, 5)));
         final g = Param(1)
-          ..setValueAtTime(0.0001, t0)
-          ..exponentialRampToValueAtTime(amp * 0.5, t0 + 0.01 + ratio * 0.004)
+          ..setValueAtTime(0.0001, 0)
+          ..exponentialRampToValueAtTime(amp * 0.5, 0.01 + ratio * 0.004)
           ..exponentialRampToValueAtTime(0.0001, end);
-        mixInto(out, gain(o, sr, g), k: ringLevel);
+        mixInto(out, gain(o, sr, g), at: at, k: ringLevel);
       }
     }
     final thump = biquad(_white(n, start: t0, stop: t0 + 0.15), sr, BiquadType.lowpass, 420, 0.8);
