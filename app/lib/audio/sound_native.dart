@@ -138,7 +138,7 @@ class OfficeSound implements DogSounds {
   final Map<String, _Typist> _typists = {};
 
   // The music.
-  late final MusicStreams _music = MusicStreams(_engine, _now);
+  late final MusicStreams _music = MusicStreams(_engine, _now)..onError = (text) => onMusicError?.call(text);
 
   /// A stream that won't play here.
   void Function(String text)? onMusicError;
@@ -279,7 +279,6 @@ class OfficeSound implements DogSounds {
       _nextFidget = now + _rand(10, 30);
     }
     _tickFridge(now);
-    _music.update();
     _tick();
   }
 
@@ -308,6 +307,8 @@ class OfficeSound implements DogSounds {
     _fridgeLevel = ease(_fridgeLevel, _fridgeOn ? 0.06 : 0, _fridgeOn ? 0.6 : 0.3);
     _fridgeHum?.gain = _fridgeLevel;
     _easeRain(dt);
+    // On the timer too, so the music keeps going while the window's hidden (no frames then).
+    _music.update();
     _music.tick(dt);
     final l = _listener;
     _voices.removeWhere((v) {
@@ -674,6 +675,9 @@ class OfficeSound implements DogSounds {
     if (error != null) onMusicError?.call(error);
     if (play != null && _ready) _count(_music.isStream ? 'stream' : 'tune');
   }
+
+  /// Whether the jukebox's tune is playing (for checks).
+  bool get tunePlaying => _music.tunePlaying;
 
   /// Your own music volume, 0–1, apart from the office sounds'.
   void setMusicVolume(double volume, bool muted) => _music.setVolume(volume, muted);

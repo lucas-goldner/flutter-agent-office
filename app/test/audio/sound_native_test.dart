@@ -1,6 +1,8 @@
 import 'dart:typed_data';
 
 import 'package:agent_office/audio/audio_engine.dart';
+import 'package:agent_office/audio/dnb_score.dart' show djTime;
+import 'package:agent_office/audio/synth.dart' show rmsOf;
 import 'package:agent_office/audio/sound_model.dart';
 import 'package:agent_office/audio/sound_native.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -44,10 +46,21 @@ class FakeEngine implements AudioEngine {
     ];
   }
 
-  double playedSeconds = 0;
+  /// When each stream started playing: it plays in real time from then.
+  final Map<int, DateTime> streamStarted = {};
 
   @override
-  double played(int stream) => playedSeconds;
+  int openCompressedStream() => openStream(44100, 2);
+  @override
+  void feedBytes(int stream, Uint8List bytes) {}
+  @override
+  void endStream(int stream) {}
+
+  @override
+  double played(int stream) {
+    final t = streamStarted[stream];
+    return t == null ? 0 : DateTime.now().difference(t).inMicroseconds / 1e6;
+  }
 
   @override
   int play(
@@ -61,6 +74,7 @@ class FakeEngine implements AudioEngine {
     bool paused = false,
   }) {
     final id = 1000 + _next++;
+    if (streamed.containsKey(source)) streamStarted[source] = DateTime.now();
     voices[id] = (source: source, volume: volume, left: left, right: right, speed: speed, loop: loop, paused: paused);
     started.add(sources[source]!.$1);
     return id;
@@ -162,10 +176,11 @@ void main() {
     final ding = e.playing('ding.done').single;
     expect((ding.left, ding.right), (1, 1));
 
+    final before = e.started.length;
     s.step();
     s.step(StepKind.land);
     s.stepAt(gongAt.x - 3, gongAt.z + 5);
-    expect(e.started.where((n) => n.startsWith('step.')), hasLength(3));
+    expect(e.started.skip(before).where((n) => n.startsWith('step.')), hasLength(3));
     expect(s.played, containsPair('step', 1));
     expect(s.played, containsPair('land', 1));
 
@@ -209,6 +224,49 @@ void main() {
     s.update(you);
     expect(vol('room'), lessThan(roomIn / 5));
     expect(vol('roof'), greaterThan(roomIn / 5));
+    s.dispose();
+  });
+
+  test('the jukebox and the DJ stream in step with the clock', timeout: long, () async {
+    final e = FakeEngine();
+    var now = 1000000.0;
+    final clock = Stopwatch()..start();
+    double nowMs() => now + clock.elapsedMicroseconds / 1000;
+    final s = OfficeSound(engine: e, clock: nowMs)
+      ..setVolume(1, false)
+      ..setMusicVolume(1, false);
+    await until(() => s.state == 'running');
+    // Next to the jukebox.
+    final you = SoundListener(x: jukeboxAt.x - 1, y: 1.4, z: jukeboxAt.z, fx: 1, fz: 0);
+    s.update(you);
+    s.setJukebox(JukeboxPlay(track: 'rainy-window', startedAt: 1, since: nowMs() - 3000));
+    expect(s.played, containsPair('tune', 1));
+    await until(() => e.voices.values.any((v) => e.streamed.containsKey(v.source)));
+    // A few seconds in: still playing, fed ahead, never restarted, and loud.
+    for (var i = 0; i < 40; i++) {
+      await wait(100);
+      s.update(you);
+    }
+    final streams = e.voices.values.where((v) => e.streamed.containsKey(v.source)).toList();
+    expect(streams, hasLength(1));
+    final pcm = e.streamed[streams.single.source]!;
+    expect(pcm[0].length / 44100, greaterThan(4.5));
+    expect(rmsOf(pcm[0]), greaterThan(0.02));
+    expect(streams.single.volume, greaterThan(0.3));
+    expect(streams.single.speed, closeTo(1, 0.005));
+    expect(s.beat(), inInclusiveRange(0, 1));
+    expect(s.musicLevel(), greaterThan(0.005));
+
+    // Off, and the DJ on the roof instead.
+    s.setJukebox(null);
+    expect(e.voices.values.where((v) => e.streamed.containsKey(v.source)), isEmpty);
+    s.setDj(() => djTime(nowMs()));
+    expect(s.played, containsPair('dj', 1));
+    await until(() => e.voices.values.any((v) => e.streamed.containsKey(v.source)));
+    await until(() => e.sources.values.any((v) => v.$1 == 'horn'));
+    s.horn();
+    expect(e.started, contains('horn'));
+    s.setDj(null);
     s.dispose();
   });
 }

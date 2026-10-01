@@ -27,6 +27,15 @@ abstract interface class AudioEngine {
   /// Appends one Float32List per channel to a stream.
   void feed(int stream, List<Float32List> channels);
 
+  /// A stream of MP3 or Ogg (Opus, Vorbis), decoded as it's fed: internet radio.
+  int openCompressedStream();
+
+  /// Appends encoded bytes to a compressed stream.
+  void feedBytes(int stream, Uint8List bytes);
+
+  /// No more is coming: the stream ends when it's played what it has.
+  void endStream(int stream);
+
   /// Seconds of a stream played so far.
   double played(int stream);
 
@@ -115,6 +124,33 @@ class SoLoudEngine implements AudioEngine {
     final src = _sources[stream];
     if (src == null) return;
     _s.addAudioDataStream(src, interleaved(channels));
+  }
+
+  @override
+  int openCompressedStream() {
+    final src = _s.setBufferStream(
+      bufferingType: so.BufferingType.released,
+      bufferingTimeNeeds: 1,
+      sampleRate: _rate,
+      channels: so.Channels.stereo,
+      format: so.BufferType.auto,
+      maxBufferSizeBytes: 1 << 30,
+    );
+    final id = _nextSource++;
+    _sources[id] = src;
+    return id;
+  }
+
+  @override
+  void feedBytes(int stream, Uint8List bytes) {
+    final src = _sources[stream];
+    if (src != null) _s.addAudioDataStream(src, bytes);
+  }
+
+  @override
+  void endStream(int stream) {
+    final src = _sources[stream];
+    if (src != null) _quietly(() => _s.setDataIsEnded(src));
   }
 
   @override

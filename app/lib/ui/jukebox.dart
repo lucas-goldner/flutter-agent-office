@@ -3,7 +3,6 @@
 
 import 'package:flutter/material.dart';
 
-import '../interop/browser.dart' show desktopApp, notInDesktopApp;
 import '../office_scope.dart';
 import 'package:office_shared/jukebox.dart';
 import 'package:office_shared/protocol.dart';
@@ -66,9 +65,6 @@ class _JukeboxWindowState extends State<_JukeboxWindow> with ListenTo {
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Everyone else on the floor still hears what you put on.
-          if (desktopApp) StatusBox(notInDesktopApp('Sound'), top: 0),
-          if (desktopApp) const SizedBox(height: 12),
           _nowPlaying(j),
           const FieldLabel('Put on a tune', top: 16),
           for (final t in jukeboxTunes)
