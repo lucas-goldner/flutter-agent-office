@@ -4,6 +4,7 @@
 //   chunk-*.js        what it loads from there (Excalidraw's font subsetting worker, for one)
 //   whiteboard.css    Excalidraw's styles, which the bridge adds to the page
 //   fonts/            Excalidraw's hand-drawn fonts, served by the office rather than a CDN
+//   host.html         the page the desktop app's web view loads to run it (app/excalidraw/host.html)
 // Xiaolai (CJK, 12 MB) is left out: Excalidraw falls back to its CDN for that one, only when someone
 // writes Chinese, Japanese or Korean. So are the other languages: the board is in English.
 //
@@ -201,6 +202,7 @@ Future<void> _bundle(String esbuild, Directory tree) async {
 
   final fonts = Directory(_p([tree.path, 'node_modules', '@excalidraw', 'excalidraw', 'dist', 'prod', 'fonts']));
   _copy(fonts, Directory(_p([out.path, 'fonts'])));
+  File(_p([_root.path, 'app', 'excalidraw', 'host.html'])).copySync(_p([out.path, 'host.html']));
 
   var size = 0;
   for (final f in out.listSync(recursive: true).whereType<File>()) {

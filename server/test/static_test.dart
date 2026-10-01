@@ -31,6 +31,9 @@ void main() {
       'assets/AssetManifest.bin',
       'assets/fonts/MaterialIcons-Regular.otf',
       'assets/shaders/ink_sparkle.frag',
+      'excalidraw/whiteboard.js',
+      'excalidraw/host.html',
+      'excalidraw/fonts/Virgil/Virgil-Regular.woff2',
       'extra.txt',
     ]) {
       Directory(p.dirname(p.join(web, f))).createSync(recursive: true);
@@ -77,6 +80,16 @@ void main() {
       final a = out(path);
       expect(a is StaticFile ? a.cache : null, cacheRevalidate);
     }
+  });
+
+  test("signed out: the whiteboard's Excalidraw bundle is served (the desktop app's web view has no cookie)", () {
+    for (final path in ['/excalidraw/whiteboard.js', '/excalidraw/host.html', '/excalidraw/fonts/Virgil/Virgil-Regular.woff2']) {
+      expect(served(path), path.substring(1));
+    }
+    expect(out('/excalidraw/nope.js'), const StaticNotFound());
+    // Its folder doesn't lend its pass to anything outside it.
+    expect(out('/excalidraw/../extra.txt'), const StaticRedirect('/login'));
+    expect(out('/excalidraw'), const StaticRedirect('/login'));
   });
 
   test('signed out: a missing boot file is a 404, not the login redirect', () {

@@ -1,0 +1,116 @@
+<!doctype html>
+<!--
+  The whiteboard's page for the desktop app's web view (app/lib/ui/whiteboard_native.dart). It imports
+  the same bundle the browser does (whiteboard.js, next to it: tool/build_whiteboard.dart copies this
+  page into app/web/excalidraw/) and drives app/excalidraw/bridge.js the way the browser's Dart does,
+  over the web view's channel instead of JS interop. Only Excalidraw lives here: the drawing and its
+  pictures come and go through the app's own connection to the office.
+
+  JS -> Dart: Office.postMessage(JSON) with a `type`:
+    loaded                      the bridge is imported: calls can come
+    failed {error}              it couldn't be
+    reply {id, value | error}   the answer to a call
+    change                      something changed in Excalidraw: takeChanges (once per takeChanges)
+    pointer {x, y, tool, button, selected}
+    ready                       Excalidraw is up
+    escape                      Esc with nothing left to finish or let go of: close the window
+  Dart -> JS: office.call(id, method, args), answered with a reply (methods below).
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Whiteboard</title>
+    <style>
+      html,
+      body,
+      #board {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #fff;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="board"></div>
+    <script type="module">
+      const post = (msg) => window.Office?.postMessage(JSON.stringify(msg));
+
+      let bridge = null;
+      let app = null;
+      /** A change was reported and not taken yet: Excalidraw reports every little one, the app needs one. */
+      let changed = false;
+
+      const methods = {
+        mount({ name, elements, heading }) {
+          app?.unmount();
+          changed = false;
+          app = bridge.mount(document.getElementById('board'), {
+            name,
+            elements,
+            heading,
+            onChange: () => {
+              if (changed) return;
+              changed = true;
+              post({ type: 'change' });
+            },
+            onPointer: (x, y, tool, button, selected) => post({ type: 'pointer', x, y, tool, button, selected: JSON.parse(selected) }),
+            onReady: () => post({ type: 'ready' }),
+          });
+        },
+        takeChanges(all) {
+          changed = false;
+          return app?.takeChanges(all) ?? '';
+        },
+        merge: (json) => app?.merge(json),
+        file: (id) => app?.file(id) ?? '',
+        setCollaborators: (json) => app?.setCollaborators(json),
+        unmount() {
+          app?.unmount();
+          app = null;
+        },
+        addFiles: (json) => bridge.addFiles(json),
+        missingFiles: (json) => bridge.missingFiles(json),
+        /** The drawing as a PNG data: URL for the board in the office, or null when nothing's drawn. */
+        async renderPreview(json, maxW, maxH) {
+          const canvas = await bridge.renderPreview(json, maxW, maxH);
+          return canvas ? canvas.toDataURL('image/png') : null;
+        },
+      };
+
+      window.office = {
+        async call(id, method, args) {
+          try {
+            const value = await methods[method](...args);
+            post({ type: 'reply', id, value: value ?? null });
+          } catch (e) {
+            post({ type: 'reply', id, error: String(e?.stack ?? e) });
+          }
+        },
+      };
+
+      // Esc first gets you out of whatever you're doing in Excalidraw (typing, drawing, a menu, a tool),
+      // then lets go of what's selected, and once there's nothing left, closes the window.
+      window.addEventListener(
+        'keydown',
+        (e) => {
+          if (e.key !== 'Escape') return;
+          if (app && !app.idle()) return;
+          if (!app || !app.deselect()) post({ type: 'escape' });
+          e.preventDefault();
+          e.stopPropagation();
+        },
+        true,
+      );
+
+      try {
+        bridge = await import('./whiteboard.js');
+        post({ type: 'loaded' });
+      } catch (e) {
+        post({ type: 'failed', error: String(e) });
+      }
+    </script>
+  </body>
+</html>

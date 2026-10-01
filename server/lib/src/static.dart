@@ -54,6 +54,11 @@ final _flutterPublic = [
   RegExp(r'^/icons/.+'),
   RegExp(r'^/canvaskit/.+'),
   RegExp(r'^/assets/.+'),
+  // The whiteboard's Excalidraw bundle (and the page the desktop app's web view runs it in): the
+  // open-source bundle, the same for every office. Public so the web view, which hasn't the app's
+  // session cookie, can load it; the drawing itself only ever goes through the app's own socket and
+  // the signed-in /api/whiteboard.
+  RegExp(r'^/excalidraw/.+'),
 ];
 
 /// How the office answers a GET of the Flutter client: a file (with its Cache-Control), a redirect,
