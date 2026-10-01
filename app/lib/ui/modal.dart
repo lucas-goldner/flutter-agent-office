@@ -152,23 +152,27 @@ class _BackdropState extends State<_Backdrop> {
     child: FocusScope(
       node: _scope,
       autofocus: true,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTapDown: widget.onTapOutside == null ? null : (_) => widget.onTapOutside!(),
-        child: widget.clear
-            ? widget.child
-            : ColoredBox(
-          color: Swatch.backdrop,
-          child: SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Center(
-                // Taps inside the window stay inside it.
-                child: GestureDetector(onTapDown: (_) {}, child: widget.child),
-              ),
+      // The click catcher is a layer *behind* the window, not around it: as an ancestor it also saw
+      // presses on the window, and a tap detector's onTapDown fires once a press passes 100 ms even
+      // when another detector wins, so a slow click or a slider drag closed the window.
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTapDown: widget.onTapOutside == null ? null : (_) => widget.onTapOutside!(),
+              child: widget.clear ? null : const ColoredBox(color: Swatch.backdrop),
             ),
           ),
-        ),
+          if (widget.clear)
+            Positioned.fill(child: widget.child)
+          else
+            Positioned.fill(
+              child: SafeArea(
+                child: Padding(padding: const EdgeInsets.all(16), child: Center(child: widget.child)),
+              ),
+            ),
+        ],
       ),
     ),
   );
