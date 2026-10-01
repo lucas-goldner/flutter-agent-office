@@ -27,6 +27,7 @@ dependencies:
   url_launcher: ^6.3.2
   webview_flutter: ^4.14.1
   webview_flutter_wkwebview: ^3.26.2
+  flutter_soloud: ^4.1.7
 
 dev_dependencies:
   flutter_test:

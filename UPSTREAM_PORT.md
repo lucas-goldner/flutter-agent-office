@@ -22,8 +22,10 @@ rooftop drinks, holiday themes). Renames: `HolidayTheme` (TS Theme), `launchBall
   RenderView for hands (`world/hands.dart`); `office/controller.dart` is the port of `main.ts`; HUD in
   `ui/hud.dart`; windows use `ui/modal.dart`; look in `ui/theme.dart`.
 - The client also builds natively (macOS). Browser-only code goes behind the existing
-  `x.dart` → `x_web.dart` / `x_stub.dart` conditional exports; sound is stubbed on native
-  (`audio/sound_stub.dart` must keep the same API as `audio/sound_web.dart`).
+  `x.dart` → `x_web.dart` / `x_stub.dart` conditional exports. Sound on native is
+  `audio/sound_native.dart` (the same API as `audio/sound_web.dart`): each Web Audio graph is ported
+  to the offline synth (`audio/synth.dart`, `audio/office_render.dart`, `audio/music_render.dart`)
+  and played through flutter_soloud; a change to a sound in `sound_web.dart` needs the same change there.
   `test/native_compile_test.dart` fails if web-only imports leak into main.
 - Checks before you're done: `dart analyze` + `dart test` in server/ and packages/office_shared;
   `flutter analyze lib test` + `flutter test` in app/; `dart format -l 120` on files you touch.

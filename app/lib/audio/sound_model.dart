@@ -15,7 +15,8 @@ class Pos {
 
 /// Where you hear from: your head, facing where the camera looks (fx, fz).
 class SoundListener extends Pos {
-  const SoundListener({required double x, required double y, required double z, required this.fx, required this.fz}) : super(x, y, z);
+  const SoundListener({required double x, required double y, required double z, required this.fx, required this.fz})
+    : super(x, y, z);
 
   final double fx;
   final double fz;
@@ -191,4 +192,56 @@ class Typist<P> {
       }
     }
   }
+}
+
+// ---- Hearing a sound from somewhere ---------------------------------------------------------------------
+
+/// The azimuth (degrees, -180–180, negative to the left) of [p] as heard by [l], the way a Web Audio
+/// PannerNode works it out (the listener's up is +y, and its facing is levelled).
+double azimuthOf(SoundListener l, Pos p) {
+  var sx = p.x - l.x, sy = p.y - l.y, sz = p.z - l.z;
+  final d = math.sqrt(sx * sx + sy * sy + sz * sz);
+  if (d == 0) return 0;
+  sx /= d;
+  sy /= d;
+  sz /= d;
+  final h = math.sqrt(l.fx * l.fx + l.fz * l.fz);
+  final fx = h == 0 ? 0.0 : l.fx / h, fz = h == 0 ? -1.0 : l.fz / h;
+  // right = forward × up, with up = (0, 1, 0).
+  final rx = -fz, rz = fx;
+  // Project onto the horizontal plane.
+  final ph = math.sqrt(sx * sx + sz * sz);
+  if (ph == 0) return 0;
+  final px = sx / ph, pz = sz / ph;
+  var az = math.acos((px * rx + pz * rz).clamp(-1.0, 1.0)) * 180 / math.pi;
+  if (px * fx + pz * fz < 0) az = 360 - az;
+  az = (az >= 0 && az <= 270) ? 90 - az : 450 - az;
+  return az;
+}
+
+/// How a Web Audio panner (equal power, inverse distance) hears a mono sound at [p] from [l]: the gain
+/// for the distance, and each ear's share (0.707 each straight ahead).
+({double gain, double left, double right}) hearAt(SoundListener l, Pos p, double ref, double rolloff) {
+  final dx = p.x - l.x, dy = p.y - l.y, dz = p.z - l.z;
+  final d = math.max(ref, math.sqrt(dx * dx + dy * dy + dz * dz));
+  final gain = ref / (ref + rolloff * (d - ref));
+  var az = azimuthOf(l, p);
+  // Behind is heard like in front.
+  if (az < -90) az = -180 - az;
+  if (az > 90) az = 180 - az;
+  final x = (az + 90) / 180;
+  return (gain: gain, left: math.cos(x * math.pi / 2), right: math.sin(x * math.pi / 2));
+}
+
+/// The same for a stereo sound, as near as two channel gains get to Web Audio's (which also moves some
+/// of one channel into the other): 1, 1 straight ahead.
+({double gain, double left, double right}) hearStereoAt(SoundListener l, Pos p, double ref, double rolloff) {
+  final mono = hearAt(l, p, ref, rolloff);
+  var az = azimuthOf(l, p);
+  if (az < -90) az = -180 - az;
+  if (az > 90) az = 180 - az;
+  final x = az <= 0 ? (az + 90) / 90 : az / 90;
+  return az <= 0
+      ? (gain: mono.gain, left: 1.0, right: math.sin(x * math.pi / 2))
+      : (gain: mono.gain, left: math.cos(x * math.pi / 2), right: 1.0);
 }

@@ -231,7 +231,6 @@ class _SettingsWindowState extends State<_SettingsWindow> with ListenTo {
           ),
           Note(_views.firstWhere((v) => v.$1 == _s.view).$3),
           const FieldLabel('Office sounds', top: 18),
-          if (desktopApp) Note(notInDesktopApp('Sound')),
           _VolumeRow(
             label: 'Office sounds volume',
             level: _s.volume,

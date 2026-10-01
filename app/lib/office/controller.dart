@@ -248,6 +248,7 @@ class OfficeController implements OfficeActions {
   late final Confetti confetti;
   late final Smoke smoke;
   late final OfficeSound sound;
+  bool _soundMade = false;
   late final DesktopNotifier notifier;
   late final Gallery gallery;
   late final Hanger hanger;
@@ -381,6 +382,7 @@ class OfficeController implements OfficeActions {
     root.add(hands.root);
     me.onSmoke = _myPuff;
 
+    _soundMade = true;
     sound = OfficeSound(clock: nowMs)
       ..setVolume(settings.volume, settings.muted)
       ..setMusicVolume(settings.music, settings.musicMuted);
@@ -481,6 +483,7 @@ class OfficeController implements OfficeActions {
     rooms.dispose();
     hanger.dispose();
     whiteboard.dispose();
+    if (_soundMade) sound.dispose();
     net.close();
   }
 
