@@ -1,4 +1,4 @@
-// Excalidraw, from Dart: the bridge module (app/excalidraw/bridge.js) that scripts/build-whiteboard.mjs
+// Excalidraw, from Dart: the bridge module (app/excalidraw/bridge.js) that tool/build_whiteboard.dart
 // bundles with React and Excalidraw into web/excalidraw/. It's several MB, so it's imported the
 // first time the whiteboard is needed, not with the app.
 
@@ -69,7 +69,7 @@ Future<ExcalidrawModule> loadExcalidraw() => _loading ??= () async {
 }();
 
 /// The board drawn by Excalidraw as an image, at most [maxW] x [maxH]; null when nothing is drawn.
-Future<ui.Image?> renderPreview(ExcalidrawModule m, String json, int maxW, int maxH) async {
+Future<ui.Image?> renderBoard(ExcalidrawModule m, String json, int maxW, int maxH) async {
   final canvas = await m.renderPreview(json, maxW, maxH).toDart;
   if (canvas == null) return null;
   return ui_web.createImageFromTextureSource(canvas, width: canvas.width, height: canvas.height, transferOwnership: true);

@@ -1,5 +1,5 @@
-// The 📝 whiteboard: Excalidraw in the browser (whiteboard_web.dart). The desktop app has no web
-// view to run it in yet (whiteboard_stub.dart), so there the window says so and the board in the
-// office stays blank.
+// The 📝 whiteboard: Excalidraw in the page in the browser (whiteboard_web.dart), in a web view in
+// the desktop app (whiteboard_native.dart), with the same window and syncing for both
+// (whiteboard_hub.dart, whiteboard_sync.dart).
 
-export 'whiteboard_stub.dart' if (dart.library.js_interop) 'whiteboard_web.dart';
+export 'whiteboard_hub.dart' show WhiteboardHub;

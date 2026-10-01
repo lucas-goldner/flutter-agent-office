@@ -31,5 +31,15 @@
 	<!-- flutter_scene draws the office with Flutter GPU, which is off unless this is set. -->
 	<key>FLTEnableFlutterGPU</key>
 	<true/>
+	<!-- The whiteboard runs in a WKWebView (ui/whiteboard_native.dart), which App Transport Security
+	     holds to https, unlike the app's own Dart connections. The office is often plain http (on
+	     localhost, or another machine on the LAN), so the web view may load it over http too. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+		<key>NSAllowsArbitraryLoadsInWebContent</key>
+		<true/>
+	</dict>
 </dict>
 </plist>
