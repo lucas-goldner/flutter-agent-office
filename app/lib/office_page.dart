@@ -105,6 +105,11 @@ class _OfficePageState extends State<OfficePage> {
       _lock.lock();
     }
     if (c.onKey(e)) return KeyEventResult.handled;
+    // Esc gives the mouse back, as a browser's pointer lock does by itself.
+    if (e is KeyDownEvent && e.logicalKey == LogicalKeyboardKey.escape && _lock.locked) {
+      _lock.unlock();
+      return KeyEventResult.handled;
+    }
     // In the desktop app a key nobody takes goes on to macOS, which beeps for it: every press and
     // repeat of W/A/S/D (read from the keys held, not here) went "dop dop dop". While you walk
     // around, the game has the keyboard and keeps them; windows and the chat keep their own keys (Tab
