@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Install the latest Agent Office release and start it, no clone needed:
 #
-#   curl -fsSL https://raw.githubusercontent.com/AgentSystemLabs/agent-office/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/lucas-goldner/flutter-agent-office/main/install.sh | bash
 #
 # Anything after `bash -s --` goes to the office, e.g. a port:
 #
-#   curl -fsSL https://raw.githubusercontent.com/AgentSystemLabs/agent-office/main/install.sh | bash -s -- --port 4700
+#   curl -fsSL https://raw.githubusercontent.com/lucas-goldner/flutter-agent-office/main/install.sh | bash -s -- --port 4700
 #
 # The first time the office starts in a terminal it asks where to clone your projects, signs the
 # GitHub CLI in if it isn't, and lets you pick your first repository to clone as a floor.
@@ -17,7 +17,7 @@
 #
 # Environment:
 #   AGENT_OFFICE_VERSION       install this release (a tag like v0.1.68) instead of the newest
-#   AGENT_OFFICE_REPO          the GitHub repo to install releases of (default AgentSystemLabs/agent-office)
+#   AGENT_OFFICE_REPO          the GitHub repo to install releases of (default lucas-goldner/flutter-agent-office)
 #   AGENT_OFFICE_INSTALL_DIR   where releases go (default ~/.local/share/agent-office)
 #   AGENT_OFFICE_BIN_DIR       where the `agent-office` command goes (default ~/.local/bin; empty: none)
 #   AGENT_OFFICE_INSTALL_ONLY  1: install, but don't start the office
@@ -27,7 +27,7 @@
 #                              <url>/latest/download/<file> (a mirror, or a file:// folder for tests)
 set -euo pipefail
 
-REPO="${AGENT_OFFICE_REPO:-AgentSystemLabs/agent-office}"
+REPO="${AGENT_OFFICE_REPO:-lucas-goldner/flutter-agent-office}"
 RELEASES="${AGENT_OFFICE_RELEASES_URL:-https://github.com/$REPO/releases}"
 RELEASES="${RELEASES%/}"
 MARKER="agent-office launcher, written by install.sh"

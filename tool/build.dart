@@ -24,7 +24,7 @@ import 'dart:io';
 final _root = File.fromUri(Platform.script).parent.parent.path;
 String _p(List<String> parts) => parts.join(Platform.pathSeparator);
 
-const _defaultRepo = 'AgentSystemLabs/agent-office';
+const _defaultRepo = 'lucas-goldner/flutter-agent-office';
 
 Future<void> main(List<String> argv) async {
   final args = _parse(argv);

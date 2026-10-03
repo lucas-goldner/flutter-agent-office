@@ -4,9 +4,46 @@ A cartoon 3D office your team walks around in together. Sit a Claude Code, OpenC
 
 Every project is **a floor of the building**. Ride the elevator, pick one of your GitHub repositories, and the office clones it and opens a new floor for it, painted its own colors. Every worker, terminal, board and queue on a floor works in that project's checkout.
 
+This fork runs on **Dart and Flutter**: a single native server, the office in your browser (Flutter web), and a **native macOS app**. No Node.js anywhere.
+
+## Quick start
+
+You need the [Flutter SDK](https://docs.flutter.dev/get-started/install) (stable, 3.44 or newer; it includes `dart`), `git`, and [Claude Code](https://docs.claude.com/en/docs/claude-code) signed in with your claude.ai account (run `claude`, then `/login`). For the issue and PR boards, also the [GitHub CLI](https://cli.github.com) logged in (`gh auth login`). For the Mac app, Xcode.
+
+```bash
+git clone https://github.com/lucas-goldner/flutter-agent-office
+cd flutter-agent-office
 ```
-agent-office
+
+[`run_agent_office.sh`](run_agent_office.sh) builds the office the first time (a few minutes), then starts it with workers that **skip Claude Code's permission prompts** and show up as **Remote Control** sessions, so you can watch and steer them from the Claude app on your phone. Use it on repositories you trust: a worker can run any command your user can.
+
+### In the browser
+
+```bash
+./run_agent_office.sh
 ```
+
+The office opens in your browser at http://localhost:4600, already signed in. Ride the elevator to add your first project.
+
+### As a Mac app
+
+```bash
+./run_agent_office.sh --mac
+```
+
+The server starts in the background (its log is `dist/server.log`) and the native macOS app opens in front. Sign in with the server `http://localhost:4600` and the office password, and the app remembers you. Click into the office to look around with the mouse; Esc or opening any window gives you the cursor back, and a two-finger swipe turns the camera too. Quitting the app stops the server, and the workers keep running for next time.
+
+### Handy options
+
+```bash
+./run_agent_office.sh --rebuild                # after a git pull: rebuild, then start
+./run_agent_office.sh ~/code/my-project        # start in a project you already have (it becomes a floor)
+./run_agent_office.sh --password 'something'   # pick the office password
+./run_agent_office.sh --host 0.0.0.0           # let teammates on your network in
+./run_agent_office.sh --mac --rebuild          # options combine
+```
+
+Anything else is passed on to `agent-office` (see `./dist/agent-office/agent-office --help`). To run it without the permission-skipping and Remote Control flags, start `./dist/agent-office/agent-office` yourself.
 
 ## What's inside
 
@@ -61,24 +98,24 @@ On the machine that runs the office (your laptop or a VPS):
 
 ## Install & run
 
-One line installs the latest release and starts the office. You don't need to clone anything:
+Without a checkout, one line installs the latest release and starts the office (once this fork has published a release; until then, use the Quick start above):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/AgentSystemLabs/agent-office/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lucas-goldner/flutter-agent-office/main/install.sh | bash
 ```
 
 Anything after `bash -s --` goes to the office, such as a project directory or a port:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/AgentSystemLabs/agent-office/main/install.sh | bash -s -- ~/code/my-project --port 4700
+curl -fsSL https://raw.githubusercontent.com/lucas-goldner/flutter-agent-office/main/install.sh | bash -s -- ~/code/my-project --port 4700
 ```
 
-The script downloads the newest [release](https://github.com/AgentSystemLabs/agent-office/releases) for your machine (macOS or Linux, x64 or arm64), checks it against the release's `SHA256SUMS` and unpacks it into `~/.local/share/agent-office`. A release is one `agent-office` executable with the web client next to it, so there's nothing else to install. It also links `~/.local/bin/agent-office` to it, so after the first run `agent-office` on its own starts the office. Run the curl line again to update. Set `AGENT_OFFICE_VERSION=v0.1.68` to install a particular release, or `AGENT_OFFICE_INSTALL_ONLY=1` to install without starting. The other settings are listed at the top of [`install.sh`](install.sh). It runs on macOS and Linux. On Windows, run it inside WSL.
+The script downloads the newest [release](https://github.com/lucas-goldner/flutter-agent-office/releases) for your machine (macOS or Linux, x64 or arm64), checks it against the release's `SHA256SUMS` and unpacks it into `~/.local/share/agent-office`. A release is one `agent-office` executable with the web client next to it, so there's nothing else to install. It also links `~/.local/bin/agent-office` to it, so after the first run `agent-office` on its own starts the office. Run the curl line again to update. Set `AGENT_OFFICE_VERSION=v0.1.68` to install a particular release, or `AGENT_OFFICE_INSTALL_ONLY=1` to install without starting. The other settings are listed at the top of [`install.sh`](install.sh). It runs on macOS and Linux. On Windows, run it inside WSL.
 
 Or install from a clone, to work on the office itself. Building the browser client needs the [Flutter SDK](https://docs.flutter.dev/get-started/install) (3.47 stable) on your PATH; releases ship it built, so the one-line install above doesn't:
 
 ```bash
-git clone https://github.com/AgentSystemLabs/agent-office && cd agent-office
+git clone https://github.com/lucas-goldner/flutter-agent-office && cd flutter-agent-office
 dart run tool/build.dart     # builds the client (Flutter web) and the server into dist/agent-office/
 ln -s "$PWD/dist/agent-office/agent-office" ~/.local/bin/agent-office   # puts `agent-office` on your PATH
 ```
@@ -196,7 +233,7 @@ You can also click a nearby desk to interact with it, or click a worker in the s
 If you have the AWS CLI logged in, one command gives you your own office on EC2. No Terraform needed:
 
 ```bash
-git clone https://github.com/AgentSystemLabs/agent-office && cd agent-office
+git clone https://github.com/lucas-goldner/flutter-agent-office && cd flutter-agent-office
 deploy/aws.sh up
 ```
 
