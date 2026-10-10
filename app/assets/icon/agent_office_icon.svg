@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Agent Office">
+  <!-- Agent Office's app icon: the office building at night, its windows lit by the workers inside, a
+       spark in the middle one. Clay, slate and ivory. The macOS shape: an 824 px rounded square on a
+       1024 px canvas. favicon.svg is the same picture, cropped to the tile. -->
+  <defs>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.16"/>
+      <stop offset="0.55" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="#D97757"/>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#sheen)"/>
+  <!-- the ground -->
+  <rect x="212" y="786" width="600" height="28" rx="14" fill="#141413" opacity="0.22"/>
+  <!-- antenna and its light -->
+  <rect x="503" y="188" width="18" height="78" rx="9" fill="#141413"/>
+  <circle cx="512" cy="180" r="22" fill="#FAF9F5"/>
+  <!-- the building -->
+  <rect x="356" y="244" width="312" height="80" rx="22" fill="#141413"/>
+  <rect x="300" y="296" width="424" height="504" rx="34" fill="#141413"/>
+  <!-- windows: lit (ivory, warm) and dark -->
+  <rect x="352" y="352" width="84" height="72" rx="14" fill="#FAF9F5"/>
+  <rect x="470" y="352" width="84" height="72" rx="14" fill="#3A3833"/>
+  <rect x="588" y="352" width="84" height="72" rx="14" fill="#F2C46D"/>
+  <rect x="352" y="460" width="84" height="72" rx="14" fill="#F2C46D"/>
+  <rect x="470" y="460" width="84" height="72" rx="14" fill="#FAF9F5"/>
+  <rect x="588" y="460" width="84" height="72" rx="14" fill="#3A3833"/>
+  <rect x="352" y="568" width="84" height="72" rx="14" fill="#3A3833"/>
+  <rect x="470" y="568" width="84" height="72" rx="14" fill="#F2C46D"/>
+  <rect x="588" y="568" width="84" height="72" rx="14" fill="#FAF9F5"/>
+  <!-- the spark in the middle window -->
+  <path d="M512 466 C516 486 520 490 540 496 C520 502 516 506 512 526 C508 506 504 502 484 496 C504 490 508 486 512 466 Z" fill="#D97757"/>
+  <!-- the door -->
+  <path d="M466 800 V706 a46 46 0 0 1 92 0 V800 Z" fill="#E8956F"/>
+</svg>
