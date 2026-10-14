@@ -90,7 +90,15 @@ Future<PrRef?> findOpenPr(String branch, String cwd) async {
 }
 
 /// `gh pr create` for a pushed branch; resolves to the new pull request.
-Future<PrRef> createPr(String branch, String? base, String title, String body, String cwd) async {
+/// With [env], as whoever pressed the button (see signins.dart).
+Future<PrRef> createPr(
+  String branch,
+  String? base,
+  String title,
+  String body,
+  String cwd, [
+  Map<String, String>? env,
+]) async {
   final out = await gh(
     [
       'pr',
@@ -105,6 +113,7 @@ Future<PrRef> createPr(String branch, String? base, String title, String body, S
     ],
     cwd,
     60000,
+    env,
   );
   final url = out.trim().split('\n').last;
   final number = int.tryParse(RegExp(r'/pull/(\d+)').firstMatch(url)?.group(1) ?? '') ?? 0;

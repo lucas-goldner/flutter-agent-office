@@ -377,7 +377,7 @@ extension _WorkerTrees on WorkerManager {
 
   // --- pull requests ------------------------------------------------------------------------------
 
-  Future<({List<OpenedPr> prs, List<String> failed, String? error})> _openPr(String id, String by) async {
+  Future<({List<OpenedPr> prs, List<String> failed, String? error})> _openPr(String id, String by, [GhAs? as]) async {
     ({List<OpenedPr> prs, List<String> failed, String? error}) fail(String error) =>
         (prs: const [], failed: const [], error: error);
     final w = _workers[id];
@@ -392,7 +392,7 @@ extension _WorkerTrees on WorkerManager {
       final what = info.status == WorkerStatus.needsInput ? 'waiting on input' : info.status.wire;
       return fail("${info.name} is still $what — wait until it's done");
     }
-    if (info.repos?.isNotEmpty ?? false) return _openPrs(w, by);
+    if (info.repos?.isNotEmpty ?? false) return _openPrs(w, by, as);
     final cwd = p.join(_dir, wt.path);
     if (!Directory(cwd).existsSync()) return fail("${info.name}'s worktree is gone (${wt.path})");
     info.prOpening = true;
@@ -425,10 +425,10 @@ extension _WorkerTrees on WorkerManager {
           error: null,
         );
       }
-      await _run('git', ['push', '-u', 'origin', branch], cwd, 90000);
+      await _run('git', ['push', '-u', 'origin', branch], cwd, 90000, as?.env);
       final base = await _pushedBranch([wt.from, _trees.currentBranch()], branch);
       final draft = draftPr(info, commits, by);
-      final pr = await createPr(branch, base, draft.title, draft.body, cwd);
+      final pr = await createPr(branch, base, draft.title, draft.body, cwd, as?.env);
       info.pr = pr;
       _persist();
       return (
@@ -449,7 +449,7 @@ extension _WorkerTrees on WorkerManager {
   /// (or the one its branch already has there), with every one of them listed in each one's
   /// description, so they're reviewed and merged together. The issue its task came from is closed by
   /// its own floor's pull request; the others only mention it.
-  Future<({List<OpenedPr> prs, List<String> failed, String? error})> _openPrs(_Worker w, String by) async {
+  Future<({List<OpenedPr> prs, List<String> failed, String? error})> _openPrs(_Worker w, String by, [GhAs? as]) async {
     ({List<OpenedPr> prs, List<String> failed, String? error}) fail(String error) =>
         (prs: const [], failed: const [], error: error);
     final info = w.info;
@@ -526,10 +526,10 @@ extension _WorkerTrees on WorkerManager {
             if (dirty) uncommitted.add(x.name);
             continue;
           }
-          await _run('git', ['push', '-u', 'origin', x.branch], cwd, 90000);
+          await _run('git', ['push', '-u', 'origin', x.branch], cwd, 90000, as?.env);
           final base = await _pushedBranch([x.from, Worktrees(x.dir).currentBranch()], x.branch, x.dir);
           final draft = draftPr(info, commits, by, other: x.index == null ? null : (home: home));
-          final pr = await createPr(x.branch, base, draft.title, draft.body, cwd);
+          final pr = await createPr(x.branch, base, draft.title, draft.body, cwd, as?.env);
           set(x.index, pr);
           _persist();
           prs.add((pr: OpenedPr(repo: x.name, number: pr.number, url: pr.url, existed: false, dirty: dirty), cwd: cwd));
@@ -551,7 +551,7 @@ extension _WorkerTrees on WorkerManager {
           try {
             final body = await gh(['pr', 'view', x.pr.url, '--json', 'body', '--jq', '.body'], x.cwd, 30000);
             final next = withRelated(body, relatedBlock(list, x.pr.url, wt.branch));
-            if (next != body) await gh(['pr', 'edit', x.pr.url, '--body', next], x.cwd, 60000);
+            if (next != body) await gh(['pr', 'edit', x.pr.url, '--body', next], x.cwd, 60000, as?.env);
           } catch (err) {
             failed.add("Couldn't list the other pull requests on ${x.pr.repo} #${x.pr.number}: ${_messageOf(err)}");
           }

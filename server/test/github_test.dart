@@ -2,6 +2,7 @@
 import 'dart:async';
 
 import 'package:agent_office_server/src/github.dart';
+import 'package:agent_office_server/src/signins.dart' show GhAs;
 import 'package:office_shared/shared.dart';
 import 'package:test/test.dart';
 
@@ -129,7 +130,7 @@ void main() {
     test('pull request listing works when older gh versions reject optional fields', () async {
       const unsupported = {'url', 'headRefOid', 'updatedAt', 'statusCheckRollup', 'closingIssuesReferences'};
       final calls = <String>[];
-      Future<String> runner(List<String> args, String cwd, [int timeout = 30000]) async {
+      Future<String> runner(List<String> args, String cwd, [int timeout = 30000, Map<String, String>? env]) async {
         if (args[0] == 'repo') {
           return '{"nameWithOwner":"acme/app","squashMergeAllowed":true,"mergeCommitAllowed":false,"rebaseMergeAllowed":false}';
         }
@@ -158,7 +159,7 @@ void main() {
     test('a claim shows on the board for everyone before gh answers, and goes back when it fails', () async {
       final states = <GhState<GhIssue>>[];
       final assigning = Completer<String>();
-      Future<String> runner(List<String> args, String cwd, [int timeout = 30000]) {
+      Future<String> runner(List<String> args, String cwd, [int timeout = 30000, Map<String, String>? env]) {
         if (args.take(2).join(' ') == 'issue edit') return assigning.future;
         if (args.take(2).join(' ') == 'issue list') {
           return Future.value(
@@ -179,6 +180,36 @@ void main() {
       assigning.completeError(GhError('HTTP 403: no access'));
       expect(await claimed, contains('no access'));
       expect(states.last.items.single.taken, isNull, reason: 'back where it was');
+    });
+
+    test("someone's own sign-in: what they do on GitHub runs with their environment, reads with the office's", () async {
+      final seen = <(String, Map<String, String>?)>[];
+      Future<String> runner(List<String> args, String cwd, [int timeout = 30000, Map<String, String>? env]) async {
+        seen.add((args.take(2).join(' '), env));
+        if (args[0] == 'repo') {
+          return '{"nameWithOwner":"acme/app","squashMergeAllowed":true,"mergeCommitAllowed":false,"rebaseMergeAllowed":false}';
+        }
+        if (args.any((a) => a.endsWith('issues/7/comments'))) {
+          return '{"id":"c1","author":{"login":"ada"},"body":"hi","createdAt":"","url":"u"}';
+        }
+        if (args.any((a) => a.endsWith('issues/7/labels'))) return '[]';
+        return '[]';
+      }
+
+      final github = GitHub('/repo', (_) {}, (_) {}, runner);
+      const as = GhAs('acc123', {'GH_CONFIG_DIR': '/homes/acc123/gh'});
+      Map<String, String>? envOf(String cmd) => seen.lastWhere((s) => s.$1 == cmd).$2;
+      expect((await github.comment(GhKind.issue, 7, 'hi', as)).error, isNull);
+      expect(envOf('api --method'), as.env);
+      expect(await github.merge(7, GhMergeMethod.squash, false, false, as), isNull);
+      expect(envOf('pr merge'), as.env);
+      expect(envOf('repo view'), isNull, reason: 'the repository is read as the office');
+      expect(await github.close(GhKind.issue, 7, as: as), isNull);
+      expect(envOf('issue close'), as.env);
+      expect(await github.claim(7, as), isNull);
+      expect(envOf('issue edit'), as.env);
+      expect(await github.claim(7), isNull);
+      expect(envOf('issue edit'), isNull);
     });
   });
 }

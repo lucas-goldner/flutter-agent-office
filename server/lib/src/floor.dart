@@ -20,6 +20,7 @@ import 'machine.dart' show Capacity;
 import 'meetings.dart';
 import 'prompts.dart';
 import 'queue.dart';
+import 'signins.dart' show GhRunAs;
 import 'usage.dart' show Ledger;
 import 'whiteboard.dart';
 import 'workers.dart';
@@ -75,6 +76,12 @@ abstract interface class FloorContext {
 
   /// Whether a worker on another floor works in this floor's project too.
   bool lent(Floor floor);
+
+  /// Workers hired by an account run on its own sign-ins (see signins.dart).
+  RunAs? get runAs;
+
+  /// How to run gh as an account: its own sign-in, the office's (neither set), or why it can't.
+  GhRunAs ghAs(String? owner);
 }
 
 /// The open pull request on a floor's board whose head is [branch].
@@ -174,6 +181,7 @@ class Floor {
       capacity: _ctx.capacity,
       prompts: _ctx.prompts,
       dshProfile: _ctx.dshProfile,
+      runAs: _ctx.runAs,
     );
 
     github = GitHub(def.dir, (state) => _ctx.emit(this, GhIssuesMsg(state)), (state) {
@@ -201,7 +209,10 @@ class Floor {
           sendLandedHome();
         },
         toast: (text, level) => _ctx.toast(this, text, level),
-        claimIssue: (issue) => github.claim(issue),
+        claimIssue: (issue, owner) {
+          final as = _ctx.ghAs(owner);
+          return as.refused != null ? Future.value(as.refused) : github.claim(issue, as.as);
+        },
         refreshGitHub: () => unawaited(github.refresh()),
         hiringPaused: () => _ctx.ledger.hiringPaused,
         emptied: () {
@@ -223,7 +234,10 @@ class Floor {
         update: (state) => _ctx.emit(this, MeetingMsg(state)),
         toast: (text, level) => _ctx.toast(this, text, level),
         hiringPaused: () => _ctx.ledger.hiringPaused,
-        postReview: (pr, file) => github.review(pr, file),
+        postReview: (pr, file, owner) {
+          final as = _ctx.ghAs(owner);
+          return as.refused != null ? Future.error(GhError(as.refused!)) : github.review(pr, file, as.as);
+        },
         prompt: (id) => _ctx.prompts?.text(id) ?? prompts[id]!.text,
       ),
     );
@@ -460,8 +474,9 @@ class _FloorMeetingWorkers implements MeetingWorkers {
     AgentProvider provider,
     String? model,
     AgentEffort? effort,
-    ({String id, WorkerWorktree? worktree}) meeting,
-  ) => _w.spawn(deskId, by, prompt, false, WorkerKind.agent, provider, model, effort, meeting);
+    ({String id, WorkerWorktree? worktree}) meeting, [
+    String? owner,
+  ]) => _w.spawn(deskId, by, prompt, false, WorkerKind.agent, provider, model, effort, meeting, const [], owner);
   @override
   String? prompt(String id, String text, [String? by]) => _w.prompt(id, text, by);
   @override

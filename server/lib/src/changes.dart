@@ -95,11 +95,18 @@ class _Result {
   final int code;
 }
 
-/// Runs a command; a non-zero exit is a result, not an error. Only "can't run it at all" throws.
-Future<_Result> _run(String cmd, List<String> args, String cwd, [int timeout = 30000]) async {
+/// Runs a command; a non-zero exit is a result, not an error. Only "can't run it at all" throws. With
+/// [env], it runs as someone signed in to their own GitHub (see signins.dart) instead of the office.
+Future<_Result> _run(String cmd, List<String> args, String cwd, [int timeout = 30000, Map<String, String>? env]) async {
   Process proc;
   try {
-    proc = await Process.start(cmd, args, workingDirectory: cwd, environment: {'GIT_OPTIONAL_LOCKS': '0'});
+    proc = await Process.start(
+      cmd,
+      args,
+      workingDirectory: cwd,
+      environment: {...?env, 'GIT_OPTIONAL_LOCKS': '0'},
+      includeParentEnvironment: env == null,
+    );
   } on ProcessException catch (e) {
     if (e.errorCode == 2) throw _GitError('$cmd is not installed on the server');
     throw _GitError(e.message);
@@ -186,8 +193,8 @@ String _reason(_Result r, String fallback) {
   return line != null ? line.replaceFirst(_fatalPrefix, '') : fallback;
 }
 
-Future<String> _git(List<String> args, String cwd, [int? timeout]) async {
-  final r = await _run('git', args, cwd, timeout ?? 30000);
+Future<String> _git(List<String> args, String cwd, [int? timeout, Map<String, String>? env]) async {
+  final r = await _run('git', args, cwd, timeout ?? 30000, env);
   if (r.code != 0) throw _GitError(_reason(r, 'git ${args[0]} failed'));
   return r.out.endsWith('\n') ? r.out.substring(0, r.out.length - 1) : r.out;
 }
@@ -417,12 +424,13 @@ class Changes {
   }
 
   /// Stages everything in the checkout and commits it.
-  Future<String?> commit(String workerId, String message, String who, [String? repo]) async {
+  /// With [env], as whoever pressed the button (their git name and email).
+  Future<String?> commit(String workerId, String message, String who, [String? repo, Map<String, String>? env]) async {
     final msg = message.trim();
     if (msg.isEmpty) return 'The commit needs a message';
     return _action(workerId, repo, 'Committing…', (t, w) async {
       await _git(['add', '-A'], t.cwd);
-      await _git(['commit', '-q', '-m', msg], t.cwd, 120000);
+      await _git(['commit', '-q', '-m', msg], t.cwd, 120000, env);
       final subject = msg.split('\n')[0];
       _events.toast(
         '$who committed “${subject.length > 60 ? '${subject.substring(0, 59)}…' : subject}” at ${t.name}\'s desk',
@@ -462,7 +470,15 @@ class Changes {
   }
 
   /// Pushes the branch and opens a pull request for it with `gh`.
-  Future<String?> pullRequest(String workerId, String title, String body, String who, [String? repo]) async {
+  /// With [env], pushed and opened as whoever pressed the button.
+  Future<String?> pullRequest(
+    String workerId,
+    String title,
+    String body,
+    String who, [
+    String? repo,
+    Map<String, String>? env,
+  ]) async {
     if (title.trim().isEmpty) return 'The pull request needs a title';
     return _action(workerId, repo, 'Pushing the branch and opening a pull request…', (t, w) async {
       final s = w.last ?? await _compute(w, t);
@@ -477,12 +493,13 @@ class Changes {
       final remotes = (await _git(['remote'], t.cwd)).split('\n').where((r) => r.isNotEmpty).toList();
       final remote = remotes.contains('origin') ? 'origin' : (remotes.isEmpty ? null : remotes.first);
       if (remote == null) return 'This project has no git remote to push to';
-      await _git(['push', '-u', remote, branch], t.cwd, 120000);
+      await _git(['push', '-u', remote, branch], t.cwd, 120000, env);
       final r = await _run(
         'gh',
         ['pr', 'create', '--head', branch, '--base', prBase, '--title', title.trim(), '--body', body],
         t.cwd,
         120000,
+        env,
       );
       final url = r.out.trim().split('\n').last;
       if (r.code != 0 || !RegExp(r'^https?://').hasMatch(url)) {

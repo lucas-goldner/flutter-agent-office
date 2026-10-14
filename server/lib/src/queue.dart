@@ -7,6 +7,7 @@ import 'package:office_shared/shared.dart';
 import 'package:path/path.dart' as p;
 
 import 'agents.dart';
+import 'worker_pr.dart' show RepoSource;
 
 /// What the queue needs from the worker manager. Narrow on purpose, so a smoke test can fake it.
 abstract interface class QueueWorkers {
@@ -27,6 +28,11 @@ abstract interface class QueueWorkers {
     AgentProvider provider, [
     String? model,
     AgentEffort? effort,
+    ({String id, WorkerWorktree? worktree})? meeting,
+    List<RepoSource> repos,
+
+    /// The account the task is for: its worker runs on that account's sign-ins.
+    String? owner,
   ]);
 
   /// Resolves with a line about what became of the worker's worktree.
@@ -52,7 +58,9 @@ class QueueEvents {
   final void Function(String text, ToastLevel level) toast;
 
   /// Mark the issue as taken on GitHub, so the board moves it to In progress. Resolves to an error message when it can't.
-  final Future<String?> Function(int issue) claimIssue;
+  /// Marks the issue as taken on GitHub (as [owner], when it's an account's task), so the board moves it
+  /// to In progress. Resolves to an error message when it can't.
+  final Future<String?> Function(int issue, String? owner) claimIssue;
 
   /// Ask GitHub for fresh pull requests, to pick up the one a worker just opened.
   final void Function() refreshGitHub;
@@ -95,6 +103,7 @@ class _Task {
     required this.title,
     required this.prompt,
     required this.addedBy,
+    this.owner,
     required this.addedAt,
     required this.status,
     this.workerId,
@@ -115,6 +124,9 @@ class _Task {
   final String title;
   final String prompt;
   final String addedBy;
+
+  /// The account that queued it, whose sign-ins its worker runs on.
+  final String? owner;
   final int addedAt;
   TaskStatus status;
   String? workerId;
@@ -135,6 +147,7 @@ class _Task {
     title: title,
     prompt: prompt,
     addedBy: addedBy,
+    owner: owner,
     addedAt: addedAt,
     status: status,
     workerId: workerId,
@@ -184,6 +197,7 @@ class TaskQueue {
   int get limit => _maxWorkers;
 
   /// Queues a task. With no [provider], it runs on the office's default worker, model and effort included.
+  /// [owner] is the account adding it, whose sign-ins its worker will run on.
   String? add(
     String prompt,
     String by, [
@@ -192,6 +206,7 @@ class TaskQueue {
     AgentProvider? provider,
     String? model,
     AgentEffort? effort,
+    String? owner,
   ]) {
     if (provider == null) {
       final d = _workers.officeDefault ?? AgentChoice(provider: _workers.defaultProvider);
@@ -225,6 +240,7 @@ class TaskQueue {
       title: heading.length > 120 ? heading.substring(0, 120) : heading,
       prompt: clean,
       addedBy: by,
+      owner: owner,
       addedAt: _now(),
       status: TaskStatus.queued,
     );
@@ -289,6 +305,7 @@ class TaskQueue {
         title: t.title,
         prompt: t.prompt,
         addedBy: t.addedBy,
+        owner: t.owner,
         addedAt: _now(),
         status: TaskStatus.queued,
       ),
@@ -518,6 +535,9 @@ class TaskQueue {
         t.provider ?? _workers.defaultProvider,
         t.model,
         t.effort,
+        null,
+        const [],
+        t.owner,
       );
       changed = true;
       final worker = r.worker;
@@ -544,7 +564,7 @@ class TaskQueue {
       final issue = t.issue;
       if (issue != null) {
         unawaited(
-          _events.claimIssue(issue).then((err) {
+          _events.claimIssue(issue, t.owner).then((err) {
             if (err != null && err.isNotEmpty) {
               _events.toast("Couldn't assign issue #$issue on GitHub: $err", ToastLevel.warn);
             }
@@ -603,6 +623,7 @@ class TaskQueue {
           title: title,
           prompt: prompt,
           addedBy: s['addedBy'] is String ? s['addedBy'] as String : '?',
+          owner: s['owner'] is String && (s['owner'] as String).isNotEmpty ? s['owner'] as String : null,
           addedAt: s['addedAt'] is num ? (s['addedAt'] as num).toInt() : _now(),
           status: status,
           workerId: s['workerId'] is String ? s['workerId'] as String : null,

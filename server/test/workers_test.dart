@@ -7,6 +7,7 @@ import 'dart:io';
 
 import 'package:agent_office_server/src/hook.dart' show officeCommand;
 import 'package:agent_office_server/src/prompts.dart';
+import 'package:agent_office_server/src/signins.dart';
 import 'package:agent_office_server/src/usage.dart';
 import 'package:agent_office_server/src/workers.dart';
 import 'package:office_shared/shared.dart';
@@ -111,6 +112,9 @@ envjson() {
   [ -n "${XDG_CONFIG_HOME+x}" ] && out+=",\"xdgConfig\":\"$(esc "$XDG_CONFIG_HOME")\""
   [ -n "${XDG_DATA_HOME+x}" ] && out+=",\"xdgData\":\"$(esc "$XDG_DATA_HOME")\""
   [ -n "${XDG_STATE_HOME+x}" ] && out+=",\"xdgState\":\"$(esc "$XDG_STATE_HOME")\""
+  [ -n "${CLAUDE_CONFIG_DIR+x}" ] && out+=",\"claudeConfig\":\"$(esc "$CLAUDE_CONFIG_DIR")\""
+  [ -n "${GH_CONFIG_DIR+x}" ] && out+=",\"ghConfig\":\"$(esc "$GH_CONFIG_DIR")\""
+  [ -n "${ANTHROPIC_API_KEY+x}" ] && out+=",\"apiKey\":\"$(esc "$ANTHROPIC_API_KEY")\""
   printf '{%s}' "${out#,}"
 }
 record() {
@@ -181,6 +185,7 @@ WorkerManager manager(
   List<String> args = const ['--from-test'],
   Ledger? book,
   PromptSource? prompts,
+  RunAs? runAs,
 }) => WorkerManager(
   f.root,
   f.data,
@@ -191,6 +196,7 @@ WorkerManager manager(
   book ?? ledger(f.data),
   env: env,
   prompts: prompts,
+  runAs: runAs,
 );
 
 Future<T> waitFor<T>(T Function() read, bool Function(T value) predicate, {int timeout = 10000}) async {
@@ -819,6 +825,75 @@ void main() {
     await restored.start();
     expect(restored.get(worker.id)?.model, 'haiku');
     expect(restored.get(worker.id)?.effort, AgentEffort.high);
+  });
+
+  test("a worker hired by an account runs on that account's own sign-ins, after a restart too", () async {
+    final f = Fixture();
+    addTearDown(f.close);
+    final env = isolatedEnv(f, {'FAKE_AGENT_LOG': f.log, 'ANTHROPIC_API_KEY': 'sk-ant-api03-office'});
+    final signins = SignIns(
+      f.data,
+      f.claude,
+      null,
+      () => Map.of(env),
+      (_) => false,
+      (_) {},
+      run: (cmd, args, env, [input]) async => (code: 1, out: '', last: ''),
+    );
+    final workers = manager(f, f.claude, [], env, runAs: signins);
+    addTearDown(workers.shutdown);
+    // Not signed in to Claude yet: the hire is refused, and says where to sign in.
+    final refused = workers.spawn(
+      'desk-1',
+      'Ada',
+      'task',
+      false,
+      WorkerKind.agent,
+      AgentProvider.claude,
+      null,
+      null,
+      null,
+      const [],
+      'acct0ada',
+    );
+    expect(refused.error, contains('Sign in to Claude first'));
+    expect(await signins.token('acct0ada', SignInKind.claude, 'sk-ant-oat01-${'x' * 40}'), isNull);
+    final worker = spawned(
+      workers.spawn(
+        'desk-1',
+        'Ada',
+        'task',
+        false,
+        WorkerKind.agent,
+        AgentProvider.claude,
+        null,
+        null,
+        null,
+        const [],
+        'acct0ada',
+      ),
+    );
+    expect(workers.ownerOf(worker.id), 'acct0ada');
+    final launch = (await waitFor(f.read, (r) => r.any(_claudeLaunch))).firstWhere(_claudeLaunch);
+    expect(launch.env['claudeConfig'], p.join(f.data, 'homes', 'acct0ada', 'claude'));
+    expect(
+      launch.env.containsKey('apiKey'),
+      isFalse,
+      reason: "the office's own key never reaches someone else's worker",
+    );
+    // Hired without an account, a worker runs as the office.
+    final office = spawned(workers.spawn('desk-2', 'Guest', 'task', false, WorkerKind.agent, AgentProvider.claude));
+    final officeLaunch = (await waitFor(
+      f.read,
+      (r) => r.where(_claudeLaunch).length >= 2,
+    )).where(_claudeLaunch).firstWhere((x) => x.workerId == office.id);
+    expect(officeLaunch.env['apiKey'], 'sk-ant-api03-office');
+    await workers.shutdown();
+    final restored = manager(f, f.claude, [], env, runAs: signins);
+    addTearDown(restored.shutdown);
+    await restored.start();
+    expect(restored.ownerOf(worker.id), 'acct0ada');
+    expect(restored.ownerOf(office.id), isNull);
   });
 
   test('a worker hired on Fable launches with --model fable and keeps it across a restart', () async {

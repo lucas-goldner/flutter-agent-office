@@ -59,6 +59,7 @@ class FakeMeetingWorkers implements MeetingWorkers {
   final workers = <TableWorker>[];
   final prompts = <({String id, String text})>[];
   final typed = <({String id, String data})>[];
+  final owners = <String?>[];
   var _ids = 0;
 
   @override
@@ -76,9 +77,11 @@ class FakeMeetingWorkers implements MeetingWorkers {
     AgentProvider provider,
     String? model,
     AgentEffort? effort,
-    ({String id, WorkerWorktree? worktree}) meeting,
-  ) {
+    ({String id, WorkerWorktree? worktree}) meeting, [
+    String? owner,
+  ]) {
     if (workers.any((w) => w.deskId == deskId)) return (worker: null, error: 'taken');
+    owners.add(owner);
     final w = TableWorker(
       'w${++_ids}',
       deskId,
@@ -140,8 +143,9 @@ class MeetingFixture {
         update: (_) {},
         toast: (text, _) => toasts.add(text),
         hiringPaused: () => null,
-        postReview: (pr, file) async {
+        postReview: (pr, file, owner) async {
           reviews.add((pr: pr, file: file));
+          reviewers.add(owner);
           return 'https://github.com/o/r/pull/$pr#pullrequestreview-1';
         },
         prompt: (id) => rewritten[id] ?? prompts[id]!.text,
@@ -155,6 +159,7 @@ class MeetingFixture {
   late final MeetingRoom room;
   final toasts = <String>[];
   final reviews = <({int pr, String file})>[];
+  final reviewers = <String?>[];
 
   List<TableWorker> get workers => manager.workers;
   List<({String id, String text})> get said => manager.prompts;
@@ -202,6 +207,7 @@ class MeetingFixture {
     List<String>? parts,
     AgentProvider? provider,
     String? model,
+    String? owner,
   }) => room.start(
     MeetingRequest(
       pattern: pattern,
@@ -216,6 +222,7 @@ class MeetingFixture {
       model: model,
     ),
     'Ada',
+    owner,
   );
 
   void close() {
@@ -342,8 +349,11 @@ void main() {
   test('a review panel posts the combined review on the pull request', () async {
     final f = fixture();
     expect(f.start(pattern: MeetingPattern.review, prompt: 'Review it'), contains('needs a pull request'));
-    expect(f.start(pattern: MeetingPattern.review, prompt: 'Review it', pr: 42), isNull);
+    expect(f.start(pattern: MeetingPattern.review, prompt: 'Review it', pr: 42, owner: 'acct01'), isNull);
+    // Its workers run on the sign-ins of whoever called it, and its review is posted as them.
+    expect(f.manager.owners, ['acct01', 'acct01', 'acct01']);
     var m = f.current;
+    expect(m.owner, 'acct01');
     expect(m.output, 'reviews/pr-42.md');
     expect(m.title, 'Review of PR #42');
     expect(f.said[1].text, contains('through your lens, Security'));
@@ -356,6 +366,7 @@ void main() {
     m = f.current;
     expect(m.status, MeetingStatus.done);
     expect(f.reviews, [(pr: 42, file: p.join(f.dir, 'reviews/pr-42.md'))]);
+    expect(f.reviewers, ['acct01']);
     expect(m.review?.url, 'https://github.com/o/r/pull/42#pullrequestreview-1');
   });
 
@@ -464,7 +475,7 @@ void main() {
       p.join(f.dir, '.agent-office'),
       f.manager,
       null,
-      MeetingEvents(update: (_) {}, toast: (_, _) {}, hiringPaused: () => null, postReview: (_, _) async => ''),
+      MeetingEvents(update: (_) {}, toast: (_, _) {}, hiringPaused: () => null, postReview: (_, _, _) async => ''),
     );
     addTearDown(again.shutdown);
     final m = again.state().current!;

@@ -30,8 +30,9 @@ abstract interface class MeetingWorkers {
     AgentProvider provider,
     String? model,
     AgentEffort? effort,
-    ({String id, WorkerWorktree? worktree}) meeting,
-  );
+    ({String id, WorkerWorktree? worktree}) meeting, [
+    String? owner,
+  ]);
 
   /// Why it couldn't, or null.
   String? prompt(String id, String text, [String? by]);
@@ -80,7 +81,8 @@ class MeetingEvents {
   final String? Function() hiringPaused;
 
   /// Posts the review panel's review on its pull request. Resolves to the review's URL.
-  final Future<String> Function(int pr, String file) postReview;
+  /// As [owner] when the meeting was called by an account (see signins.dart).
+  final Future<String> Function(int pr, String file, String? owner) postReview;
 
   /// One of the office's prompts as it has it now (rewritten in ⚙️ Settings, or the default).
   final String Function(PromptId id)? prompt;
@@ -161,6 +163,7 @@ class _Meeting {
     this.effort,
     required this.rounds,
     required this.calledBy,
+    this.owner,
     required this.startedAt,
     this.worktree,
     required this.notes,
@@ -182,6 +185,7 @@ class _Meeting {
           effort: m.effort,
           rounds: m.rounds,
           calledBy: m.calledBy,
+          owner: m.owner,
           startedAt: m.startedAt,
           worktree: m.worktree,
           notes: m.notes,
@@ -224,6 +228,9 @@ class _Meeting {
   MeetingStatus status = MeetingStatus.running;
   String? reason;
   final String calledBy;
+
+  /// The account that called it, whose sign-ins its workers run on.
+  final String? owner;
   final int startedAt;
   int? finishedAt;
   final WorkerWorktree? worktree;
@@ -257,6 +264,7 @@ class _Meeting {
     status: status,
     reason: reason,
     calledBy: calledBy,
+    owner: owner,
     startedAt: startedAt,
     finishedAt: finishedAt,
     worktree: worktree,
@@ -315,7 +323,8 @@ class MeetingRoom {
   MeetingState state() => MeetingState(current: _current?.view, past: List.of(_past));
 
   /// Calls a meeting. Returns why it couldn't, or null once everyone is sitting down.
-  String? start(MeetingRequest req, String by) {
+  /// [owner] is the account calling it: the workers run on its sign-ins, and a review panel's review is posted as it.
+  String? start(MeetingRequest req, String by, [String? owner]) {
     final cur = _current;
     if (cur != null && cur.status == MeetingStatus.running) {
       return 'The meeting room is busy with “${cur.title}”: stop that meeting first';
@@ -420,6 +429,7 @@ class MeetingRoom {
       effort: effort,
       rounds: rounds,
       calledBy: by,
+      owner: owner,
       startedAt: _now(),
       worktree: worktree,
       // Without git, the notes go with the floor's other state.
@@ -437,7 +447,7 @@ class MeetingRoom {
       final r = _workers.seat(m.seats[i].deskId, '$by (meeting)', text, provider, model, effort, (
         id: id,
         worktree: worktree,
-      ));
+      ), owner);
       final w = r.worker;
       if (w == null) {
         for (final s in m.seats) {
@@ -654,7 +664,7 @@ class MeetingRoom {
     if (m.pattern == MeetingPattern.review && pr != null) {
       unawaited(
         _events
-            .postReview(pr, p.join(cwd, m.output))
+            .postReview(pr, p.join(cwd, m.output), m.owner)
             .then(
               (url) {
                 m.review = MeetingReview(url: url);

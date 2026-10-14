@@ -17,6 +17,7 @@ import 'agents.dart';
 import 'drops.dart';
 import 'dsh.dart';
 import 'github.dart' show gh;
+import 'signins.dart' show GhAs;
 import 'headless.dart';
 import 'history.dart';
 import 'hook.dart';
@@ -94,6 +95,19 @@ const carryOnPrompt =
     'continue — the office restarted and interrupted you. Pick up where you left off; if you were waiting on an answer or a permission, ask again.';
 
 /// Where the workers' hooks reach the office.
+/// Runs a worker as the account that hired it, on that account's own Claude and GitHub sign-ins (see
+/// signins.dart). Workers hired without an account run as the office, as they always have.
+abstract interface class RunAs {
+  /// Whether the account has a Claude sign-in its workers can start on.
+  bool claudeReady(String owner);
+
+  /// What to tell the account when it hasn't.
+  String why(SignInKind which);
+
+  /// Puts the account's sign-ins in place of the office's in [env]; [dirs] are where the worker starts.
+  Map<String, String> apply(String owner, Map<String, String> env, [List<String> dirs]);
+}
+
 class HookEnv {
   const HookEnv({required this.url, required this.token});
 
@@ -137,6 +151,9 @@ class _Worker {
       state = info.kind == WorkerKind.agent ? providerAdapter(info.provider)?.createState() : null;
 
   final LiveInfo info;
+
+  /// The account that hired it, whose sign-ins it runs on. None: the office's own.
+  String? owner;
   Pty? pty;
 
   /// A DeepSeek Harness worker's ACP connection. It has no PTY: ACP updates are rendered into the
@@ -266,7 +283,11 @@ class WorkerManager implements QueueWorkers {
 
     /// The DSH profile a DeepSeek Harness worker boots (default "acp").
     String dshProfile = dshProfileDefault,
+
+    /// Everyone's own sign-ins, for workers hired by an account.
+    RunAs? runAs,
   }) : _env = env ?? Platform.environment,
+       _runAs = runAs,
        _capacity = capacity,
        _prompts = prompts,
        defaultProvider = configuredProvider(_agentCmd) {
@@ -331,6 +352,7 @@ class WorkerManager implements QueueWorkers {
   final Map<String, String> _env;
   final Capacity? _capacity;
   final PromptSource? _prompts;
+  final RunAs? _runAs;
 
   /// Where the `agent-office` and `office-workers` commands are, for the workers' PATH (see [_writeOfficeCommands]).
   String? _officeBin;
@@ -419,6 +441,9 @@ class WorkerManager implements QueueWorkers {
 
   WorkerInfo? get(String id) => _workers[id]?.info.view;
 
+  /// The account a worker runs as (see [RunAs]), if not the office.
+  String? ownerOf(String id) => _workers[id]?.owner;
+
   /// Each worker's terminal process and directory, to tell whose servers are whose.
   List<ServiceOwner> owners() => [
     for (final w in _workers.values)
@@ -455,6 +480,7 @@ class WorkerManager implements QueueWorkers {
     AgentEffort? effort,
     ({String id, WorkerWorktree? worktree})? meeting,
     List<RepoSource> repos = const [],
+    String? owner,
   ]) {
     ({WorkerInfo? worker, String? error}) fail(String error) => (worker: null, error: error);
     // Nobody picked (a board agent, say): the office's default worker, model and effort included.
@@ -505,6 +531,11 @@ class WorkerManager implements QueueWorkers {
       final paused = _ledger.hiringPaused;
       if (paused != null) return fail(paused);
     }
+    final signIn = providerAdapter(selectedProvider)?.signIn;
+    final runAs = _runAs;
+    if (owner != null && signIn != null && runAs != null && !runAs.claudeReady(owner)) {
+      return fail(runAs.why(SignInKind.claude));
+    }
     final full = _capacity?.full();
     if (full != null) return fail(full);
     final used = {for (final w in _workers.values) w.info.name.replaceFirst(RegExp(r' 🐚$'), '')};
@@ -551,7 +582,7 @@ class WorkerManager implements QueueWorkers {
       activity: prompt != null && prompt.isNotEmpty ? _truncate(prompt, 80) : null,
       meeting: meeting?.id,
     );
-    final w = _Worker(info, newTracker());
+    final w = _Worker(info, newTracker())..owner = owner;
     _workers[id] = w;
     if (info.prompt != null) _notePrompt(w, info.prompt!);
     // A board agent is told what it's there for ahead of its first request (which is what shows).
@@ -592,14 +623,14 @@ class WorkerManager implements QueueWorkers {
   /// A request for the agent standing by a board (see stations): typed into its session, which is
   /// woken up with it if it's asleep, or it's hired there with it when nobody is. Returns what went
   /// wrong as `error`, or the agent and whether it was just hired.
-  ({WorkerInfo? info, bool hired, String? error}) station(String deskId, String by, String text) {
+  ({WorkerInfo? info, bool hired, String? error}) station(String deskId, String by, String text, [String? owner]) {
     ({WorkerInfo? info, bool hired, String? error}) fail(String error) => (info: null, hired: false, error: error);
     if (deskById[deskId]?.station == null) return fail('There is no agent to ask there');
     final clean = text.replaceAll(RegExp(r'\r\n?'), '\n').trim();
     if (clean.isEmpty) return fail('Empty prompt');
     final w = _workers.values.where((x) => x.info.deskId == deskId).firstOrNull;
     if (w == null) {
-      final r = spawn(deskId, by, clean);
+      final r = spawn(deskId, by, clean, false, WorkerKind.agent, null, null, null, null, const [], owner);
       return r.worker == null ? fail(r.error!) : (info: r.worker, hired: true, error: null);
     }
     // Typed into the question it's asking, the prompt would answer it.
@@ -884,7 +915,9 @@ class WorkerManager implements QueueWorkers {
   /// `error` saying why there is none. The branch may already have an open PR (a second press, or one
   /// opened by hand): that one is used. A worker across repositories gets one in each repository it
   /// committed to.
-  Future<({List<OpenedPr> prs, List<String> failed, String? error})> openPr(String id, String by) => _openPr(id, by);
+  /// [as]: whoever pressed the button, on their own GitHub sign-in; else the office.
+  Future<({List<OpenedPr> prs, List<String> failed, String? error})> openPr(String id, String by, [GhAs? as]) =>
+      _openPr(id, by, as);
 
   /// The workspace of a worker across repositories (see _makeWorkspace): `.agent-office/worktrees/[slug]`
   /// with a worktree of this floor's project and of each of [repos], or what went wrong as `error`.
@@ -1178,6 +1211,19 @@ class WorkerManager implements QueueWorkers {
     if (officeBin != null) {
       final path = env['PATH'];
       env['PATH'] = path != null && path.isNotEmpty ? '$officeBin:$path' : officeBin;
+    }
+    final owner = w.owner;
+    final runAs = _runAs;
+    if (owner != null && runAs != null) {
+      if (adapter?.signIn != null && !runAs.claudeReady(owner)) {
+        _startFailed(
+          w,
+          "whoever hired ${info.name} (${info.createdBy}) isn't signed in to Claude — they can sign in under ☰ → 🔐 "
+          'Your sign-ins, then press R here',
+        );
+        return;
+      }
+      runAs.apply(owner, env, [_dir, cwd]);
     }
     adapter?.usage?.locate?.call(_handleOf(w), cwd, env);
 
@@ -1655,6 +1701,7 @@ class WorkerManager implements QueueWorkers {
       for (final w in _workers.values)
         {
           'id': w.info.id,
+          'owner': ?w.owner,
           'kind': w.info.kind.wire,
           'provider': ?w.info.provider?.wire,
           'model': ?w.info.model,
@@ -1756,6 +1803,8 @@ class WorkerManager implements QueueWorkers {
         }
         final token = s['hookToken'];
         final w = _Worker(info, tracker, token is String && token.isNotEmpty ? token : null);
+        final owner = s['owner'];
+        if (owner is String && owner.isNotEmpty) w.owner = owner;
         usage?.restore?.call(w.state, s);
         w.screenDirty = false;
         final pty = s['pty'];
@@ -1877,11 +1926,18 @@ String _messageOf(Object err) => switch (err) {
   _ => '$err',
 };
 
-/// Runs a command without blocking the office; throws with the last lines of its stderr.
-Future<String> _run(String cmd, List<String> args, String cwd, [int timeout = 30000]) async {
+/// Runs a command without blocking the office (with [env]: as someone else, with exactly that
+/// environment); throws with the last lines of its stderr.
+Future<String> _run(String cmd, List<String> args, String cwd, [int timeout = 30000, Map<String, String>? env]) async {
   Process proc;
   try {
-    proc = await Process.start(cmd, args, workingDirectory: cwd);
+    proc = await Process.start(
+      cmd,
+      args,
+      workingDirectory: cwd,
+      environment: env,
+      includeParentEnvironment: env == null,
+    );
   } on ProcessException catch (e) {
     throw _RunError(e.message.isNotEmpty ? e.message : '$cmd failed');
   }

@@ -271,7 +271,11 @@ void main() {
     expect((await get(port, '/')).body, 'mine');
 
     await mine.close(force: true);
-    await t.forwarder.sync(items);
+    // The next look opens it (on a busy machine the port may take a moment to come free).
+    for (var i = 0; i < 40 && t.forwarder.ports().isEmpty; i++) {
+      await t.forwarder.sync(items);
+      if (t.forwarder.ports().isEmpty) await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
     expect(t.events, ['busy $port taken', 'opened $port']);
   });
 

@@ -5,6 +5,7 @@ import 'dart:io';
 
 import 'package:agent_office_server/src/agents.dart' show validateWorkerEffort;
 import 'package:agent_office_server/src/queue.dart';
+import 'package:agent_office_server/src/worker_pr.dart' show RepoSource;
 import 'package:office_shared/shared.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
@@ -20,6 +21,7 @@ class FakeWorkers implements QueueWorkers {
   @override
   final AgentChoice? officeDefault;
   final List<WorkerInfo> workers = [];
+  final List<String?> owners = [];
   int hired = 0;
 
   @override
@@ -38,7 +40,11 @@ class FakeWorkers implements QueueWorkers {
     AgentProvider provider, [
     String? model,
     AgentEffort? effort,
+    ({String id, WorkerWorktree? worktree})? meeting,
+    List<RepoSource> repos = const [],
+    String? owner,
   ]) {
+    owners.add(owner);
     final id = 'worker-${hired++}';
     final worker = WorkerInfo(
       id: id,
@@ -108,7 +114,7 @@ class Fixture {
         worktreeNote: worktreeNote,
         update: (_) {},
         toast: (_, _) {},
-        claimIssue: (_) async => null,
+        claimIssue: (_, _) async => null,
         refreshGitHub: () {},
         hiringPaused: () => null,
         emptied: () => emptied++,
@@ -146,6 +152,21 @@ void main() {
     expect(f.workers[1].provider, AgentProvider.opencode);
   });
 
+  test("a task runs on the sign-ins of whoever queued it, after a restart and a retry too", () {
+    final f = fixture();
+    final q = f.open();
+    q.setLimit(0);
+    q.add('Fix login', 'Ada', null, null, AgentProvider.claude, null, null, 'acct01');
+    q.add('Fix logout', 'Guest', null, null, AgentProvider.claude);
+    expect(q.state().tasks.map((t) => t.owner), ['acct01', null]);
+    q.shutdown();
+    final restored = f.open();
+    restored.setLimit(2);
+    expect(f.manager.owners, ['acct01', null]);
+    restored.onWorker(f.manager.set(0, WorkerStatus.done));
+    restored.retry(restored.state().tasks.firstWhere((t) => t.owner == 'acct01').id);
+    expect(f.manager.owners.last, 'acct01');
+  });
   test('queued provider survives restart even when the configured default differs', () {
     final f = fixture();
     final q = f.open();
@@ -398,7 +419,7 @@ void main() {
       QueueEvents(
         update: (_) {},
         toast: (_, _) {},
-        claimIssue: (_) async => null,
+        claimIssue: (_, _) async => null,
         refreshGitHub: () {},
         hiringPaused: () => null,
         emptied: () {},
@@ -431,7 +452,7 @@ void main() {
       QueueEvents(
         update: (_) {},
         toast: (_, _) {},
-        claimIssue: (_) async => null,
+        claimIssue: (_, _) async => null,
         refreshGitHub: () {},
         hiringPaused: () => null,
         emptied: () {},

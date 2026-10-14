@@ -5,6 +5,8 @@ import 'dart:io';
 import 'package:office_shared/json_util.dart';
 import 'package:office_shared/shared.dart';
 
+import 'signins.dart' show GhAs;
+
 const Duration _refreshEvery = Duration(milliseconds: 90000);
 
 /// How long the repo's list of labels is kept before the label picker asks GitHub again.
@@ -35,7 +37,7 @@ String friendlyGhError(String raw) {
 }
 
 /// How the GitHub boards run gh (tests stand one in).
-typedef GhRunner = Future<String> Function(List<String> args, String cwd, [int timeout]);
+typedef GhRunner = Future<String> Function(List<String> args, String cwd, [int timeout, Map<String, String>? env]);
 
 const _pullListFields = [
   'number', 'title', 'state', 'isDraft', 'url', 'author', 'labels', 'reviewDecision', 'headRefName', //
@@ -105,8 +107,14 @@ class _Ran {
 
 /// Runs a command like Node's execFile: collects its output and kills it once [timeout] passes.
 /// Throws a [ProcessException] when it can't be run at all.
-Future<_Ran> _exec(String cmd, List<String> args, String cwd, Duration timeout) async {
-  final proc = await Process.start(cmd, args, workingDirectory: cwd);
+Future<_Ran> _exec(String cmd, List<String> args, String cwd, Duration timeout, [Map<String, String>? env]) async {
+  final proc = await Process.start(
+    cmd,
+    args,
+    workingDirectory: cwd,
+    environment: env,
+    includeParentEnvironment: env == null,
+  );
   var killed = false;
   final timer = Timer(timeout, () {
     killed = true;
@@ -123,16 +131,22 @@ Future<_Ran> _exec(String cmd, List<String> args, String cwd, Duration timeout) 
 /// The GitHub CLI the office runs: `gh` on PATH. Tests put a fake one in its place.
 String ghCommand = 'gh';
 
-Future<String> gh(List<String> args, String cwd, [int timeout = 30000]) async {
+///
+/// With [env] it runs as someone signed in to their own GitHub (see signins.dart), with exactly that
+/// environment, instead of as the office.
+Future<String> gh(List<String> args, String cwd, [int timeout = 30000, Map<String, String>? env]) async {
   _Ran r;
   try {
-    r = await _exec(ghCommand, args, cwd, Duration(milliseconds: timeout));
+    r = await _exec(ghCommand, args, cwd, Duration(milliseconds: timeout), env);
   } on ProcessException catch (e) {
     if (e.errorCode == 2) throw GhError('GitHub CLI (gh) is not installed on the server');
     throw GhError(friendlyGhError(e.message));
   }
   if (r.code == 0 && !r.killed) return r.out;
   final raw = r.err.isNotEmpty ? r.err : 'Command failed: gh ${args.join(' ')}';
+  if (env != null && RegExp('auth login|not logged in|authentication', caseSensitive: false).hasMatch(raw)) {
+    throw GhError('Your GitHub sign-in stopped working — sign in again (☰ → 🔐 Your sign-ins)');
+  }
   throw GhError(friendlyGhError(raw));
 }
 
@@ -338,7 +352,8 @@ class GitHub {
   }
 
   /// A PR's description, conversation, line comments, checks and whether it can merge.
-  Future<GhPullDetail> pullDetail(int n) async {
+  /// [me] is the GitHub login of whoever asked, when they're signed in to their own; else it's the office's.
+  Future<GhPullDetail> pullDetail(int n, [String? me]) async {
     const fields =
         'number,body,state,isDraft,reviewDecision,headRefName,baseRefName,mergeable,mergeStateStatus,commits,comments,reviews,statusCheckRollup';
     const jq = '.[] | {id, in_reply_to_id, path, line, side, body, user: .user.login, created_at, html_url}';
@@ -351,7 +366,7 @@ class GitHub {
       jq,
     ], _dir);
     final repoF = repoInfo();
-    final viewerF = viewer();
+    final viewerF = me != null ? Future.value(me) : viewer();
     // Like Promise.all: every one is awaited, and the first failure is what's thrown.
     await Future.wait<Object?>([viewF, linesF, repoF, viewerF], eagerError: true);
     final view = await viewF;
@@ -402,9 +417,9 @@ class GitHub {
   /// The PR's unified diff, as `git diff` prints it.
   Future<String> pullDiff(int n) => _runGh(['pr', 'diff', '$n', '--color', 'never'], _dir, 60000);
 
-  Future<GhIssueDetail> issueDetail(int n) async {
+  Future<GhIssueDetail> issueDetail(int n, [String? me]) async {
     final viewF = _runGh(['issue', 'view', '$n', '--json', 'number,state,body,comments'], _dir);
-    final viewerF = viewer();
+    final viewerF = me != null ? Future.value(me) : viewer();
     await Future.wait<Object?>([viewF, viewerF], eagerError: true);
     final i = asMap(jsonDecode(await viewF));
     return GhIssueDetail(
@@ -416,23 +431,19 @@ class GitHub {
     );
   }
 
-  /// Comments on an issue, or on a PR's conversation (to GitHub a PR is an issue too), as whoever gh
-  /// is signed in as. Returns the comment as GitHub saved it, or why it couldn't.
-  Future<({GhComment? comment, String? error})> comment(GhKind kind, int n, String body) async {
+  /// Comments on an issue, or on a PR's conversation (to GitHub a PR is an issue too), as [as] or else
+  /// the office. Returns the comment as GitHub saved it, or why it couldn't.
+  Future<({GhComment? comment, String? error})> comment(GhKind kind, int n, String body, [GhAs? as]) async {
     GhComment comment;
     try {
       // -f sends the body as a plain string: no @file reading, no {owner} filling in.
       const jq = '{id: .node_id, author: {login: .user.login}, body, createdAt: .created_at, url: .html_url}';
-      final out = await _runGh([
-        'api',
-        '--method',
-        'POST',
-        'repos/{owner}/{repo}/issues/$n/comments',
-        '-f',
-        'body=$body',
-        '--jq',
-        jq,
-      ], _dir);
+      final out = await _runGh(
+        ['api', '--method', 'POST', 'repos/{owner}/{repo}/issues/$n/comments', '-f', 'body=$body', '--jq', jq],
+        _dir,
+        30000,
+        as?.env,
+      );
       comment = _commentsOf([jsonDecode(out)]).first;
     } catch (err) {
       return (comment: null, error: _messageOf(err));
@@ -443,7 +454,7 @@ class GitHub {
   }
 
   /// Merges a PR, or with `auto` has GitHub merge it once its requirements pass. Returns an error.
-  Future<String?> merge(int n, GhMergeMethod method, bool deleteBranch, bool auto) async {
+  Future<String?> merge(int n, GhMergeMethod method, bool deleteBranch, bool auto, [GhAs? as]) async {
     try {
       final repo = await repoInfo();
       // --repo keeps gh out of the office's own checkout: without it, --delete-branch also deletes
@@ -451,7 +462,7 @@ class GitHub {
       final args = ['pr', 'merge', '$n', '--${method.wire}', '--repo', repo.nameWithOwner];
       if (deleteBranch) args.add('--delete-branch');
       if (auto) args.add('--auto');
-      await _runGh(args, _dir, 90000);
+      await _runGh(args, _dir, 90000, as?.env);
     } catch (err) {
       return _messageOf(err);
     }
@@ -460,7 +471,14 @@ class GitHub {
   }
 
   /// Closes an issue, or a pull request without merging it, optionally saying why. Returns an error.
-  Future<String?> close(GhKind kind, int n, {String? comment, GhCloseReason? reason, bool deleteBranch = false}) async {
+  Future<String?> close(
+    GhKind kind,
+    int n, {
+    String? comment,
+    GhCloseReason? reason,
+    bool deleteBranch = false,
+    GhAs? as,
+  }) async {
     try {
       final repo = await repoInfo();
       // --repo for the same reason as merge: --delete-branch must leave the office's checkout alone.
@@ -469,7 +487,7 @@ class GitHub {
       if (comment != null && comment.isNotEmpty) args.add('--comment=$comment');
       if (kind == GhKind.issue && reason != null) args.add('--reason=${reason.wire}');
       if (kind == GhKind.pull && deleteBranch) args.add('--delete-branch');
-      await _runGh(args, _dir);
+      await _runGh(args, _dir, 30000, as?.env);
     } catch (err) {
       return _messageOf(err);
     }
@@ -488,7 +506,7 @@ class GitHub {
 
   /// Posts a review on a pull request that only comments (the meeting room's review panel), its body
   /// read from [file]. Resolves to the review's URL.
-  Future<String> review(int n, String file) async {
+  Future<String> review(int n, String file, [GhAs? as]) async {
     // -F reads @file's contents as the value; {owner}/{repo} are filled in from the checkout's remote.
     final url = (await _runGh(
       [
@@ -505,6 +523,7 @@ class GitHub {
       ],
       _dir,
       60000,
+      as?.env,
     )).trim();
     unawaited(_refreshPulls());
     return url;
@@ -543,14 +562,15 @@ class GitHub {
     return list;
   }
 
-  /// Puts labels on an issue or PR and takes others off (to GitHub a PR is an issue too), as whoever
-  /// gh is signed in as. Returns the labels it has now, or why they didn't change.
+  /// Puts labels on an issue or PR and takes others off (to GitHub a PR is an issue too), as [as] or
+  /// else the office. Returns the labels it has now, or why they didn't change.
   Future<({List<GhLabel>? labels, String? error})> setLabels(
     GhKind kind,
     int n,
     List<String> add,
-    List<String> remove,
-  ) async {
+    List<String> remove, [
+    GhAs? as,
+  ]) async {
     final path = 'repos/{owner}/{repo}/issues/$n/labels';
     const jq = '[.[] | {name, color}]';
     List<GhLabel>? now;
@@ -559,15 +579,20 @@ class GitHub {
       if (add.isNotEmpty) {
         now = _labels(
           jsonDecode(
-            await _runGh([
-              'api',
-              '--method',
-              'POST',
-              path,
-              for (final l in add) ...['-f', 'labels[]=$l'],
-              '--jq',
-              jq,
-            ], _dir),
+            await _runGh(
+              [
+                'api',
+                '--method',
+                'POST',
+                path,
+                for (final l in add) ...['-f', 'labels[]=$l'],
+                '--jq',
+                jq,
+              ],
+              _dir,
+              30000,
+              as?.env,
+            ),
           ),
         );
       }
@@ -575,7 +600,12 @@ class GitHub {
         try {
           now = _labels(
             jsonDecode(
-              await _runGh(['api', '--method', 'DELETE', '$path/${Uri.encodeComponent(l)}', '--jq', jq], _dir),
+              await _runGh(
+                ['api', '--method', 'DELETE', '$path/${Uri.encodeComponent(l)}', '--jq', jq],
+                _dir,
+                30000,
+                as?.env,
+              ),
             ),
           );
         } catch (err) {
@@ -641,13 +671,13 @@ class GitHub {
   }
 
   /// A worker took the issue: it moves to In progress on the board at once, and is assigned on GitHub
-  /// to whoever gh is signed in as, which is what keeps it there. Returns an error when GitHub wouldn't
-  /// assign it, and the card goes back to where it was.
-  Future<String?> claim(int issue) async {
+  /// to [as] (else whoever the office's own gh is signed in as), which is what keeps it there. Returns an
+  /// error when GitHub wouldn't assign it, and the card goes back to where it was.
+  Future<String?> claim(int issue, [GhAs? as]) async {
     final answered = _claims.take(issue);
     _showClaims();
     try {
-      await _runGh(['issue', 'edit', '$issue', '--add-assignee', '@me'], _dir);
+      await _runGh(['issue', 'edit', '$issue', '--add-assignee', '@me'], _dir, 30000, as?.env);
     } catch (err) {
       answered(false);
       _showClaims();
