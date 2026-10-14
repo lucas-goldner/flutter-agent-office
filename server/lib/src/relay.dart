@@ -7,11 +7,15 @@ import 'package:office_shared/shared.dart';
 import 'package:relic/relic.dart';
 
 import 'auth.dart';
+import 'services.dart' show ServiceLookup, ServiceLookupFound, ServiceLookupGone;
+import 'tunnel/wire.dart' show serviceHeader;
 
 // Service tunnels: `ssh -L 5173:localhost:4600 office@box` lands on the office's own port, and the
 // browser's Host header (localhost:5173) says which worker server it's for. So teammates reach
 // every service through the one port their SSH key may already forward to, and only while
-// signed in to the office.
+// signed in to the office. On a Tailscale network it's https://<office>.ts.net:5173 instead, which
+// Tailscale Serve points at the office's port too (see tailnet.dart). `agent-office tunnel` opens
+// every worker's server on someone's computer by itself, and names the port in a header (tunnel/).
 
 /// Set on everything the office relays, so a server that proxies back to the office can't loop.
 const _relayed = 'x-agent-office-relay';
@@ -32,20 +36,89 @@ const _hopByHop = {
   'content-length',
 };
 
-/// The service port a request came in for, when it came through a service tunnel.
-int? tunneledPort(Map<String, Iterable<String>> headers, int officePort) {
+/// "agent-office.tail1234.ts.net:5173" -> 5173, for the office's own name on the tailnet.
+int _tailnetPort(String host, String? tailnet) {
+  final i = host.lastIndexOf(':');
+  if (tailnet == null || tailnet.isEmpty || i <= 0 || host.substring(0, i).toLowerCase() != tailnet) return 0;
+  return int.tryParse(host.substring(i + 1)) ?? 0;
+}
+
+/// The service port a request came in for, when it came through a service tunnel or the tailnet.
+int? tunneledPort(Map<String, Iterable<String>> headers, int officePort, [String? tailnet]) {
   if (headers[_relayed]?.isNotEmpty ?? false) return null;
-  final m = _loopbackHost.firstMatch(headerValue(headers, 'host') ?? '');
-  final port = m != null ? int.parse(m[1]!) : 0;
+  final host = headerValue(headers, 'host') ?? '';
+  final m = _loopbackHost.firstMatch(host);
+  final port = m != null ? int.parse(m[1]!) : _tailnetPort(host, tailnet);
   return port != 0 && port != officePort ? port : null;
 }
 
+/// A request that came through a tunnel: the port it's for, and that worker's server
+/// ([ServiceLookupGone] when nothing serves it).
+typedef Tunneled = ({int port, ServiceLookup svc});
+
+final _portNumber = RegExp(r'^\d{1,5}$');
+
+/// The worker's server a request is for, or null when it's for the office itself. A request the
+/// tunnel client sent is never for the office, whatever else it says and even when nothing serves
+/// the port it names: it carries the client's own session, and the page that made it is a worker's.
+/// (It can't loop: what the office relays never has the header.)
+Tunneled? tunneledService(
+  Map<String, Iterable<String>> headers,
+  int officePort,
+  String? tailnet,
+  ServiceLookup? Function(int port) lookup,
+) {
+  final named = headers[serviceHeader];
+  if (named != null) {
+    final v = named.length == 1 ? named.first : '';
+    final port = _portNumber.hasMatch(v) ? int.parse(v) : 0;
+    return (port: port, svc: (port != officePort ? lookup(port) : null) ?? ServiceLookupGone());
+  }
+  final port = tunneledPort(headers, officePort, tailnet);
+  final svc = port != null ? lookup(port) : null;
+  return port != null && svc != null ? (port: port, svc: svc) : null;
+}
+
+/// How the office answers a request that came through a tunnel (see [tunneledService]): its sign-in
+/// form, the sign-in page, "not running", or the worker's server itself. Null when the request is for
+/// the office. [signedIn] checks the request carries any of the office's sessions.
+Future<Result?> answerTunneled(
+  Request req, {
+  required int officePort,
+  String? tailnet,
+  required ServiceLookup? Function(int port) lookup,
+  required bool Function(Request req) signedIn,
+  required Future<Response> Function(Request req) login,
+  required ({bool accounts, bool shared}) Function() loginOptions,
+}) async {
+  final tunneled = tunneledService(req.headers, officePort, tailnet, lookup);
+  if (tunneled == null) return null;
+  final svc = tunneled.svc;
+  final upgrade = req.headers['upgrade']?.any((v) => v.toLowerCase().contains('websocket')) ?? false;
+  if (upgrade) {
+    if (svc is ServiceLookupFound && signedIn(req)) return relayUpgrade(req, svc.info);
+    return Response(401, headers: Headers.build((h) => h['connection'] = ['close']), body: Body.empty());
+  }
+  if (req.method == Method.post && req.url.path == relayLogin && !req.url.hasQuery) return login(req);
+  if (!signedIn(req)) {
+    final o = loginOptions();
+    return signInPage(tunneled.port, accounts: o.accounts, shared: o.shared);
+  }
+  if (svc is ServiceLookupFound) return relayRequest(req, svc.info);
+  return stoppedPage(tunneled.port);
+}
+
 /// The request's headers as the worker's server gets them: marked as relayed, without the
-/// office's own session cookies.
-Map<String, List<String>> _upstreamHeaders(Map<String, Iterable<String>> headers) {
+/// office's own session cookies or the tunnel client's header.
+Map<String, List<String>> _upstreamHeaders(Map<String, Iterable<String>> headers, ServiceInfo svc) {
   final out = <String, List<String>>{};
   headers.forEach((k, v) => out[k.toLowerCase()] = v.toList());
   out[_relayed] = ['1'];
+  out.remove(serviceHeader);
+  // From the tailnet or the tunnel client, the server gets the Host it would through an SSH tunnel:
+  // dev servers like Vite refuse names they don't know. X-Forwarded-Host (set by Tailscale Serve)
+  // still has the real one.
+  if (!_loopbackHost.hasMatch(headerValue(headers, 'host') ?? '')) out['host'] = ['localhost:${svc.port}'];
   final cookie = withoutOfficeCookies(headerValue(headers, 'cookie', '; '));
   if (cookie != null) {
     out['cookie'] = [cookie];
@@ -68,7 +141,7 @@ Future<Response> relayRequest(Request req, ServiceInfo svc) async {
     final up = await client.open(req.method.value, svc.host, svc.port, _pathAndQuery(req.url));
     up.followRedirects = false;
     up.persistentConnection = false;
-    final headers = _upstreamHeaders(req.headers);
+    final headers = _upstreamHeaders(req.headers, svc);
     for (final e in headers.entries) {
       if (_hopByHop.contains(e.key)) continue;
       up.headers.set(e.key, e.value, preserveHeaderCase: false);
@@ -121,7 +194,7 @@ StreamTransformer<Uint8List, Uint8List> _closeWhenDone(HttpClient client) => Str
 /// WebSockets (hot reload and the like): replay the handshake upstream, then splice the sockets.
 Hijack relayUpgrade(Request req, ServiceInfo svc) {
   final lines = ['${req.method.value} ${_pathAndQuery(req.url)} HTTP/1.1'];
-  for (final e in _upstreamHeaders(req.headers).entries) {
+  for (final e in _upstreamHeaders(req.headers, svc).entries) {
     for (final one in e.value) {
       lines.add('${e.key}: $one');
     }

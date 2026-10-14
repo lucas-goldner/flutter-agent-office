@@ -18,6 +18,7 @@ Usage? reportedUsage(Object? value) {
   if (cost is! num || !cost.isFinite || cost < 0) return null;
   if (v['reasoning'] != null && !isCount(v['reasoning'])) return null;
   if (v['totalTokens'] != null && !isCount(v['totalTokens'])) return null;
+  if (v['contextSize'] != null && !isCount(v['contextSize'])) return null;
   if (v['callsKnown'] != null && v['callsKnown'] is! bool) return null;
   if (v['incomplete'] != null && v['incomplete'] is! bool) return null;
   if (v['costKnown'] != null && v['costKnown'] is! bool) return null;
@@ -32,6 +33,7 @@ Usage? reportedUsage(Object? value) {
     calls: n('calls'),
     reasoning: opt('reasoning'),
     totalTokens: opt('totalTokens'),
+    contextSize: opt('contextSize'),
     callsKnown: v['callsKnown'] as bool?,
     incomplete: v['incomplete'] as bool?,
     costKnown: v['costKnown'] as bool?,

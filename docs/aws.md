@@ -5,7 +5,7 @@ The full story behind `deploy/aws.sh`. The short version is in the [README](../R
 If you have the AWS CLI logged in, one command gives you your own office on EC2. No Terraform needed:
 
 ```bash
-git clone https://github.com/AgentSystemLabs/agent-office && cd agent-office
+git clone https://github.com/lucas-goldner/flutter-agent-office && cd flutter-agent-office
 deploy/aws.sh up
 ```
 
@@ -18,12 +18,14 @@ deploy/aws.sh resume    # start it again: same address, same files, then open it
 deploy/aws.sh destroy   # delete the machine, disk, IP, security group and key pair (asks first)
 ```
 
+On Tailscale? `up --tailscale` puts the office on your tailnet instead of behind SSH tunnels: see [Tailscale](#tailscale).
+
 What `up` does, in about 2 minutes:
 
 1. Creates an SSH key pair (kept in `~/.config/agent-office/aws/<name>/`).
 2. Creates a security group that opens **only SSH (port 22), and only to your current IP**. The office itself is never on the internet.
 3. Gives the machine a fixed Elastic IP and launches a **t3.xlarge** (4 vCPU, 16 GiB) Ubuntu 24.04 instance with a 50 GiB disk.
-4. Runs the same [`deploy/provision.sh`](../deploy/provision.sh) as [any server](self-hosting.md): it installs Node 22, git, the GitHub CLI and **Claude Code**, clones the latest agent-office from GitHub and runs `npm i`. The office keeps its data in `~/agent-office` on the machine and clones projects into `~/workspace/<owner>/<repo>`.
+4. Runs the same [`deploy/provision.sh`](../deploy/provision.sh) as [any server](self-hosting.md): it installs git, the GitHub CLI, **Claude Code** and the newest release of the office (one executable plus the web client, with this checkout's `install.sh`; `--app-ref v0.1.68` picks another). The office keeps its data in `~/agent-office` on the machine and clones projects into `~/workspace/<owner>/<repo>`.
 5. Runs the office under systemd with `Restart=always`, so it comes back after a crash or a reboot, and `KillMode=process`, so restarting it leaves the workers running. It listens on `127.0.0.1:4600` on the machine, so the only way in is an SSH tunnel.
 6. Opens an SSH tunnel and your browser at `http://localhost:4600`. **The first page shows the office password once. Write it down.** The server then keeps only a hash, so nobody can display the password again.
 7. The office opens on its elevator with no floors yet. It lists every repository your GitHub token can see: pick one and it becomes the first floor.
@@ -53,11 +55,21 @@ ssh -N -o ExitOnForwardFailure=yes -o PermitLocalCommand=yes -o LocalCommand="op
 
 It opens http://localhost:5173 on their computer. The tunnel ends at the office's own port, and the office relays it to the worker's server on 5173. So the same invited keys work, nothing new is opened on the machine, and every page still asks for the office password (anyone signed in to the office already is). Keep one terminal per service open while you look. You set the office up yourself? Run `deploy/aws.sh service 5173` instead.
 
+**Or all of them, by themselves.** `agent-office tunnel` on your own computer opens every worker's server there as it starts, on the same port, and closes it when the worker stops it: no command per server.
+
+```bash
+agent-office tunnel office@<your-office-ip>   # the tunnel to the office too, and its servers as they come and go
+agent-office tunnel                           # or, while deploy/aws.sh open is running, just the servers
+```
+
+It goes through the office's own port like the commands above, so invited keys are enough. It needs the `agent-office` command on that computer: see [Workers' servers on your own computer](tunnel.md).
+
 If chasing teammates' IPs gets old, `deploy/aws.sh allow anywhere` opens SSH to every IP. That's a reasonable trade: SSH only accepts your key and invited keys, and the office stays behind the tunnel.
 
 ```bash
 deploy/aws.sh open                 # tunnel + open the office in your browser
 deploy/aws.sh service 5173         # open a worker's web server from the 🌐 Services board
+agent-office tunnel                # or every worker's server, by itself, while `open` is running (docs/tunnel.md)
 deploy/aws.sh invite <gh-user>     # let a teammate tunnel in (or: invite <name> <key.pub>)
 deploy/aws.sh uninvite <name>      # remove their keys and drop open tunnels
 deploy/aws.sh team                 # who's invited
@@ -86,4 +98,40 @@ Useful options for `up`:
 - Pass `--claude-token "$(claude setup-token)"`, which uses your Claude subscription, or `--anthropic-api-key <key>`.
 - Do nothing, and the first worker jumps with *"Claude isn't signed in — type /login"*. Open its terminal and run `/login`.
 
-**GitHub.** By default, your local `gh auth token` is used to sign in the GitHub CLI on the machine. It's needed for private repos, the issue and PR boards, and for workers to push branches and open PRs. Anyone who can use the office can use that token, so pass `--github-token <fine-grained token>` or `--no-github-token` if that's too much.
+That's the office's own sign-in, which workers use while you're in on the office password. Once teammates have [accounts](../README.md#add-users), each of them signs in to their own Claude in **☰ → 🔐 Your sign-ins**, and their workers run on their own plan. Admins can pick the office's own there instead.
+
+**GitHub.** By default, your local `gh auth token` is used to sign in the GitHub CLI on the machine. The office uses it to list and clone your repos and to read the issue and PR boards, so it needs access to them. On the office password, commenting, merging, pushing and opening PRs use it too. People with accounts do those as themselves, with the GitHub account they sign in to in **🔐 Your sign-ins**. Every worker runs as the same user on the machine, so anyone who can use the office can get at that token: pass `--github-token <fine-grained token>` or `--no-github-token` if that's too much.
+
+## Tailscale
+
+If your team is on [Tailscale](https://tailscale.com), the office can live on your tailnet instead of behind SSH tunnels:
+
+```bash
+deploy/aws.sh up --tailscale
+```
+
+On top of everything above, `up` then:
+
+1. Installs Tailscale on the machine and adds it to your tailnet as `agent-office` (`agent-office-<name>` with `--name`). Without a key it opens Tailscale's page to add the machine, and waits up to 15 minutes. To skip that, make an auth key on the [Keys](https://login.tailscale.com/admin/settings/keys) page of Tailscale's admin console and pass `--tailscale-auth-key tskey-auth-…` (or set `TS_AUTHKEY`). The key goes to the machine in a file and is deleted once it has been used, so it never shows up in `ps`.
+2. Serves the office on `https://agent-office.<your-tailnet>.ts.net` with [Tailscale Serve](https://tailscale.com/kb/1312/serve). Serve needs MagicDNS and HTTPS Certificates turned on for the tailnet. The first time, `up` opens the page that turns them on, then carries on. Tailscale gets the certificate from Let's Encrypt, so browsers trust it, and voice and screen sharing work. Turning HTTPS on publishes your machine names in the public certificate transparency logs, so don't give the machine a name you'd mind being seen.
+3. Starts the office with `--trust-proxy`, like behind Caddy. Serve says each visitor came over https and from which tailnet address, so cookies are `Secure` and sign-in limits count each person separately.
+
+Nothing new is opened in the security group: Tailscale only makes outgoing connections, and falls back to its relays when a direct one isn't possible. SSH stays open to your IP, for `deploy/aws.sh` itself.
+
+Anyone on your tailnet opens the link. There's no terminal to keep open, and no SSH keys or IPs to add. For someone who isn't on your tailnet, [share the machine](https://tailscale.com/kb/1084/sharing) from the [Machines](https://login.tailscale.com/admin/machines) page (**⋯ → Share…**). They accept it in their own Tailscale and reach this one machine, nothing else of yours. Or [invite them](https://login.tailscale.com/admin/users) to your tailnet. **☰ → 👥 Invite teammates** in the office, and `deploy/aws.sh invite` with no username, both say how, and give you an invite message to send. Everyone still signs in to the office itself, with the password or an account from **🔑 Accounts**.
+
+**Workers' servers.** Each one on the **🌐 Services** board gets its own link on the tailnet, `https://agent-office.<your-tailnet>.ts.net:5173`, instead of a tunnel command. When a worker starts a server, the office asks Serve for that port through `/usr/local/bin/agent-office-serve`, a small root helper that only ever points a port at the office. The office then checks the visitor is signed in and relays to the worker's server, just like a service tunnel. When the server stops, the port closes again. `deploy/aws.sh service 5173` opens that link too.
+
+**The rest of the commands** know about the tailnet:
+
+- `open` opens the tailnet link when this computer can reach it, and otherwise warns and falls back to the SSH tunnel. The same goes for `resume` and `reset-password`.
+- `status` shows the link.
+- `destroy` signs the machine out of your tailnet before it deletes it. If it's still listed on the Machines page, remove it there.
+
+**Key expiry.** Tailscale expires a machine's key after 180 days, and then the office drops off your tailnet. On the Machines page, pick the machine, then **⋯ → Disable key expiry**. An auth key with a tag avoids this too, because tagged machines don't expire (the tag has to be in your policy's `tagOwners`).
+
+**Moving an existing office over.** Run `deploy/aws.sh up --tailscale` on it. Running `up` later keeps it on the tailnet, even without the flag. People you invited by SSH key can still tunnel in until you remove them in **👥 Invite teammates**.
+
+**What your tailnet can reach.** The security group doesn't apply to traffic that comes over Tailscale. Whoever your [access controls](https://tailscale.com/kb/1018/acls) let reach the machine can connect to any port something on it listens on across all interfaces. That includes a worker's `vite --host`, or a database it started, and not only the office. The default policy lets everyone on the tailnet reach every machine. Tighten it if that's more than you want. People you shared the machine with can reach only that one machine.
+
+The same thing works on any Ubuntu or Debian server with [`deploy/provision.sh --tailscale`](self-hosting.md).

@@ -27,10 +27,17 @@ int _now() => DateTime.now().millisecondsSinceEpoch;
 /// Needs input and nobody has answered yet.
 bool callsForDog(WorkerInfo w) => w.status == WorkerStatus.needsInput && !w.acked && deskById.containsKey(w.deskId);
 
+/// A coat by its index in [dogCoats] (JS's Number.isInteger: 6.0 counts), or null.
+int? _coatOf(Object? raw) {
+  if (raw is! num || !raw.isFinite || raw != raw.truncate()) return null;
+  final i = raw.toInt();
+  return i >= 0 && i < dogCoats.length ? i : null;
+}
+
 enum _Mode { lounge, nap, wander, follow, bark, pet }
 
 class DogEnv {
-  const DogEnv({required this.workers, required this.people, required this.send});
+  const DogEnv({required this.workers, required this.people, required this.send, this.wing});
 
   final List<WorkerInfo> Function() workers;
 
@@ -39,6 +46,9 @@ class DogEnv {
 
   /// To everyone on this floor.
   final void Function(DogState dog) send;
+
+  /// How many rows the floor's back office is built out, for getting round its desks too (see Wing).
+  final int Function()? wing;
 }
 
 /// One leg of its day: a [DogState] without its name, coat and elapsed time, and when it began.
@@ -67,13 +77,16 @@ class _Leg {
 /// A floor's dog. It naps under the desks of workers who are busy, trots after people for a while,
 /// sniffs around and hangs out on the lounge rug. When a worker needs input it drops everything, runs
 /// to that desk and barks (the browsers do the barking; see app/lib/world/dog.dart). Its name is kept
-/// in the floor's .agent-office/dog.json.
+/// in the floor's .agent-office/dog.json, with its breed and coat once someone picks them (⚙️ Settings);
+/// until then they come from the floor's id (see dogDefaults).
 class Dog {
   Dog(this.floorId, String dataDir, this._env) : _file = p.join(dataDir, 'dog.json') {
     final d = dogDefaults(floorId);
     _fallbackName = d.name;
-    _coat = d.coat;
-    _name = _load() ?? d.name;
+    final saved = _load();
+    _name = saved.name ?? d.name;
+    _breed = saved.breed ?? d.breed;
+    _coat = saved.coat ?? d.coat;
     // Lying on the rug when the office opens, and up and about a few seconds later.
     final spot = _pick(_lounge);
     _leg = _Leg(path: [spot], speed: 0, act: DogAct.lie, face: math.pi / 2 + _rand(-0.6, 0.6), start: _now() - 60000);
@@ -84,7 +97,8 @@ class Dog {
   final DogEnv _env;
   final String _file;
   late String _name;
-  late final int _coat;
+  late int _coat;
+  late DogBreed _breed;
   late final String _fallbackName;
   late _Leg _leg;
   _Mode _mode = _Mode.lounge;
@@ -105,6 +119,7 @@ class Dog {
   DogState view() => DogState(
     name: _name,
     coat: _coat,
+    breed: _breed,
     path: _leg.path,
     speed: _leg.speed,
     act: _leg.act,
@@ -176,13 +191,40 @@ class Dog {
   String rename(String raw) {
     final clean = cleanDogName(raw);
     _name = clean.isNotEmpty ? clean : _fallbackName;
+    _save();
+    _send();
+    return _name;
+  }
+
+  /// Makes it another breed, for everyone on the floor; null when there's no such breed.
+  DogBreed? setBreed(Object? raw) {
+    final breed = DogBreed.values.where((b) => b.wire == raw).firstOrNull;
+    if (breed == null) return null;
+    _breed = breed;
+    _save();
+    _send();
+    return breed;
+  }
+
+  /// Gives it another coat, for everyone on the floor; false when there's no such coat.
+  bool setCoat(Object? raw) {
+    final coat = _coatOf(raw);
+    if (coat == null) return false;
+    _coat = coat;
+    _save();
+    _send();
+    return true;
+  }
+
+  void _save() {
     try {
-      _writePrivate(_file, const JsonEncoder.withIndent('  ').convert({'name': _name}));
+      _writePrivate(
+        _file,
+        const JsonEncoder.withIndent('  ').convert({'name': _name, 'breed': _breed.wire, 'coat': _coat}),
+      );
     } catch (err) {
       stderr.writeln("agent-office: couldn't save the dog's name: $err");
     }
-    _send();
-    return _name;
   }
 
   void stop() {
@@ -190,19 +232,26 @@ class Dog {
     _timer?.cancel();
   }
 
-  String? _load() {
+  ({String? name, DogBreed? breed, int? coat}) _load() {
     final file = File(_file);
-    if (!file.existsSync()) return null;
+    if (!file.existsSync()) return (name: null, breed: null, coat: null);
     try {
       final saved = jsonDecode(file.readAsStringSync());
-      final name = saved is Map ? saved['name'] : null;
-      if (name is! String) return null;
-      final clean = cleanDogName(name);
-      return clean.isNotEmpty ? clean : null;
+      if (saved is! Map) return (name: null, breed: null, coat: null);
+      final name = saved['name'];
+      final clean = name is String ? cleanDogName(name) : '';
+      return (
+        name: clean.isNotEmpty ? clean : null,
+        breed: DogBreed.values.where((b) => b.wire == saved['breed']).firstOrNull,
+        coat: _coatOf(saved['coat']),
+      );
     } catch (_) {
-      return null;
+      return (name: null, breed: null, coat: null);
     }
   }
+
+  /// How far the floor's back office is built out.
+  int get _wing => _env.wing?.call() ?? 0;
 
   void _send() => _env.send(view());
 
@@ -242,12 +291,12 @@ class Dog {
     var start = from;
     // Still under the desk (or on its way in), not just somewhere on the way there.
     final exit = _exit;
-    if (exit != null && !walkable(from.$1, from.$2)) {
+    if (exit != null && !walkable(from.$1, from.$2, _wing)) {
       pts.add(exit);
       start = exit;
     }
     _exit = null;
-    pts.addAll(route(start, to).skip(1));
+    pts.addAll(route(start, to, _wing).skip(1));
     if (last != null) pts.add(last);
     _go(pts, speed, act, face: face, workerId: workerId, following: following);
     return legSeconds(_leg.path, _leg.speed) * 1000;
@@ -316,7 +365,7 @@ class Dog {
     var spot = at;
     for (var i = 0; i < 30; i++) {
       final Pt p = (_rand(Floor.minX + 1, Floor.maxX - 1), _rand(Floor.minZ + 1, Floor.maxZ - 1));
-      if (walkable(p.$1, p.$2) && _dist(p, at) > 4) {
+      if (walkable(p.$1, p.$2, _wing) && _dist(p, at) > 4) {
         spot = p;
         break;
       }
@@ -333,7 +382,7 @@ class Dog {
     // A bean bag has no desk to get under, so it curls up beside it, on whichever side has room.
     if (desk.beanbag) {
       final (x, z) = deskPoint(desk, side * 1.05, 0.1);
-      if (!walkable(x, z)) side = -side;
+      if (!walkable(x, z, _wing)) side = -side;
     }
     final approach = desk.beanbag ? deskPoint(desk, side * 1.3, 1.2) : deskPoint(desk, side * 0.8, 1.3);
     final under = desk.beanbag ? deskPoint(desk, side * 1.05, 0.1) : deskPoint(desk, side * 0.45, 0.15);
@@ -367,7 +416,7 @@ class Dog {
       return _think();
     }
     final Pt person = (p.x, p.z);
-    final behind = nearestWalkable((p.x - math.sin(p.rotY) * 1.1, p.z - math.cos(p.rotY) * 1.1));
+    final behind = nearestWalkable((p.x - math.sin(p.rotY) * 1.1, p.z - math.cos(p.rotY) * 1.1), _wing);
     final end = _leg.path.last;
     final along = _leg.act == DogAct.sit && _leg.following == p.id;
     // Someone standing still who just turns around doesn't need it circling round behind them.

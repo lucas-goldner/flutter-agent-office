@@ -7,21 +7,25 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:office_pty/office_pty.dart' show chmodSync;
 import 'package:office_shared/shared.dart';
 import 'package:path/path.dart' as p;
 
 import 'agents.dart';
-import 'codex.dart';
-import 'codex_usage.dart';
+import 'clock.dart';
+import 'drops.dart';
+import 'dsh.dart';
 import 'github.dart' show gh;
+import 'signins.dart' show GhAs;
 import 'headless.dart';
 import 'history.dart';
 import 'hook.dart';
+import 'lifecycle.dart';
 import 'machine.dart' show Capacity;
-import 'opencode.dart';
 import 'prompts.dart';
+import 'providers/providers.dart';
 import 'ptys.dart';
 import 'queue.dart' show QueueWorkers;
 import 'reported_usage.dart';
@@ -29,7 +33,15 @@ import 'services.dart' show ServiceOwner;
 import 'stations.dart';
 import 'tasks.dart';
 import 'usage.dart';
+import 'worker_pr.dart';
 import 'worktrees.dart';
+
+export 'providers/providers.dart' show childEnv;
+export 'providers/opencode.dart' show withoutOpenCodeModel;
+export 'worker_pr.dart' show OpenedPr, RepoSource;
+export 'clock.dart' show clockWork, workedMs, workedMsOf;
+
+part 'worker_trees.dart';
 
 const _names = [
   'Pixel', 'Byte', 'Nibble', 'Sprocket', 'Widget', 'Gizmo', 'Bolt', 'Cosmo', 'Dot', 'Echo', //
@@ -39,23 +51,6 @@ const _names = [
 const _colors = [
   '#ff8a5b', '#5bc0eb', '#9bc53d', '#fde74c', '#c3423f', '#b388eb', '#f7aef8', '#72ddf7', '#ffb400', '#00a6a6', //
 ];
-
-// Env vars from a parent agent session (e.g. starting the office from inside Claude Code) that
-// would make a worker think it is a child session — that silently turns off transcript saving,
-// which breaks resume.
-const _scrubEnv = {
-  'CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SSE_PORT', 'CLAUDE_CODE_EXECPATH', 'CLAUDE_PID', //
-  'CLAUDE_EFFORT', 'CODEX_THREAD_ID', 'CODEX_INTERNAL_ORIGINATOR_OVERRIDE', //
-  'NO_COLOR', 'FORCE_COLOR', 'VSCODE_INJECTION', 'TERM_PROGRAM', 'TERM_PROGRAM_VERSION',
-};
-const _scrubPrefixes = [
-  'CLAUDE_CODE_SESSION',
-  'CLAUDE_CODE_CHILD',
-  'CLAUDE_CODE_MESSAGING',
-  'NEBULA_',
-  'AGENT_OFFICE_',
-];
-bool _scrubbed(String k) => _scrubEnv.contains(k) || _scrubPrefixes.any(k.startsWith);
 
 const _screenInterval = Duration(milliseconds: 250);
 
@@ -67,7 +62,6 @@ const _running = {
   WorkerStatus.done,
   WorkerStatus.needsInput,
 };
-const _latePromptGraceMs = 5000;
 const _keyframeMs = 8000;
 
 /// How often a steady typist's "last typed" time is refreshed for everyone.
@@ -80,8 +74,9 @@ const _taskTools = 10;
 /// While a worker works, refresh its task summary after this many tool calls, at most this often.
 const _taskRefreshTools = 8;
 const _taskRefreshMs = 90000;
-const _prTitleMax = 72;
-const _prTaskMax = 2500;
+
+/// The most other repositories one worker can take on (see WorkerInfo.repos).
+const maxRepos = 8;
 
 /// How often every worker's transcript is checked for new spend, on top of the hook-driven checks.
 const _usageScan = Duration(seconds: 10);
@@ -101,19 +96,20 @@ const _restoredNote = '\x1b[2m──── the office restarted · earlier outpu
 const carryOnPrompt =
     'continue — the office restarted and interrupted you. Pick up where you left off; if you were waiting on an answer or a permission, ask again.';
 
-/// The Claude Code hooks the office listens to (see [WorkerManager.handleHook]).
-const _claudeHookEvents = [
-  'SessionStart',
-  'UserPromptSubmit',
-  'Stop',
-  'Notification',
-  'PermissionRequest',
-  'PreToolUse',
-  'PostToolUse',
-  'PostToolUseFailure',
-];
-
 /// Where the workers' hooks reach the office.
+/// Runs a worker as the account that hired it, on that account's own Claude and GitHub sign-ins (see
+/// signins.dart). Workers hired without an account run as the office, as they always have.
+abstract interface class RunAs {
+  /// Whether the account has a Claude sign-in its workers can start on.
+  bool claudeReady(String owner);
+
+  /// What to tell the account when it hasn't.
+  String why(SignInKind which);
+
+  /// Puts the account's sign-ins in place of the office's in [env]; [dirs] are where the worker starts.
+  Map<String, String> apply(String owner, Map<String, String> env, [List<String> dirs]);
+}
+
 class HookEnv {
   const HookEnv({required this.url, required this.token});
 
@@ -132,7 +128,9 @@ class WorkerEvents {
   });
 
   final void Function(WorkerInfo info) update;
-  final void Function(String workerId) remove;
+
+  /// It's gone (sent home), and what it was as it went.
+  final void Function(String workerId, WorkerInfo info) remove;
 
   /// Terminal output, for the people who have that terminal open (client ids).
   final void Function(String workerId, String data, List<String> viewers) data;
@@ -140,117 +138,6 @@ class WorkerEvents {
   /// A laptop screen frame.
   final void Function(String workerId, ScreenFrame frame) screen;
   final void Function(String text, ToastLevel level) toast;
-}
-
-/// A pull request [WorkerManager.openPr] opened, or found already open.
-class OpenedPr {
-  const OpenedPr({required this.number, required this.url, required this.existed, required this.dirty});
-
-  final int number;
-  final String url;
-
-  /// It was already open (a second press, or one opened by hand).
-  final bool existed;
-
-  /// The worktree has uncommitted changes that aren't in it.
-  final bool dirty;
-}
-
-/// A worker's [WorkerInfo], as it changes. The wire type is immutable; this is copied into one for
-/// every update.
-class _Info {
-  _Info({
-    required this.id,
-    required this.kind,
-    this.provider,
-    this.model,
-    this.effort,
-    required this.deskId,
-    required this.name,
-    required this.color,
-    required this.status,
-    required this.createdBy,
-    required this.createdAt,
-    this.prompt,
-    this.worktree,
-    this.title,
-    this.sessionId,
-    this.activity,
-    this.task,
-    this.pr,
-    this.usage,
-    this.meeting,
-  });
-
-  final String id;
-  final WorkerKind kind;
-  final AgentProvider? provider;
-  final String? model;
-  final AgentEffort? effort;
-  final String deskId;
-  final String name;
-  final String color;
-  WorkerStatus status;
-  bool acked = true;
-
-  /// When it last went to done or needs_input (ms), so N goes to whoever has waited longest first.
-  int? waitingSince;
-  final String createdBy;
-  final int createdAt;
-  final String? prompt;
-  final WorkerWorktree? worktree;
-  PrRef? pr;
-  bool? prOpening;
-  String? title;
-  String? sessionId;
-  int? exitCode;
-  int cols = 100;
-  int rows = 30;
-  List<String> viewers = const [];
-  List<String> viewerIds = const [];
-  String? activity;
-
-  /// What its latest tool call is, for the worker to act out while it works.
-  WorkerAction? action;
-  WorkerTask? task;
-  Usage? usage;
-  LastInput? lastInput;
-
-  /// The meeting it was called to, for a worker at the meeting room's table.
-  final String? meeting;
-
-  WorkerInfo get view => WorkerInfo(
-    id: id,
-    kind: kind,
-    provider: provider,
-    model: model,
-    effort: effort,
-    deskId: deskId,
-    name: name,
-    color: color,
-    status: status,
-    acked: acked,
-    waitingSince: waitingSince,
-    createdBy: createdBy,
-    createdAt: createdAt,
-    prompt: prompt,
-    worktree: worktree,
-    pr: pr,
-    prOpening: prOpening,
-    title: title,
-    sessionId: sessionId,
-    exitCode: exitCode,
-    cols: cols,
-    rows: rows,
-    viewers: List.unmodifiable(viewers),
-    viewerIds: List.unmodifiable(viewerIds),
-    activity: activity,
-    action: action,
-    task: task,
-    usage: usage,
-    lastInput: lastInput,
-    meeting: meeting,
-  );
 }
 
 /// Its terminal in the host as of the last save, and how it was doing, to pick back up after a restart.
@@ -263,10 +150,19 @@ class _Saved {
 }
 
 class _Worker {
-  _Worker(this.info, this.tracker, [String? hookToken]) : hookToken = hookToken ?? _randomHex(16);
+  _Worker(this.info, this.tracker, [String? hookToken])
+    : hookToken = hookToken ?? _randomHex(16),
+      state = info.kind == WorkerKind.agent ? providerAdapter(info.provider)?.createState() : null;
 
-  final _Info info;
+  final LiveInfo info;
+
+  /// The account that hired it, whose sign-ins it runs on. None: the office's own.
+  String? owner;
   Pty? pty;
+
+  /// A DeepSeek Harness worker's ACP connection. It has no PTY: ACP updates are rendered into the
+  /// same headless terminal the other providers mirror a process into (see dsh.dart).
+  DshSession? dsh;
   HeadlessTerminal? term;
 
   /// clientId -> name
@@ -280,14 +176,14 @@ class _Worker {
   /// Claude never reported SessionStart: it's stuck on a trust/login/onboarding screen.
   bool bootBlocked = false;
 
-  /// OpenCode errors keep the desk visibly actionable until a new turn starts.
-  bool openCodeError = false;
-  CodexUsageReader codexUsage = CodexUsageReader();
-  String? codexHome;
-  String? codexTranscript;
-  final codexTools = <String, String>{};
-  final codexPending = <String>{};
-  bool codexPermissionUnknown = false;
+  /// Its provider's own state on it (see ProviderAdapter.createState).
+  final Object? state;
+
+  /// What its provider's adapter is handed of it (see WorkerHandle), once asked for.
+  _Handle? handle;
+
+  /// A prompt its start couldn't pass on the command line (a Muse resume): typed into its session after SessionStart.
+  String? pendingPrompt;
 
   /// Test runs and builds that have failed in a row (see failsToDespair).
   int failStreak = 0;
@@ -315,9 +211,69 @@ class _Worker {
 
   /// Where this run's own output starts, below the scrollback carried over from before.
   TermMarker? fresh;
+
+  /// Its lost worktree is being put back (see rebuild): the folder coming back mustn't wake it before that's done.
+  bool rebuilding = false;
+}
+
+/// What a worker's provider adapter is handed of it (see WorkerHandle).
+class _Handle implements WorkerHandle {
+  _Handle(this._m, this._w);
+
+  final WorkerManager _m;
+  final _Worker _w;
+
+  @override
+  LiveInfo get info => _w.info;
+  @override
+  Object? get state => _w.state;
+  @override
+  bool get running => _w.pty != null;
+  @override
+  bool get bootBlocked => _w.bootBlocked;
+  @override
+  set bootBlocked(bool v) => _w.bootBlocked = v;
+  @override
+  int get leftNeedsInputAt => _w.leftNeedsInputAt;
+  @override
+  set leftNeedsInputAt(int v) => _w.leftNeedsInputAt = v;
+  @override
+  int get failStreak => _w.failStreak;
+  @override
+  set failStreak(int v) => _w.failStreak = v;
+  @override
+  UsageTracker get tracker => _w.tracker;
+  @override
+  String? get pendingPrompt => _w.pendingPrompt;
+  @override
+  set pendingPrompt(String? v) => _w.pendingPrompt = v;
+  @override
+  void setStatus(WorkerStatus status) => _m._setStatus(_w, status);
+  @override
+  void emit() => _m._emitUpdate(_w);
+  @override
+  void persist() => _m._persist();
+  @override
+  void notePrompt(String prompt) => _m._notePrompt(_w, prompt);
+  @override
+  void noteTool(String tool) => _m._noteTool(_w, tool);
+  @override
+  void notePr(Object? command, String output) => _m._noteOwnPr(_w, command, output);
+  @override
+  void clearTask() => _m._clearTask(_w);
+  @override
+  void scheduleScan() => _m._scheduleScan(_w);
+  @override
+  String? prompt(String text) => _m.prompt(_w.info.id, text);
 }
 
 class WorkerManager implements QueueWorkers {
+  /// How many rows the floor's back office is built out: its desks past that aren't there to hire at (see Wing).
+  int Function() builtOut = () => 0;
+
+  @override
+  int wing() => builtOut();
+
   /// [env] stands in for the office's own environment (tests isolate the workers with it).
   WorkerManager(
     this._dir,
@@ -334,17 +290,32 @@ class WorkerManager implements QueueWorkers {
 
     /// The office's prompts and the worker everyone starts on, as set in ⚙️ Settings (see prompts.dart).
     PromptSource? prompts,
+
+    /// The DSH profile a DeepSeek Harness worker boots (default "acp").
+    String dshProfile = dshProfileDefault,
+
+    /// Everyone's own sign-ins, for workers hired by an account.
+    RunAs? runAs,
   }) : _env = env ?? Platform.environment,
+       _runAs = runAs,
        _capacity = capacity,
        _prompts = prompts,
        defaultProvider = configuredProvider(_agentCmd) {
     _trees = Worktrees(_dir);
     _statePath = p.join(_dataDir, 'workers.json');
-    _settingsPath = p.join(_dataDir, 'claude-hooks.json');
     _office = officeCommand();
-    _writeHookSettings();
-    _openCodePlugin = writeOpenCodePlugin(_dataDir);
-    _queueBin = _writeQueueCommand();
+    // `agent-office workers mcp` is the office's MCP server, for the agents that take one.
+    final floor = ProviderFloor(
+      dataDir: _dataDir,
+      office: _office,
+      env: _env,
+      dshProfile: dshProfile,
+      mcp: [..._office, 'workers', 'mcp'],
+    );
+    for (final a in providerAdapters.values) {
+      _setups[a.id] = a.prepare(floor);
+    }
+    _officeBin = _writeOfficeCommands();
     _agentPath = resolveCommand(_agentCmd, _env);
     final claude = defaultProvider == AgentProvider.claude ? _agentPath : resolveCommand('claude', _env);
     _namer = TaskNamer(claude, childEnv(_env), (id, task, ctx) {
@@ -359,8 +330,10 @@ class WorkerManager implements QueueWorkers {
       () => _events.toast("The workers' terminal host stopped — resuming them", ToastLevel.warn),
     );
     _scrollback = ScrollbackStore(_dataDir);
+    _drops = DropStore(_dataDir);
     _restore();
     _scrollback.prune(_workers.keys.toSet());
+    _drops.prune(_workers.keys.toSet());
     // A session may have ended (and written its final tally) while the office was down.
     for (final w in _workers.values) {
       _scanUsage(w);
@@ -369,6 +342,7 @@ class WorkerManager implements QueueWorkers {
     _usageTimer = Timer.periodic(_usageScan, (_) {
       for (final w in List.of(_workers.values)) {
         _scanUsage(w);
+        _watchFolder(w);
       }
     });
     _saveTimer = Timer.periodic(_saveScrollback, (_) {
@@ -388,18 +362,20 @@ class WorkerManager implements QueueWorkers {
   final Map<String, String> _env;
   final Capacity? _capacity;
   final PromptSource? _prompts;
+  final RunAs? _runAs;
 
-  /// Where the `agent-office` command is, for the board agents' PATH (see [_writeQueueCommand]).
-  String? _queueBin;
+  /// Where the `agent-office` and `office-workers` commands are, for the workers' PATH (see [_writeOfficeCommands]).
+  String? _officeBin;
 
   final _workers = <String, _Worker>{};
   late final String _statePath;
-  late final String _settingsPath;
+
+  /// What each provider set up on this floor, for its launches (see ProviderAdapter.prepare).
+  final _setups = <AgentProvider, Object?>{};
   late final Worktrees _trees;
   String? _agentPath;
   @override
   final AgentProvider defaultProvider;
-  late final String _openCodePlugin;
 
   /// How hooks run the office's own executable (see hook.dart).
   late final List<String> _office;
@@ -418,6 +394,12 @@ class WorkerManager implements QueueWorkers {
 
   /// Each worker's terminal on disk, so a restart doesn't wipe it (see history.dart).
   late final ScrollbackStore _scrollback;
+  late final DropStore _drops;
+
+  /// Keeps a file dropped or pasted into a worker's terminal on this machine; where it is, for the
+  /// terminal to type.
+  String? drop(String id, String name, String type, Uint8List body) =>
+      _workers.containsKey(id) ? _drops.save(id, name, type, body) : null;
   late final Timer _saveTimer;
 
   /// Picks every worker whose terminal outlived the last office (a dev-server reload, an upgrade)
@@ -443,7 +425,13 @@ class WorkerManager implements QueueWorkers {
     ]);
     // Terminals nobody saved a claim on (their worker was sent home as the office went down).
     _host.killUnclaimed();
+    // Whoever's worktree was deleted while the office was down stays asleep, marked lost, rather than failing to start.
+    for (final w in _workers.values) {
+      _checkLost(w);
+    }
     wakeAll();
+    // It may have switched branches while the office was down, its terminal still going.
+    unawaited(syncBranches());
   }
 
   String? get resolvedAgent => _agentPath;
@@ -463,6 +451,9 @@ class WorkerManager implements QueueWorkers {
 
   WorkerInfo? get(String id) => _workers[id]?.info.view;
 
+  /// The account a worker runs as (see [RunAs]), if not the office.
+  String? ownerOf(String id) => _workers[id]?.owner;
+
   /// Each worker's terminal process and directory, to tell whose servers are whose.
   List<ServiceOwner> owners() => [
     for (final w in _workers.values)
@@ -475,12 +466,18 @@ class WorkerManager implements QueueWorkers {
       ),
   ];
 
+  /// Fetches the branch the project is on, so a worktree made next starts from what's on GitHub now
+  /// (see Worktrees.fetch). Null when there's nothing to wait for.
+  @override
+  Future<void>? fetchBase() => _trees.fetch();
+
   @override
   bool deskOccupied(String deskId) => _workers.values.any((w) => w.info.deskId == deskId);
 
   /// Seats a new worker at [deskId]. Returns it, or why there is none as `error`. [meeting] seats one
   /// at the meeting room's table instead, for that meeting (see meetings.dart), in the meeting's own
-  /// worktree, which everyone at the table shares.
+  /// worktree, which everyone at the table shares. [repos] are other floors' repositories a worker in
+  /// its own worktree works in too (see _makeWorkspace).
   @override
   ({WorkerInfo? worker, String? error}) spawn(
     String deskId,
@@ -492,6 +489,9 @@ class WorkerManager implements QueueWorkers {
     String? model,
     AgentEffort? effort,
     ({String id, WorkerWorktree? worktree})? meeting,
+    List<RepoSource> repos = const [],
+    String? owner,
+    String? via,
   ]) {
     ({WorkerInfo? worker, String? error}) fail(String error) => (worker: null, error: error);
     // Nobody picked (a board agent, say): the office's default worker, model and effort included.
@@ -508,6 +508,7 @@ class WorkerManager implements QueueWorkers {
     if (effortError != null) return fail(effortError);
     final seat = deskById[deskId];
     if (seat == null) return fail('Unknown desk');
+    if (!deskBuilt(seat, wing())) return fail("${seat.label} isn't built yet: expand the back office first");
     final station = seat.station;
     if (deskOccupied(deskId)) {
       return fail(
@@ -528,6 +529,10 @@ class WorkerManager implements QueueWorkers {
     if (meeting != null && (kind != WorkerKind.agent || worktree)) {
       return fail('A meeting seats agents, in its own worktree');
     }
+    if (repos.isNotEmpty && (kind != WorkerKind.agent || !worktree || station != null || meeting != null)) {
+      return fail('Only a worker in its own worktree can work in other repositories too');
+    }
+    if (repos.length > maxRepos) return fail('A worker can take on at most $maxRepos other repositories');
     if (kind == WorkerKind.shell && provider != null) return fail('Shell workers do not have an agent provider');
     if (kind == WorkerKind.agent &&
         selectedProvider == AgentProvider.custom &&
@@ -538,6 +543,11 @@ class WorkerManager implements QueueWorkers {
       final paused = _ledger.hiringPaused;
       if (paused != null) return fail(paused);
     }
+    final signIn = providerAdapter(selectedProvider)?.signIn;
+    final runAs = _runAs;
+    if (owner != null && signIn != null && runAs != null && !runAs.claudeReady(owner)) {
+      return fail(runAs.why(SignInKind.claude));
+    }
     final full = _capacity?.full();
     if (full != null) return fail(full);
     final used = {for (final w in _workers.values) w.info.name.replaceFirst(RegExp(r' 🐚$'), '')};
@@ -546,18 +556,32 @@ class WorkerManager implements QueueWorkers {
         agent?.name ?? _names.firstWhere((n) => !used.contains(n), orElse: () => 'Worker ${_workers.length + 1}');
     final id = _randomHex(6);
     WorkerWorktree? wt = meeting?.worktree;
+    List<WorkerRepo>? others;
     if (worktree) {
-      final made = _trees.create('${name.toLowerCase()}-${id.substring(0, 4)}');
-      if (made.error != null) return fail(made.error!);
-      wt = made.worktree;
+      final slug = '${name.toLowerCase()}-${id.substring(0, 4)}';
+      if (repos.isNotEmpty) {
+        final made = _makeWorkspace(slug, repos);
+        if (made.error != null) return fail(made.error!);
+        wt = made.worktree;
+        others = made.repos;
+        for (final note in made.notes) {
+          _events.toast("🌿 $name's worktree of $note", ToastLevel.info);
+        }
+      } else {
+        final made = _trees.create(slug);
+        if (made.error != null) return fail(made.error!);
+        wt = made.worktree;
+        final note = made.note;
+        if (note != null) _events.toast("🌿 $name's worktree $note", ToastLevel.info);
+      }
     }
     final trimmed = prompt?.trim();
-    final info = _Info(
+    final info = LiveInfo(
       id: id,
       kind: kind,
       provider: selectedProvider,
-      model: selectedProvider == AgentProvider.opencode || selectedProvider == AgentProvider.claude ? model : null,
-      effort: selectedProvider == AgentProvider.claude ? effort : null,
+      model: takesModel(selectedProvider) ? model : null,
+      effort: takesEffort(selectedProvider) ? effort : null,
       deskId: deskId,
       name: kind == WorkerKind.shell ? '$name 🐚' : name,
       color: kind == WorkerKind.shell ? '#8d99ae' : agent?.color ?? _colors[_random.nextInt(_colors.length)],
@@ -566,10 +590,12 @@ class WorkerManager implements QueueWorkers {
       createdAt: _now(),
       prompt: kind == WorkerKind.shell || trimmed == null || trimmed.isEmpty ? null : trimmed,
       worktree: wt,
+      repos: others,
       activity: prompt != null && prompt.isNotEmpty ? _truncate(prompt, 80) : null,
       meeting: meeting?.id,
+      via: via == 'herald' ? 'herald' : null,
     );
-    final w = _Worker(info, newTracker());
+    final w = _Worker(info, newTracker())..owner = owner;
     _workers[id] = w;
     if (info.prompt != null) _notePrompt(w, info.prompt!);
     // A board agent is told what it's there for ahead of its first request (which is what shows).
@@ -587,7 +613,8 @@ class WorkerManager implements QueueWorkers {
   String? resume(String id, [String? prompt]) {
     final w = _workers[id];
     if (w == null) return 'No such worker';
-    if (w.pty != null) return 'Worker is already running';
+    if (w.pty != null || w.dsh != null) return 'Worker is already running';
+    if (_checkLost(w, true)) return lostMessage(w.info);
     w.info.status = WorkerStatus.starting;
     w.info.exitCode = null;
     final station = deskById[w.info.deskId]?.station;
@@ -609,35 +636,39 @@ class WorkerManager implements QueueWorkers {
   /// A request for the agent standing by a board (see stations): typed into its session, which is
   /// woken up with it if it's asleep, or it's hired there with it when nobody is. Returns what went
   /// wrong as `error`, or the agent and whether it was just hired.
-  ({WorkerInfo? info, bool hired, String? error}) station(String deskId, String by, String text) {
+  ({WorkerInfo? info, bool hired, String? error}) station(String deskId, String by, String text, [String? owner]) {
     ({WorkerInfo? info, bool hired, String? error}) fail(String error) => (info: null, hired: false, error: error);
     if (deskById[deskId]?.station == null) return fail('There is no agent to ask there');
     final clean = text.replaceAll(RegExp(r'\r\n?'), '\n').trim();
     if (clean.isEmpty) return fail('Empty prompt');
     final w = _workers.values.where((x) => x.info.deskId == deskId).firstOrNull;
     if (w == null) {
-      final r = spawn(deskId, by, clean);
+      final r = spawn(deskId, by, clean, false, WorkerKind.agent, null, null, null, null, const [], owner);
       return r.worker == null ? fail(r.error!) : (info: r.worker, hired: true, error: null);
     }
     // Typed into the question it's asking, the prompt would answer it.
     if (w.info.status == WorkerStatus.needsInput) {
       return fail('The ${w.info.name} is waiting on an answer in its terminal');
     }
-    if (w.pty == null) w.info.lastInput = LastInput(by: by, at: _now());
-    final err = w.pty != null ? prompt(w.info.id, clean, by) : resume(w.info.id, clean);
+    final running = w.pty != null || w.dsh != null;
+    if (!running) w.info.lastInput = LastInput(by: by, at: _now());
+    final err = running ? prompt(w.info.id, clean, by) : resume(w.info.id, clean);
     return err != null ? fail(err) : (info: w.info.view, hired: false, error: null);
   }
 
   /// The worker whose terminal holds this hook token: how a worker proves it's asking for itself.
   WorkerInfo? authenticate(String id, String token) {
     final w = _workers[id];
-    return w != null && w.pty != null && token.isNotEmpty && _safeEq(token, w.hookToken) ? w.info.view : null;
+    return w != null && (w.pty != null || w.dsh != null) && token.isNotEmpty && _safeEq(token, w.hookToken)
+        ? w.info.view
+        : null;
   }
 
   /// Starts every worker that isn't running: nobody should be found asleep at their desk.
   void wakeAll() {
+    // A DeepSeek Harness worker has no PTY but is still running: only the ones that are gone wake up.
     for (final w in List.of(_workers.values)) {
-      if (w.pty == null) resume(w.info.id);
+      if (w.pty == null && w.dsh == null) resume(w.info.id);
     }
   }
 
@@ -646,7 +677,12 @@ class WorkerManager implements QueueWorkers {
   /// pull request's head commit) is work delivered. Resolves once that's done, with a line for the
   /// team about the worktree.
   @override
-  Future<({String? note, String? error})> kill(String id, [WorktreeCleanup? cleanup, String? landed]) async {
+  Future<({String? note, String? error})> kill(
+    String id, [
+    WorktreeCleanup? cleanup,
+    String? landed,
+    Map<String, String?>? landedRepos,
+  ]) async {
     const none = (note: null, error: null);
     final w = _workers.remove(id);
     if (w == null) return none;
@@ -654,41 +690,138 @@ class WorkerManager implements QueueWorkers {
     w.scanTimer?.cancel();
     final proc = w.pty;
     w.pty = null; // so the exit handler knows this worker is gone and stays quiet
+    final session = w.dsh;
+    w.dsh = null;
     try {
+      session?.close();
       proc?.kill();
     } catch (_) {
       // already gone
     }
     w.term?.dispose();
     _scrollback.remove(id);
-    _events.remove(id);
+    _drops.remove(id);
+    _events.remove(id, w.info.view);
     _persist();
-    final wt = w.info.worktree;
-    // A meeting's worktree is everyone at the table's: the meeting tidies it away once they've all gone.
-    if (wt == null || w.info.meeting != null) return none;
-    final name = w.info.name;
-    final ref = _ref(wt);
-    if (cleanup == null) {
-      final work = describeWork(await _trees.inspect(ref, landed));
-      if (work.isNotEmpty) return (note: "Kept $name's worktree and branch ${wt.branch} — it has $work", error: null);
-      cleanup = WorktreeCleanup.all;
+    return _sendHome(w.info, cleanup, landed, landedRepos);
+  }
+
+  /// Whether the folder a worker works in (its worktree) is gone: deleted outside the office. It's then
+  /// marked lost (WorkerInfo.lost) for whoever comes to its desk, instead of failing to start over and
+  /// over; once the folder is back, it isn't any more.
+  bool _checkLost(_Worker w, [bool recheck = false]) {
+    final info = w.info;
+    final wt = info.worktree;
+    if (wt == null || Directory(_cwd(info)).existsSync()) {
+      if (info.lost != null) {
+        info.lost = null;
+        _emitUpdate(w);
+      }
+      return false;
     }
-    if (cleanup == WorktreeCleanup.keep) return (note: "Kept $name's worktree and branch ${wt.branch}", error: null);
-    final error = await _trees.remove(ref, cleanup);
-    if (error != null) return (note: null, error: "Couldn't delete $name's worktree: $error");
-    return (
-      note: cleanup == WorktreeCleanup.all
-          ? "Deleted $name's worktree and branch ${wt.branch}"
-          : "Deleted $name's worktree and kept branch ${wt.branch}",
-      error: null,
-    );
+    // Where its branch is only changes by hand: looked at again when someone tries to start it.
+    if (info.lost != null && !recheck) return true;
+    final branch = _trees.branchState(wt.branch);
+    if (branch != info.lost) {
+      info.lost = branch;
+      _emitUpdate(w);
+    }
+    return true;
+  }
+
+  /// Every so often: a worktree deleted under a worker marks it lost, and one put back by hand
+  /// (`git worktree add` at the same place) sets an asleep worker back to work.
+  void _watchFolder(_Worker w) {
+    if (w.info.worktree == null || w.rebuilding) return;
+    final was = w.info.lost != null;
+    if (!_checkLost(w) && was && w.pty == null && w.dsh == null) resume(w.info.id);
+  }
+
+  /// Puts a lost worker's worktree back where it was (see Worktrees.restore) and starts it again,
+  /// carrying on its conversation. Everyone else who worked there (the rest of a meeting's table) gets
+  /// back to work with it. Resolves to whether it `rebuilt` anything, with a note on where a branch
+  /// came back from (or why there was nothing to do), or to what went wrong.
+  Future<({bool rebuilt, String? note, String? error})> rebuild(String id) async {
+    final w = _workers[id];
+    if (w == null) return (rebuilt: false, note: null, error: 'No such worker');
+    final info = w.info;
+    final wt = info.worktree;
+    if (wt == null) return (rebuilt: false, note: null, error: '${info.name} works in the main checkout');
+    if (w.rebuilding) return (rebuilt: false, note: null, error: null);
+    final folder = _cwd(info);
+    // Whoever the folder was deleted from under: this worker, and the rest of its meeting's table.
+    final stranded = [
+      for (final o in _workers.values)
+        if (o.info.worktree != null && _cwd(o.info) == folder && (o.info.lost != null || _checkLost(o))) o,
+    ];
+    final froms = <String>[];
+    if (!Directory(folder).existsSync()) {
+      final across = info.repos?.isNotEmpty ?? false;
+      w.rebuilding = true;
+      try {
+        for (final t in _treesOf(info)) {
+          final rel = t.ref.path;
+          if (rel != null && Directory(p.join(t.dir, rel)).existsSync()) continue;
+          final r = await t.trees.restore(t.ref);
+          final which = across ? "${t.name}'s " : '';
+          if (r.error != null) {
+            return (
+              rebuilt: false,
+              note: null,
+              error: "Couldn't rebuild ${info.name}'s worktree${across ? ' of ${t.name}' : ''}: ${r.error}",
+            );
+          }
+          if (r.from == LostBranch.origin) froms.add('$which${t.ref.branch} came back from origin');
+          if (r.from == LostBranch.gone) {
+            froms.add('$which${t.ref.branch} was deleted too, so it starts again from where it began');
+          }
+        }
+        if (across) {
+          try {
+            _writeBrief(wt, [for (final r in info.repos!) (name: r.name, project: r.repo ?? r.name, from: r.from)]);
+          } catch (_) {
+            // The worktrees are what it needs; the brief only says which folder is which.
+          }
+        }
+      } finally {
+        w.rebuilding = false;
+      }
+    }
+    for (final o in stranded) {
+      if (!_checkLost(o)) _restartIn(o);
+    }
+    if (stranded.isEmpty) {
+      if (w.pty == null && w.dsh == null) resume(id);
+      return (rebuilt: false, note: "${info.name}'s worktree is already there", error: null);
+    }
+    return (rebuilt: true, note: froms.isEmpty ? null : froms.join('; '), error: null);
+  }
+
+  /// Starts a worker in its folder again: an asleep one wakes up, and one whose process was left
+  /// running in the folder deleted from under it starts over in the new one, carrying on its conversation.
+  void _restartIn(_Worker w) {
+    final proc = w.pty;
+    final session = w.dsh;
+    if (proc != null || session != null) {
+      if (_midTurn(w)) w.interrupted = true;
+      // Gone before it exits, so the exit handler knows it was the office and stays quiet.
+      w.pty = null;
+      w.dsh = null;
+      try {
+        session?.close();
+        proc?.kill();
+      } catch (_) {
+        // already gone
+      }
+    }
+    resume(w.info.id);
   }
 
   /// What a worker's worktree holds, so whoever sends it home knows what deleting it would lose.
-  Future<WorktreeState?> inspectWorktree(String id) async {
-    final wt = _workers[id]?.info.worktree;
-    return wt != null ? _trees.inspect(_ref(wt)) : null;
-  }
+  Future<WorktreeState?> inspectWorktree(String id) => _inspectTrees(id);
+
+  /// Every worker's worktree branch, looked at again (see [_syncBranch]): for when new pull requests may have come in.
+  Future<void> syncBranches() => Future.wait([for (final w in List.of(_workers.values)) _syncBranch(w)]);
 
   /// Someone opened a worker's terminal: what to draw in it first.
   ({String data, int cols, int rows})? attach(String id, String clientId, String name) {
@@ -737,9 +870,17 @@ class WorkerManager implements QueueWorkers {
   /// Keystrokes from [by]'s browser.
   void write(String id, String data, String by) {
     final w = _workers[id];
-    final pty = w?.pty;
-    if (w == null || pty == null) return;
-    pty.write(data);
+    if (w == null) return;
+    final pty = w.pty;
+    final session = w.dsh;
+    if (session != null) {
+      // ACP has no terminal: the session buffers these into a line and submits it on Enter.
+      session.writeInput(data);
+    } else if (pty != null) {
+      pty.write(data);
+    } else {
+      return;
+    }
     var changed = _typed(w, by);
     if (w.info.status == WorkerStatus.needsInput && !w.info.acked) {
       w.info.acked = true;
@@ -764,12 +905,17 @@ class WorkerManager implements QueueWorkers {
     final w = _workers[id];
     if (w == null) return 'No such worker';
     final pty = w.pty;
-    if (pty == null) return 'Worker is not running';
+    final session = w.dsh;
+    if (pty == null && session == null) return 'Worker is not running';
     final clean = text.replaceAll(RegExp(r'\r\n?'), '\n').trim();
     if (clean.isEmpty) return 'Empty prompt';
-    // Bracketed paste keeps multi-line prompts in one message, then Enter submits.
-    pty.write('\x1b[200~$clean\x1b[201~');
-    Timer(const Duration(milliseconds: 120), () => w.pty?.write('\r'));
+    if (session != null) {
+      session.prompt(clean);
+    } else {
+      // Bracketed paste keeps multi-line prompts in one message, then Enter submits.
+      pty!.write('\x1b[200~$clean\x1b[201~');
+      Timer(const Duration(milliseconds: 120), () => w.pty?.write('\r'));
+    }
     w.info.activity = _truncate(clean, 80);
     _notePrompt(w, clean);
     if (by != null) w.info.lastInput = LastInput(by: by, at: _now());
@@ -778,106 +924,91 @@ class WorkerManager implements QueueWorkers {
   }
 
   /// Pushes a worktree worker's branch and opens a pull request for it, with a title and body
-  /// drafted from its task. Resolves to the PR, or to an `error` saying why there is none. The
-  /// branch may already have an open PR (a second press, or one opened by hand): that one is used.
-  Future<({OpenedPr? pr, String? error})> openPr(String id, String by) async {
-    ({OpenedPr? pr, String? error}) fail(String error) => (pr: null, error: error);
-    final w = _workers[id];
-    if (w == null) return fail('No such worker');
-    final info = w.info;
-    final wt = info.worktree;
-    if (wt == null) {
-      return fail('${info.name} works in the main checkout — only workers with their own worktree can open a PR');
-    }
-    if (info.prOpening == true) return fail("${info.name}'s pull request is already being opened");
-    if (isBusy(info.status)) {
-      final what = info.status == WorkerStatus.needsInput ? 'waiting on input' : info.status.wire;
-      return fail("${info.name} is still $what — wait until it's done");
-    }
-    final cwd = p.join(_dir, wt.path);
-    if (!Directory(cwd).existsSync()) return fail("${info.name}'s worktree is gone (${wt.path})");
-    info.prOpening = true;
-    _emitUpdate(w);
-    try {
-      final commits = (await _run('git', [
-        'log',
-        '--reverse',
-        '--format=%h %s',
-        '${wt.base}..${wt.branch}',
-      ], cwd)).split('\n').where((l) => l.isNotEmpty).toList();
-      final dirty = (await _run('git', ['status', '--porcelain'], cwd)) != '';
-      if (commits.isEmpty) {
-        return fail(
-          dirty
-              ? "${info.name} hasn't committed anything yet — ask it to commit first"
-              : '${info.name} has no commits on ${wt.branch} yet',
-        );
-      }
-      final open = await _findOpenPr(wt.branch, cwd);
-      if (open != null) {
-        info.pr = open;
-        _persist();
-        return (pr: OpenedPr(number: open.number, url: open.url, existed: true, dirty: dirty), error: null);
-      }
-      await _run('git', ['push', '-u', 'origin', wt.branch], cwd, 90000);
-      final base = await _pushedBranch([wt.from, _trees.currentBranch()], wt.branch);
-      final draft = _draftPr(info, commits, by);
-      final out = await gh(
-        [
-          'pr',
-          'create',
-          '--head',
-          wt.branch,
-          if (base != null) ...['--base', base],
-          '--title',
-          draft.title,
-          '--body',
-          draft.body,
-        ],
-        cwd,
-        60000,
-      );
-      final url = out.trim().split('\n').last;
-      final number = int.tryParse(RegExp(r'/pull/(\d+)').firstMatch(url)?.group(1) ?? '') ?? 0;
-      if (number == 0) throw _RunError('gh did not return a pull request URL (${_truncate(out, 120)})');
-      info.pr = PrRef(number: number, url: url);
-      _persist();
-      return (pr: OpenedPr(number: number, url: url, existed: false, dirty: dirty), error: null);
-    } catch (err) {
-      return fail("Couldn't open a PR for ${info.name}: ${_messageOf(err)}");
-    } finally {
-      info.prOpening = false;
-      // The worker may have been sent home meanwhile; an update would bring it back as a ghost.
-      if (_workers[id] == w) _emitUpdate(w);
-    }
-  }
+  /// drafted from its task. Resolves to the PRs (and what failed, across repositories), or to an
+  /// `error` saying why there is none. The branch may already have an open PR (a second press, or one
+  /// opened by hand): that one is used. A worker across repositories gets one in each repository it
+  /// committed to.
+  /// [as]: whoever pressed the button, on their own GitHub sign-in; else the office.
+  Future<({List<OpenedPr> prs, List<String> failed, String? error})> openPr(String id, String by, [GhAs? as]) =>
+      _openPr(id, by, as);
 
-  /// The first of these branches that exists on origin, for a PR base. None: gh picks the default branch.
-  Future<String?> _pushedBranch(List<String?> candidates, String not) async {
-    for (final c in candidates) {
-      if (c == null || c.isEmpty || c == not) continue;
-      try {
-        await _run('git', ['rev-parse', '--verify', '--quiet', 'refs/remotes/origin/$c'], _dir);
-        return c;
-      } catch (_) {
-        // not on the remote (or never fetched)
-      }
-    }
+  /// The workspace of a worker across repositories (see _makeWorkspace): `.agent-office/worktrees/[slug]`
+  /// with a worktree of this floor's project and of each of [repos], or what went wrong as `error`.
+  ({WorkerWorktree? worktree, List<WorkerRepo> repos, List<String> notes, String? error}) makeWorkspace(
+    String slug,
+    List<RepoSource> repos,
+  ) => _makeWorkspace(slug, repos);
+
+  /// Says which pull request is a worker's, or with none that it has none: for one the office couldn't
+  /// tell by itself (opened by hand, or by an agent whose hooks don't say what it ran). A message when
+  /// there's no such worker.
+  String? linkPr(String id, PrRef? pr) {
+    final w = _workers[id];
+    if (w == null) return 'No such worker';
+    w.info.pr = pr;
+    // Whoever says so knows better than what the office gathered.
+    w.info.pastPrs = const [];
+    _persist();
+    _emitUpdate(w);
     return null;
   }
+
+  /// owner/name of the floor's project on GitHub, looked up the first time a worker opens a pull request itself.
+  ({String? repo})? _origin;
+
+  /// A worker ran `gh pr create` itself (see ownPr): that pull request is its own from then on, as
+  /// one opened from its desk is. A worker in the main checkout works on a branch the office never
+  /// made, so this is how the office knows which pull request is whose. For a worker across
+  /// repositories, one in another of its repositories is kept with that repository.
+  void _noteOwnPr(_Worker w, Object? command, String output) {
+    final pr = ownPr(command, output);
+    if (pr == null) return;
+    final info = w.info;
+    bool same(String? repo) => repo != null && repo.toLowerCase() == pr.repo.toLowerCase();
+    final origin = _origin ??= (repo: originRepo(_dir));
+    final repos = info.repos ?? const <WorkerRepo>[];
+    final other = same(origin.repo) ? -1 : repos.indexWhere((r) => same(r.repo));
+    if (!same(origin.repo) && other < 0) return;
+    final ref = PrRef(number: pr.number, url: pr.url);
+    if (other >= 0) {
+      if (repos[other].pr?.number == pr.number) return;
+      info.repos = [...repos]..[other] = _withPr(repos[other], ref);
+    } else {
+      if (info.pr?.number == pr.number) return;
+      // The one it had may still be open (a second task, a follow-up): it stays its own too.
+      final had = info.pr;
+      if (had != null) {
+        final past = {...info.pastPrs, had.number}.where((n) => n != pr.number).toList();
+        info.pastPrs = past.length > maxPastPrs ? past.sublist(past.length - maxPastPrs) : past;
+      }
+      info.pr = ref;
+    }
+    _persist();
+    _emitUpdate(w);
+    _events.toast(
+      '${info.name} opened PR #${pr.number}${other >= 0 ? ' in ${repos[other].name}' : ''}',
+      ToastLevel.info,
+    );
+  }
+
+  /// Whether any worktree of a worker across repositories holds work its merged pull requests didn't
+  /// deliver ([landed] and [landedRepos], as for kill): then it doesn't go home by itself yet.
+  Future<bool> holdsWork(String id, [String? landed, Map<String, String?>? landedRepos]) =>
+      _holdsWork(id, landed, landedRepos);
 
   void resize(String id, num cols, num rows) {
     final w = _workers[id];
     final pty = w?.pty;
     final term = w?.term;
-    if (w == null || pty == null || term == null) return;
+    // A DSH worker has no PTY to resize, but its terminal still fits the window it's shown in.
+    if (w == null || (pty == null && w.dsh == null) || term == null) return;
     final c = cols.floor().clamp(20, 400);
     final r = rows.floor().clamp(5, 200);
     if (c == w.info.cols && r == w.info.rows) return;
     w.info.cols = c;
     w.info.rows = r;
     try {
-      pty.resize(c, r);
+      pty?.resize(c, r);
       term.resize(c, r);
     } catch (_) {
       // pty may have exited between checks
@@ -887,253 +1018,45 @@ class WorkerManager implements QueueWorkers {
     _emitUpdate(w);
   }
 
-  /// Claude Code hook callback.
-  bool handleHook(String workerId, String token, String event, Object? payload) {
-    final w = _workers[workerId];
-    if (w == null ||
-        w.pty == null ||
-        w.info.kind != WorkerKind.agent ||
-        (w.info.provider != AgentProvider.claude && w.info.provider != AgentProvider.custom) ||
-        !_safeEq(token, w.hookToken)) {
-      return false;
-    }
-    final m = payload is Map ? payload : const {};
-    final now = _now();
-    final sessionId = m['session_id'];
-    if (sessionId is String && sessionId.isNotEmpty && sessionId != w.info.sessionId) {
-      w.info.sessionId = sessionId;
-      _persist();
-    }
-    final transcript = m['transcript_path'];
-    if (transcript is String && transcript != w.tracker.transcript) {
-      w.tracker.transcript = transcript;
-      _persist();
-    }
-    _scheduleScan(w);
-    switch (event) {
-      case 'SessionStart':
-        if (m['source'] == 'clear') {
-          _clearTask(w);
-          w.failStreak = 0;
-        }
-        if (w.info.status == WorkerStatus.starting || (w.bootBlocked && w.info.status == WorkerStatus.needsInput)) {
-          w.bootBlocked = false;
-          _setStatus(w, WorkerStatus.idle);
-        }
-      case 'UserPromptSubmit':
-        w.bootBlocked = false;
-        w.info.action = null;
-        final prompt = m['prompt'];
-        if (prompt is String) {
-          w.info.activity = _truncate(prompt, 80);
-          _notePrompt(w, prompt);
-        }
-        if (w.info.status != WorkerStatus.working) {
-          _setStatus(w, WorkerStatus.working);
-        } else {
-          _emitUpdate(w);
-        }
-      case 'PreToolUse':
-        if (m['tool_name'] == 'AskUserQuestion') {
-          _setStatus(w, WorkerStatus.needsInput);
-        } else {
-          final activity = _describeTool(m);
-          w.info.activity = activity;
-          w.info.action = toolAction(m['tool_name'], m['tool_input']);
-          _noteTool(w, activity);
-          if (w.info.status != WorkerStatus.working) {
-            _setStatus(w, WorkerStatus.working);
-          } else {
-            _emitUpdate(w);
-          }
-        }
-      case 'PostToolUse':
-      case 'PostToolUseFailure':
-        _noteOutcome(w, m, event == 'PostToolUseFailure');
-        if (w.info.status == WorkerStatus.needsInput) {
-          w.leftNeedsInputAt = now;
-          _setStatus(w, WorkerStatus.working);
-        }
-      case 'PermissionRequest':
-        w.info.activity = 'Wants permission: ${_describeTool(m)}';
-        _setStatus(w, WorkerStatus.needsInput);
-      case 'Notification':
-        final type = m['notification_type'];
-        if (type == 'permission_prompt') {
-          if (now - w.leftNeedsInputAt > _latePromptGraceMs) _setStatus(w, WorkerStatus.needsInput);
-        } else if (type == 'idle_prompt') {
-          if (w.info.status == WorkerStatus.working) _setStatus(w, WorkerStatus.done);
-        }
-      case 'Stop':
-        _setStatus(w, WorkerStatus.done);
-    }
-    return true;
-  }
+  /// Claude Code hook callback (a custom --agent that speaks Claude Code's hooks reports here too).
+  bool handleHook(String workerId, String token, String event, Object? payload) =>
+      handleProviderHook(AgentProvider.claude, workerId, token, event, payload);
 
   /// Native Codex lifecycle hooks register the root rollout for bounded metric reads.
-  bool handleCodexHook(String workerId, String token, String event, Object? payload) {
-    final w = _workers[workerId];
-    if (w == null ||
-        w.pty == null ||
-        w.info.kind != WorkerKind.agent ||
-        w.info.provider != AgentProvider.codex ||
-        !_safeEq(token, w.hookToken)) {
-      return false;
-    }
-    final report = normalizeCodexHook(event, payload);
-    if (report == null) return false;
-    final info = w.info;
-    if (info.sessionId != null && info.sessionId != report.sessionId && event != 'SessionStart') return false;
-    if (info.sessionId == null || info.sessionId != report.sessionId) {
-      if (info.sessionId != null) {
-        _clearTask(w);
-        info.usage = null;
-        w.codexTranscript = null;
-        w.codexUsage = CodexUsageReader();
-      }
-      info.sessionId = report.sessionId;
-      _persist();
-    }
-    if (report.transcriptPath != null) w.codexTranscript = report.transcriptPath;
-    _scheduleScan(w);
-    w.bootBlocked = false;
-    void clearPending() {
-      w.codexTools.clear();
-      w.codexPending.clear();
-      w.codexPermissionUnknown = false;
-    }
-
-    void busy() => _setStatus(
-      w,
-      w.codexPending.isNotEmpty || w.codexPermissionUnknown ? WorkerStatus.needsInput : WorkerStatus.working,
-    );
-    switch (report.event) {
-      case 'SessionStart':
-        clearPending();
-        if (report.source == 'clear') _clearTask(w);
-        info.activity = null;
-        if (info.status == WorkerStatus.starting || info.status == WorkerStatus.needsInput) {
-          _setStatus(w, WorkerStatus.idle);
-        }
-      case 'UserPromptSubmit':
-        clearPending();
-        info.action = null;
-        final prompt = report.prompt;
-        if (prompt != null) {
-          info.activity = _truncate(prompt, 80);
-          _notePrompt(w, prompt);
-        }
-        _setStatus(w, WorkerStatus.working);
-      case 'PreToolUse':
-        final tool = report.tool;
-        info.activity = tool != null ? _truncate(tool, 80) : 'Using a tool';
-        info.action = toolAction(tool);
-        final toolUseId = report.toolUseId;
-        if (toolUseId != null && w.codexTools.length < 256) w.codexTools[toolUseId] = tool ?? '';
-        if (RegExp(r'(?:^|[.])(?:AskUserQuestion|request_user_input)$').hasMatch(tool ?? '')) {
-          if (toolUseId != null) {
-            w.codexPending.add(toolUseId);
-          } else {
-            w.codexPermissionUnknown = true;
-          }
-        }
-        busy();
-      case 'PermissionRequest':
-        info.activity = 'Wants permission: ${_truncate(report.tool ?? 'tool', 80)}';
-        // PermissionRequest has no tool_use_id in the native schema. Keep every matching
-        // active call pending so an unrelated parallel tool cannot dismiss the prompt.
-        final candidates = [
-          for (final e in w.codexTools.entries)
-            if (e.value == report.tool) e.key,
-        ];
-        if (candidates.isEmpty) w.codexPermissionUnknown = true;
-        w.codexPending.addAll(candidates);
-        _setStatus(w, WorkerStatus.needsInput);
-      case 'PostToolUse':
-        final toolUseId = report.toolUseId;
-        if (toolUseId != null) {
-          w.codexTools.remove(toolUseId);
-          w.codexPending.remove(toolUseId);
-        }
-        busy();
-      case 'Stop':
-      case 'Interrupt':
-        clearPending();
-        _setStatus(w, WorkerStatus.done);
-    }
-    _emitUpdate(w);
-    _persist();
-    return true;
-  }
+  bool handleCodexHook(String workerId, String token, String event, Object? payload) =>
+      handleProviderHook(AgentProvider.codex, workerId, token, event, payload);
 
   /// OpenCode plugin callback. The plugin has already filtered child sessions before this bridge.
-  bool handleOpenCodeHook(String workerId, String token, Object? payload) {
+  bool handleOpenCodeHook(String workerId, String token, Object? payload) =>
+      handleProviderHook(AgentProvider.opencode, workerId, token, '', payload);
+
+  /// An event on the hook route /hooks/[route] (see ProviderAdapter.hook): taken only from a running
+  /// agent whose provider reports there, with its hook token. Says whether it was taken.
+  bool handleProviderHook(AgentProvider route, String workerId, String token, String event, Object? payload) {
+    final hook = providerAdapter(route)?.hook;
     final w = _workers[workerId];
-    if (w == null ||
+    final own = w != null ? providerAdapter(w.info.provider) : null;
+    if (hook == null ||
+        w == null ||
         w.pty == null ||
         w.info.kind != WorkerKind.agent ||
-        w.info.provider != AgentProvider.opencode ||
+        own == null ||
+        (own.hooksAs ?? own.id) != route ||
         !_safeEq(token, w.hookToken)) {
       return false;
     }
-    final info = w.info;
-    if (payload is Map && payload['type'] == 'usage') {
-      final usage = reportedUsage(payload['usage']);
-      if (usage == null || info.sessionId == null || payload['sessionId'] != info.sessionId) return false;
-      // Full snapshots replace previous totals. They never advance task status or enter the Claude ledger.
-      info.usage = usage;
-      _emitUpdate(w);
-      _persist();
-      return true;
-    }
-    final ev = _openCodeEvent(payload);
-    if (ev == null) return false;
-    final starting = ev.type == 'session' && ev.status == OpenCodeHookStatus.starting;
-    if (info.sessionId != null && info.sessionId != ev.sessionId && !starting) return false;
-    if (info.sessionId == null || (starting && info.sessionId != ev.sessionId)) {
-      final switching = info.sessionId != null;
-      info.sessionId = ev.sessionId;
-      if (switching) {
-        info.usage = null;
-        _clearTask(w);
-        info.activity = null;
-        _setStatus(w, WorkerStatus.idle);
-      }
-      w.openCodeError = false;
-      _persist();
-    }
-    final prompt = ev.prompt;
-    final hasPrompt = prompt != null && prompt.isNotEmpty;
-    if (ev.type == 'error') {
-      w.openCodeError = true;
-    } else if (ev.status == OpenCodeHookStatus.working || hasPrompt) {
-      w.openCodeError = false;
-    }
-    if (hasPrompt) {
-      info.activity = _truncate(prompt, 80);
-      info.action = null;
-      _notePrompt(w, prompt);
-    } else if (ev.tool != null && ev.tool!.isNotEmpty) {
-      info.activity = _truncate(ev.tool!, 80);
-      info.action = toolAction(ev.tool);
-    } else if (ev.detail != null && ev.detail!.isNotEmpty) {
-      info.activity = _truncate(ev.detail!, 80);
-    }
-    if (ev.status == OpenCodeHookStatus.needsInput) {
-      _setStatus(w, WorkerStatus.needsInput);
-    } else if (ev.status == OpenCodeHookStatus.working) {
-      _setStatus(w, WorkerStatus.working);
-    } else if (ev.status == OpenCodeHookStatus.done && w.pty != null) {
-      _setStatus(w, w.openCodeError ? WorkerStatus.needsInput : WorkerStatus.done);
-    } else if (ev.status == OpenCodeHookStatus.starting && info.status == WorkerStatus.starting) {
-      _setStatus(w, WorkerStatus.idle);
-    } else {
-      _emitUpdate(w);
-    }
-    return true;
+    return hook.handle(_handleOf(w), event, payload);
   }
 
-  static bool _claudeLike(_Info info) => info.provider == AgentProvider.claude || info.provider == AgentProvider.custom;
+  /// What a worker's provider adapter is handed of it (see WorkerHandle): made once, kept on the worker.
+  WorkerHandle _handleOf(_Worker w) => w.handle ??= _Handle(this, w);
+
+  /// Its provider's adapter, for an agent.
+  static ProviderAdapter? _adapterOf(LiveInfo info) =>
+      info.kind == WorkerKind.agent ? providerAdapter(info.provider) : null;
+
+  /// The office names its task (see ProviderAdapter.namesTasks).
+  static bool _namesTasks(LiveInfo info) => _adapterOf(info)?.namesTasks ?? false;
 
   /// A new message for the worker: show it right away, and have its task (re)named.
   void _notePrompt(_Worker w, String prompt) {
@@ -1149,14 +1072,14 @@ class WorkerManager implements QueueWorkers {
     w.prompts = _lastN([...w.prompts, clean], _taskPrompts);
     final hadTask = w.info.task != null;
     if (!hadTask) w.info.task = fallbackTask(clean);
-    if (!_claudeLike(w.info)) return;
+    if (!_namesTasks(w.info)) return;
     // "yes", "go ahead", "2": a reply within the same task, not worth a new name.
     if (hadTask && clean.length < 16) return;
     _nameTask(w);
   }
 
   void _noteTool(_Worker w, String tool) {
-    if (!_claudeLike(w.info)) return;
+    if (!_namesTasks(w.info)) return;
     w.tools = _lastN([...w.tools, tool], _taskTools);
     w.toolsSinceNamed++;
     if (w.info.task != null && w.toolsSinceNamed >= _taskRefreshTools && _now() - w.namedAt > _taskRefreshMs) {
@@ -1164,31 +1087,8 @@ class WorkerManager implements QueueWorkers {
     }
   }
 
-  /// A tool call finished. Tests or a build that failed again (by exit code, or by the summary it
-  /// printed when the exit code was piped away) and the worker puts its head in its hands, until its
-  /// next tool call; a passing run ends the streak.
-  void _noteOutcome(_Worker w, Map payload, bool failed) {
-    if (payload['is_interrupt'] == true ||
-        toolAction(payload['tool_name'], payload['tool_input']) != WorkerAction.test) {
-      return;
-    }
-    final res = payload['tool_response'];
-    final output = [
-      payload['error'],
-      if (res is Map) res['stdout'],
-      if (res is Map) res['stderr'],
-    ].whereType<String>().join('\n');
-    if (!failed && !outputFailed(output)) {
-      w.failStreak = 0;
-      return;
-    }
-    if (++w.failStreak < failsToDespair || w.info.action == WorkerAction.failing) return;
-    w.info.action = WorkerAction.failing;
-    _emitUpdate(w);
-  }
-
   void _nameTask(_Worker w) {
-    if (!_claudeLike(w.info)) return;
+    if (!_namesTasks(w.info)) return;
     w.toolsSinceNamed = 0;
     w.namedAt = _now();
     final previous = w.info.task != null && w.prompts.length > 1 ? w.info.task : null;
@@ -1215,6 +1115,7 @@ class WorkerManager implements QueueWorkers {
   Future<void> shutdown([bool keep = false]) async {
     _closing = true;
     _stopping = !keep;
+    final closing = <Future<void>>[];
     _screenTimer.cancel();
     _usageTimer.cancel();
     _saveTimer.cancel();
@@ -1224,16 +1125,26 @@ class WorkerManager implements QueueWorkers {
       _scanUsage(w);
       // Before the process goes, so the next office shows what it was doing, not how it was stopped.
       if (w.unsaved) _saveScrollbackOf(w);
+      // A DSH child cannot outlive the office the way a hosted PTY can: close its session quiescently,
+      // and let the next office mark it offline and resume it (see docs/dsh-acp-integration.md).
+      final session = w.dsh;
+      if (session != null) {
+        w.dsh = null;
+        closing.add(session.close());
+      }
       if (keep && w.pty?.id != null) continue;
       // A restart only takes this one down because it runs in-process: the next office carries on its turn.
       if (keep && _midTurn(w)) w.interrupted = true;
       try {
         w.pty?.kill();
+        // Its exit won't be heard.
+        if (w.pty != null) _adapterOf(w.info)?.exited(_handleOf(w), _cwd(w.info));
       } catch (_) {
         // ignore
       }
     }
     _persist();
+    await Future.wait(closing);
     if (keep) {
       await _host.detach();
     } else {
@@ -1245,6 +1156,12 @@ class WorkerManager implements QueueWorkers {
 
   void _launch(_Worker w, String? prompt, String? resumeSessionId) {
     final info = w.info;
+    // Its folder was deleted meanwhile: it waits, marked lost, for someone to rebuild it or send it home.
+    if (_checkLost(w)) {
+      info.status = WorkerStatus.exited;
+      _emitUpdate(w);
+      return;
+    }
     // The new terminal starts with what the last one showed (on a resume), or with what was saved
     // when the office last stopped, so earlier output is still there to scroll back to and search.
     final old = w.term;
@@ -1260,44 +1177,30 @@ class WorkerManager implements QueueWorkers {
 
     final shell = _env['SHELL'] ?? '/bin/bash';
     final isShell = info.kind == WorkerKind.shell;
-    final provider = info.provider;
-    final isClaude = !isShell && provider == AgentProvider.claude;
-    final isOpenCode = !isShell && provider == AgentProvider.opencode;
-    final isCodex = !isShell && provider == AgentProvider.codex;
-    final configured = !isShell && provider == defaultProvider;
+    final adapter = _adapterOf(info);
+    final configured = !isShell && info.provider == defaultProvider;
     final station = deskById[info.deskId]?.station;
+    final cwd = _cwd(info);
     final command = _command(info);
     final commandPath = isShell ? null : (configured ? _agentPath : resolveCommand(command, _env));
-    var args = isShell ? ['-l'] : (configured ? [..._agentArgs] : <String>[]);
-    if (isClaude) {
-      args.insertAll(0, ['--settings', _settingsPath]);
-      // A model/effort chosen for this worker overrides whatever --agent-args set office-wide.
-      if (info.model != null) args.addAll(['--model', info.model!]);
-      if (info.effort != null) args.addAll(['--effort', info.effort!.wire]);
-      // The queue agent only ever adds to the queue: without these it can't touch the checkout's files.
-      if (station == StationKind.queue) args.addAll(['--disallowedTools', ...queueAgentDisallowedTools]);
-      if (resumeSessionId != null) args.addAll(['--resume', resumeSessionId]);
-      // `--` so a prompt like "- fix login" is never parsed as a CLI option.
-      if (prompt != null && prompt.isNotEmpty) args.addAll(['--', prompt]);
-    } else if (isOpenCode) {
-      if (resumeSessionId != null || info.model != null) args = withoutOpenCodeModel(args);
-      if (resumeSessionId == null && info.model != null) args.addAll(['--model', info.model!]);
-      if (resumeSessionId != null) args.addAll(['--session', resumeSessionId]);
-      if (prompt != null && prompt.isNotEmpty) args.addAll(['--prompt', prompt]);
-    } else if (isCodex) {
-      args.addAll([...codexHookArgs(_office), '--no-alt-screen']);
-      if (resumeSessionId != null) args.addAll(['resume', resumeSessionId]);
-      if (prompt != null && prompt.isNotEmpty) args.addAll(['--', prompt]);
-    }
-    if (isCodex) {
-      w.codexTools.clear();
-      w.codexPending.clear();
-      w.codexPermissionUnknown = false;
-    }
-    if (isOpenCode || isCodex) {
-      w.hookToken = _randomHex(16);
-      w.openCodeError = false;
-    }
+    final base = isShell ? ['-l'] : (configured ? [..._agentArgs] : <String>[]);
+    // Its provider's command line, and anything it sets for this run (see ProviderAdapter.launch).
+    final plan = adapter != null
+        ? adapter.launch(
+            LaunchInput(
+              h: _handleOf(w),
+              args: base,
+              prompt: prompt,
+              resumeSessionId: resumeSessionId,
+              station: station,
+              cwd: cwd,
+              setup: _setups[adapter.id],
+              env: _env,
+            ),
+          )
+        : LaunchPlan(args: base);
+    final args = plan.args;
+    if (plan.rotateToken) w.hookToken = _randomHex(16);
     final env = childEnv(_env)
       ..addAll({
         'TERM': 'xterm-256color',
@@ -1305,26 +1208,69 @@ class WorkerManager implements QueueWorkers {
         'AGENT_OFFICE_WORKER_ID': info.id,
         'AGENT_OFFICE_HOOK_URL': _hook.url,
         'AGENT_OFFICE_HOOK_TOKEN': w.hookToken,
-      });
-    // A board agent reaches the queue with the `agent-office queue` command, whichever agent it runs.
-    final queueBin = _queueBin;
-    if (station != null && queueBin != null) {
+      })
+      ..addAll(plan.env ?? const {});
+    // A workspace isn't a repository, but it's inside this floor's checkout: git run in it must not
+    // find that checkout (and switch its branch, say) instead of saying it's no repository.
+    if (info.repos?.isNotEmpty ?? false) {
+      env['GIT_CEILING_DIRECTORIES'] = [
+        p.dirname(cwd),
+        if (env['GIT_CEILING_DIRECTORIES']?.isNotEmpty ?? false) env['GIT_CEILING_DIRECTORIES']!,
+      ].join(':');
+    }
+    // Whichever agent it runs, a worker reaches the office's workers with `office-workers`, and a
+    // board agent the queue with `agent-office queue`.
+    final officeBin = _officeBin;
+    if (officeBin != null) {
       final path = env['PATH'];
-      env['PATH'] = path != null && path.isNotEmpty ? '$queueBin:$path' : queueBin;
+      env['PATH'] = path != null && path.isNotEmpty ? '$officeBin:$path' : officeBin;
+    }
+    final owner = w.owner;
+    final runAs = _runAs;
+    if (owner != null && runAs != null) {
+      if (adapter?.signIn != null && !runAs.claudeReady(owner)) {
+        _startFailed(
+          w,
+          "whoever hired ${info.name} (${info.createdBy}) isn't signed in to Claude — they can sign in under ☰ → 🔐 "
+          'Your sign-ins, then press R here',
+        );
+        return;
+      }
+      runAs.apply(owner, env, [_dir, cwd]);
+    }
+    adapter?.usage?.locate?.call(_handleOf(w), cwd, env);
+
+    if (adapter?.transport == ProviderTransport.acp) {
+      // No PTY and no argv for prompts or resume: the office owns an ACP connection instead, and
+      // renders its updates into this same terminal (see dsh.dart).
+      final file = commandPath ?? shell;
+      final acpArgs = commandPath != null
+          ? args
+          : [
+              '-l',
+              '-i',
+              '-c',
+              ['exec', command, for (final a in args) shellQuote(a)].join(' '),
+            ];
+      _launchAcp(
+        w,
+        term,
+        file: file,
+        args: acpArgs,
+        cwd: cwd,
+        env: env,
+        resumeSessionId: resumeSessionId,
+        prompt: prompt,
+      );
+      _emitUpdate(w);
+      _persist();
+      return;
     }
 
-    final cwd = _cwd(info);
-    if (isCodex) w.codexHome = _codexHome(cwd, env);
     Pty proc;
     try {
       if (!Directory(cwd).existsSync()) throw _RunError('working directory is gone: $cwd');
-      if (isOpenCode) {
-        env['AGENT_OFFICE_SESSION_ID'] = resumeSessionId ?? '';
-        env['OPENCODE_CONFIG_CONTENT'] = mergeOpenCodeConfigContent(
-          env['OPENCODE_CONFIG_CONTENT'],
-          openCodePluginSpecifier(_openCodePlugin),
-        );
-      }
+      plan.finishEnv?.call(env);
       // The host keeps its own copy of the screen for the next office: it starts with the same history.
       SpawnOpts opts(String file, List<String> args) =>
           SpawnOpts(file: file, args: args, cwd: cwd, env: env, cols: info.cols, rows: info.rows, prelude: prelude);
@@ -1341,7 +1287,8 @@ class WorkerManager implements QueueWorkers {
       _startFailed(w, _messageOf(err));
       return;
     }
-    if (!isClaude && !isCodex) info.status = WorkerStatus.idle;
+    // One that says itself when it's up (see ProviderAdapter.bootHint) starts out 'starting'.
+    if (adapter?.bootHint == null) info.status = WorkerStatus.idle;
     _follow(w, proc, term, resumeSessionId);
     _emitUpdate(w);
     _persist();
@@ -1366,19 +1313,20 @@ class WorkerManager implements QueueWorkers {
       info.acked = saved.acked;
       info.waitingSince = saved.waitingSince;
     }
-    if (info.provider == AgentProvider.codex) w.codexHome = _codexHome(_cwd(info), childEnv(_env));
+    final adapter = _adapterOf(info);
+    adapter?.usage?.locate?.call(_handleOf(w), _cwd(info), childEnv(_env));
     _follow(w, adopted.pty, term, null);
     // A turn that ended while the office was down says so with its Stop hook, which retries until
     // the office is back. Claude's progress report, where it gives one, says a turn is still going.
-    if (adopted.busy && info.provider == AgentProvider.claude) _onProgress(w, true);
+    if (adopted.busy && (adapter?.screenProgress ?? false)) _onProgress(w, true);
     _emitUpdate(w);
   }
 
-  /// A fresh screen for a worker's terminal, reading Claude's progress and title off it.
+  /// A fresh screen for a worker's terminal, reading its progress reports (Claude's) and title off it.
   HeadlessTerminal _newTerm(_Worker w) {
     final term = HeadlessTerminal(cols: w.info.cols, rows: w.info.rows);
     // OSC 9;4 progress (Claude Code emits it): catches Esc-cancel, which fires no Stop hook.
-    if (w.info.provider == AgentProvider.claude) term.onProgress = (busy) => _onProgress(w, busy);
+    if (providerAdapter(w.info.provider)?.screenProgress ?? false) term.onProgress = (busy) => _onProgress(w, busy);
     term.onTitleChange = (title) => _setTitle(w, title);
     w.term?.dispose();
     w.fresh?.dispose();
@@ -1391,9 +1339,7 @@ class WorkerManager implements QueueWorkers {
 
   void _setTitle(_Worker w, String title) {
     final clean = title.replaceFirst(RegExp(r'^[^\p{L}\p{N}]+', unicode: true), '').trim();
-    if (clean.isNotEmpty &&
-        clean != w.info.title &&
-        !RegExp(r'^claude( code)?$', caseSensitive: false).hasMatch(clean)) {
+    if (clean.isNotEmpty && clean != w.info.title && !titleNoise(clean)) {
       w.info.title = clean;
       _emitUpdate(w);
     }
@@ -1402,8 +1348,7 @@ class WorkerManager implements QueueWorkers {
   /// Shows a worker's terminal output as it comes, and deals with the process ending.
   void _follow(_Worker w, Pty proc, HeadlessTerminal term, String? resumeSessionId) {
     final info = w.info;
-    final isClaude = info.kind == WorkerKind.agent && info.provider == AgentProvider.claude;
-    final isCodex = info.kind == WorkerKind.agent && info.provider == AgentProvider.codex;
+    final adapter = _adapterOf(info);
     w.pty = proc;
     proc.onData((data) {
       term.write(data);
@@ -1412,6 +1357,8 @@ class WorkerManager implements QueueWorkers {
       if (w.viewers.isNotEmpty) _events.data(info.id, data, w.viewers.keys.toList());
     });
     proc.onExit((e) {
+      // Not for a run it has since replaced.
+      if (w.pty == proc || w.pty == null) adapter?.exited(_handleOf(w), _cwd(info));
       if (w.pty != proc || _workers[info.id] != w) return;
       w.pty = null;
       final error = e.error;
@@ -1425,10 +1372,13 @@ class WorkerManager implements QueueWorkers {
         resume(info.id);
         return;
       }
-      if (isCodex && !_closing) _scheduleScan(w);
+      if ((adapter?.usage?.scanOnExit ?? false) && !_closing) _scheduleScan(w);
       // Resuming a conversation Claude no longer has ("No conversation found") exits before Claude
       // ever starts. Start a fresh one rather than leave the worker asleep.
-      if (isClaude && resumeSessionId != null && info.status == WorkerStatus.starting && !_closing) {
+      if ((adapter?.freshIfResumeFails ?? false) &&
+          resumeSessionId != null &&
+          info.status == WorkerStatus.starting &&
+          !_closing) {
         _events.toast("${info.name}'s last conversation couldn't be resumed — starting a fresh one", ToastLevel.warn);
         _launch(w, null, null);
         return;
@@ -1447,21 +1397,119 @@ class WorkerManager implements QueueWorkers {
       w.unsaved = true;
       _emitUpdate(w);
       _persist();
+      unawaited(_syncBranch(w));
     });
     // SessionStart fires as soon as Claude can take input. Still silent after a while means it is
     // blocked on a human: folder trust dialog, login, first-run onboarding. Flag it so it jumps.
     Timer(_bootGrace, () {
       if (_closing || info.status != WorkerStatus.starting || w.pty != proc) return;
-      if (isClaude || isCodex) {
+      final hint = adapter?.bootHint;
+      if (hint != null) {
         w.bootBlocked = true;
-        info.activity = isCodex
-            ? 'Open the terminal: complete login and review Office hooks in /hooks'
-            : 'Waiting on a setup prompt (trust / login) — open the terminal';
+        info.activity = hint;
         _setStatus(w, WorkerStatus.needsInput);
       } else {
         _setStatus(w, WorkerStatus.idle);
       }
     });
+  }
+
+  /// Starts (or resumes) a worker that runs over ACP rather than in a terminal (DeepSeek Harness, see
+  /// ProviderAdapter.transport). The session renders its transcript into the worker's terminal and
+  /// reports status, acted-out actions, usage and its session id; the office answers permission
+  /// requests from whoever is typing (see dsh.dart). Upstream's workers/acp.ts.
+  void _launchAcp(
+    _Worker w,
+    HeadlessTerminal term, {
+    required String file,
+    required List<String> args,
+    required String cwd,
+    required Map<String, String> env,
+    String? resumeSessionId,
+    String? prompt,
+  }) {
+    final info = w.info;
+    late final DshSession session;
+    session = DshSession(
+      DshLaunch(
+        file: file,
+        args: args,
+        cwd: cwd,
+        env: env,
+        model: info.model,
+        effort: info.effort,
+        resumeSessionId: resumeSessionId,
+        firstPrompt: prompt,
+      ),
+      DshEvents(
+        output: (data) {
+          if (w.dsh != session) return;
+          term.write(data);
+          w.screenDirty = true;
+          w.unsaved = true;
+          if (w.viewers.isNotEmpty) _events.data(info.id, data, w.viewers.keys.toList());
+        },
+        status: (status) {
+          if (w.dsh == session) _setStatus(w, status);
+        },
+        action: (action) {
+          if (w.dsh != session || info.action == action) return;
+          info.action = action;
+          _emitUpdate(w);
+        },
+        usage: (usage) {
+          if (w.dsh != session) return;
+          info.usage = usage;
+          _emitUpdate(w);
+          _persist();
+        },
+        session: (sessionId) {
+          if (w.dsh != session || info.sessionId == sessionId) return;
+          info.sessionId = sessionId;
+          _emitUpdate(w);
+          _persist();
+        },
+        prompted: (text) {
+          // A line typed into the terminal: there are no hooks for DSH, so the card learns from here.
+          if (w.dsh != session) return;
+          _notePrompt(w, text);
+          _emitUpdate(w);
+        },
+        exit: (code, error, quiet) => _acpExited(w, session, term, code, error, quiet),
+      ),
+    );
+    w.dsh = session;
+    session.start();
+  }
+
+  /// A DeepSeek Harness child ended: while the office is up, its desk says so and R resumes it.
+  void _acpExited(_Worker w, DshSession session, HeadlessTerminal term, int? code, String? error, bool quiet) {
+    final info = w.info;
+    if (w.dsh != session || _workers[info.id] != w) return; // sent home: stay quiet
+    w.dsh = null;
+    // The office is going down: the next office marks this worker offline and resumes it, so its
+    // status must stay as it was (see the restart difference in docs/dsh-acp-integration.md).
+    if (quiet || _closing) return;
+    void show(String text) {
+      term.write(text);
+      if (w.viewers.isNotEmpty) _events.data(info.id, text, w.viewers.keys.toList());
+    }
+
+    if (error != null && error.isNotEmpty) {
+      show('\r\n\x1b[31m[DeepSeek Harness: ${terminalSafe(_truncate(error, 300)).replaceAll('\n', ' ')}]\x1b[0m\r\n');
+      // It never got as far as a session: most often `dsh` is missing, or the profile will not boot.
+      if (info.sessionId == null) {
+        _events.toast('Could not start ${_command(info)}: ${_truncate(error, 200)}', ToastLevel.error);
+      }
+    }
+    info.exitCode = code ?? -1;
+    info.status = WorkerStatus.exited;
+    final hint = info.sessionId != null ? ' — press R to resume' : '';
+    show('\r\n\x1b[2m[${info.name} exited with code ${code ?? -1}$hint]\x1b[0m\r\n');
+    w.screenDirty = true;
+    w.unsaved = true;
+    _emitUpdate(w);
+    _persist();
   }
 
   void _startFailed(_Worker w, String message) {
@@ -1478,12 +1526,16 @@ class WorkerManager implements QueueWorkers {
   }
 
   /// What a worker's terminal runs: the shell, the configured agent command, or another provider's CLI.
-  String _command(_Info info) {
+  String _command(LiveInfo info) {
     if (info.kind == WorkerKind.shell) return _env['SHELL'] ?? '/bin/bash';
-    return info.provider == defaultProvider ? _agentCmd : info.provider?.wire ?? _agentCmd;
+    return providerCommand(info.provider ?? defaultProvider, _agentCmd);
   }
 
-  String _cwd(_Info info) => info.worktree != null ? p.join(_dir, info.worktree!.path) : _dir;
+  /// Where a worker works: its worktree, a workspace for a worker across repositories, or the project itself.
+  String _cwd(LiveInfo info) {
+    final rel = workspaceOf(info.worktree, info.repos);
+    return rel != null ? p.join(_dir, rel) : _dir;
+  }
 
   /// Hooks fire in bursts (every tool call); one read a moment later covers the whole burst.
   void _scheduleScan(_Worker w) {
@@ -1497,20 +1549,13 @@ class WorkerManager implements QueueWorkers {
   /// Picks up what the session logged since last time and books the difference.
   void _scanUsage(_Worker w) {
     final info = w.info;
-    if (info.kind == WorkerKind.agent && info.provider == AgentProvider.codex) {
-      final transcript = w.codexTranscript, home = w.codexHome, session = info.sessionId;
-      if (_workers[info.id] != w || transcript == null || home == null || session == null) return;
-      final usage = w.codexUsage.read(transcript, session, home);
-      if (usage != null && jsonEncode(usage.toJson()) != jsonEncode(info.usage?.toJson())) {
-        info.usage = usage;
-        _emitUpdate(w);
-        _persist();
-      }
+    final usage = _adapterOf(info)?.usage;
+    final scan = usage?.scan;
+    if (scan != null) {
+      if (_workers[info.id] == w) scan(_handleOf(w));
       return;
     }
-    if (info.kind != WorkerKind.agent || !_claudeLike(info) || w.tracker.transcript == null || _workers[info.id] != w) {
-      return;
-    }
+    if (usage == null || !usage.transcript || w.tracker.transcript == null || _workers[info.id] != w) return;
     try {
       if (!scanTracker(w.tracker)) return;
     } catch (_) {
@@ -1552,7 +1597,9 @@ class WorkerManager implements QueueWorkers {
     }
     _emitUpdate(w);
     // What a restarted office picks the worker back up as, should its terminal outlive this one.
-    if (w.pty?.id != null) _persist();
+    if (w.pty?.id != null || w.dsh != null) _persist();
+    // At rest: it may have made a branch of its own this turn, and opened its PR from there.
+    if (status == WorkerStatus.done || status == WorkerStatus.idle) unawaited(_syncBranch(w));
   }
 
   bool _syncViewers(_Worker w) {
@@ -1603,64 +1650,52 @@ class WorkerManager implements QueueWorkers {
     }
   }
 
-  /// Claude can sit at its prompt without being usable: stuck on a first-run screen, or not signed
-  /// in on this machine. Flag that as needing a human, and clear it once the screen moves on.
+  /// An agent can sit at its prompt without being usable: Claude stuck on a first-run screen, or not
+  /// signed in on this machine (see ProviderAdapter.screenBlocked). Flag that as needing a human, and
+  /// clear it once the screen moves on.
   void _checkBlocked(_Worker w) {
     final term = w.term;
-    if (w.info.kind != WorkerKind.agent || term == null || !_claudeLike(w.info)) return;
+    final blockedBy = _adapterOf(w.info)?.screenBlocked;
+    if (term == null || blockedBy == null) return;
     final s = w.info.status;
     if (s != WorkerStatus.starting && s != WorkerStatus.idle && !(w.bootBlocked && s == WorkerStatus.needsInput)) {
       return;
     }
     // Only this run's output counts: a "Not logged in" in the scrollback from before is old news.
     final text = term.screenText(term.isAlt ? 0 : max(0, w.fresh?.line ?? 0));
-    final loggedOut = _notLoggedIn.hasMatch(text);
-    final blocked = loggedOut || (_setupPrompt.hasMatch(text) && (s == WorkerStatus.starting || w.bootBlocked));
-    if (blocked && s != WorkerStatus.needsInput) {
+    final blocked = blockedBy(text, s == WorkerStatus.starting || w.bootBlocked);
+    if (blocked != null && s != WorkerStatus.needsInput) {
       w.bootBlocked = true;
-      w.info.activity = loggedOut
-          ? "Claude isn't signed in on this machine — open the terminal and type /login"
-          : 'Waiting on a setup prompt (trust / login) — open the terminal';
+      w.info.activity = blocked;
       _setStatus(w, WorkerStatus.needsInput);
-    } else if (!blocked && w.bootBlocked && s == WorkerStatus.needsInput) {
+    } else if (blocked == null && w.bootBlocked && s == WorkerStatus.needsInput) {
       w.bootBlocked = false;
       w.info.activity = null;
       _setStatus(w, WorkerStatus.idle);
     }
   }
 
-  /// Claude Code's settings for the workers: every hook POSTs to the office (see hook.dart).
-  void _writeHookSettings() {
-    final hooks = <String, Object>{
-      for (final event in _claudeHookEvents)
-        event: [
-          {
-            'hooks': [
-              {'type': 'command', 'command': claudeHookCommand(event, office: _office)},
-            ],
-          },
-        ],
-    };
-    _writePrivate(_settingsPath, const JsonEncoder.withIndent('  ').convert({'hooks': hooks}));
-  }
-
-  /// Writes the `agent-office` command into the data dir's bin/, running the office's own executable,
-  /// and returns that directory: on a board agent's PATH, `agent-office queue …` reaches the queue.
-  /// Rewritten on every start, so after an upgrade it runs the new install.
-  String? _writeQueueCommand() {
+  /// Writes the `agent-office` and `office-workers` commands into the data dir's bin/, each running
+  /// the office's own executable, and returns that directory: on a board agent's PATH,
+  /// `agent-office queue …` reaches the queue, and on every worker's, `office-workers …` the office's
+  /// workers (see workers_cmd.dart). Rewritten on every start, so after an upgrade they run the new install.
+  String? _writeOfficeCommands() {
     if (Platform.isWindows) return null;
     try {
       final dir = p.join(_dataDir, 'bin');
       Directory(dir).createSync(recursive: true);
       chmodSync(dir, 0x1c0); // 0700
-      final file = p.join(dir, 'agent-office');
-      final tmp = '$file.tmp';
-      File(tmp).writeAsStringSync(
-        "#!/bin/sh\n# Agent Office, for the board agents: agent-office queue list|add|remove.\n"
-        'exec ${_office.map(shellQuote).join(' ')} "\$@"\n',
-      );
-      chmodSync(tmp, 0x1c0); // 0700
-      File(tmp).renameSync(file);
+      final office = _office.map(shellQuote).join(' ');
+      for (final (name, what, exec) in [
+        ('agent-office', 'Agent Office, for the board agents: agent-office queue list|add|remove.', office),
+        ('office-workers', "Agent Office's workers, for every worker: office-workers --help.", '$office workers'),
+      ]) {
+        final file = p.join(dir, name);
+        final tmp = '$file.tmp';
+        File(tmp).writeAsStringSync('#!/bin/sh\n# $what\nexec $exec "\$@"\n');
+        chmodSync(tmp, 0x1c0); // 0700
+        File(tmp).renameSync(file);
+      }
       return dir;
     } catch (_) {
       return null;
@@ -1679,6 +1714,7 @@ class WorkerManager implements QueueWorkers {
       for (final w in _workers.values)
         {
           'id': w.info.id,
+          'owner': ?w.owner,
           'kind': w.info.kind.wire,
           'provider': ?w.info.provider?.wire,
           'model': ?w.info.model,
@@ -1695,11 +1731,13 @@ class WorkerManager implements QueueWorkers {
           'activity': ?w.info.activity,
           'task': ?w.info.task?.toJson(),
           'pr': ?w.info.pr?.toJson(),
+          if (w.info.pastPrs.isNotEmpty) 'pastPrs': w.info.pastPrs,
+          if (w.info.repos case final repos?) 'repos': [for (final r in repos) r.toJson()],
           'meeting': ?w.info.meeting,
+          'workedMs': ?workedMs(w.info),
           if (w.info.kind == WorkerKind.agent) 'tracker': w.tracker.toJson(),
-          if (w.info.provider == AgentProvider.opencode || w.info.provider == AgentProvider.codex)
-            'usage': ?w.info.usage?.toJson(),
-          if (w.info.provider == AgentProvider.codex) 'codexTranscript': ?w.codexTranscript,
+          if (providerAdapter(w.info.provider)?.usage?.persisted ?? false) 'usage': ?w.info.usage?.toJson(),
+          ...?providerAdapter(w.info.provider)?.usage?.save?.call(w.state),
           // A terminal still running in the host, to pick back up after a restart. Its hooks keep the token.
           'hookToken': w.hookToken,
           if (w.pty?.id case final ptyId?)
@@ -1714,7 +1752,7 @@ class WorkerManager implements QueueWorkers {
         },
     ];
     try {
-      _writePrivate(_statePath, const JsonEncoder.withIndent('  ').convert(saved));
+      writePrivate(_statePath, const JsonEncoder.withIndent('  ').convert(saved));
     } catch (_) {
       // disk issues shouldn't take the office down
     }
@@ -1738,19 +1776,15 @@ class WorkerManager implements QueueWorkers {
             ? null
             : AgentProvider.tryParse(s['provider']) ??
                   (tracker.transcript != null ? AgentProvider.claude : defaultProvider);
-        final claudeLike = provider == AgentProvider.claude || provider == AgentProvider.custom;
+        final usage = providerAdapter(provider)?.usage;
         final pr = s['pr'];
         final worktree = s['worktree'];
-        final info = _Info(
+        final info = LiveInfo(
           id: id,
           kind: shell ? WorkerKind.shell : WorkerKind.agent,
           provider: provider,
-          model:
-              (provider == AgentProvider.opencode && isValidOpenCodeModel(s['model'])) ||
-                  (provider == AgentProvider.claude && isClaudeModel(s['model']))
-              ? s['model'] as String
-              : null,
-          effort: provider == AgentProvider.claude ? AgentEffort.tryParse(s['effort']) : null,
+          model: savedModel(provider, s['model']),
+          effort: savedEffort(provider, s['effort']),
           deskId: deskId,
           name: _str(s['name']) ?? 'Worker',
           color: _str(s['color']) ?? _colors[0],
@@ -1766,18 +1800,29 @@ class WorkerManager implements QueueWorkers {
           pr: pr is Map && pr['number'] is num && pr['url'] is String
               ? PrRef(number: (pr['number'] as num).toInt(), url: pr['url'] as String)
               : null,
-          usage: provider == AgentProvider.opencode || provider == AgentProvider.codex
+          usage: usage != null && usage.persisted
               ? reportedUsage(s['usage'])
-              : claudeLike && tracker.transcript != null
+              : usage != null && usage.transcript && tracker.transcript != null
               ? trackerUsage(tracker)
               : null,
           meeting: s['meeting'] is String && deskById[deskId]!.room ? s['meeting'] as String : null,
+          repos: worktree is Map ? validRepos(s['repos']) : null,
+          workedMs: s['workedMs'] is num && (s['workedMs'] as num).isFinite && (s['workedMs'] as num) > 0
+              ? (s['workedMs'] as num).toInt()
+              : null,
         );
+        final past = s['pastPrs'];
+        if (past is List) {
+          info.pastPrs = [
+            for (final n in past)
+              if (n is num) n.toInt(),
+          ];
+        }
         final token = s['hookToken'];
         final w = _Worker(info, tracker, token is String && token.isNotEmpty ? token : null);
-        if (provider == AgentProvider.codex && s['codexTranscript'] is String) {
-          w.codexTranscript = s['codexTranscript'] as String;
-        }
+        final owner = s['owner'];
+        if (owner is String && owner.isNotEmpty) w.owner = owner;
+        usage?.restore?.call(w.state, s);
         w.screenDirty = false;
         final pty = s['pty'];
         if (pty is Map && pty['id'] is String) {
@@ -1807,10 +1852,12 @@ class WorkerManager implements QueueWorkers {
 
 // -----------------------------------------------------------------------------------------------
 
+/// What starting a worker whose worktree was deleted (see WorkerInfo.lost) says instead.
+String lostMessage(LiveInfo info) =>
+    "${info.name}'s worktree ${workspaceOf(info.worktree, info.repos)} was deleted outside agent-office — rebuild it or send ${info.name} home from its desk";
+
 /// In the middle of a turn: working, or asking something (not stuck on a trust or login screen).
-bool _midTurn(_Worker w) =>
-    w.info.kind == WorkerKind.agent &&
-    (w.info.status == WorkerStatus.working || (w.info.status == WorkerStatus.needsInput && !w.bootBlocked));
+bool _midTurn(_Worker w) => midTurn(w.info, w.bootBlocked);
 
 final _random = Random.secure();
 
@@ -1823,76 +1870,11 @@ String? _str(Object? v) => v is String ? v : null;
 
 List<String> _lastN(List<String> xs, int n) => xs.length > n ? xs.sublist(xs.length - n) : xs;
 
-WorktreeRef _ref(WorkerWorktree wt) => WorktreeRef(path: wt.path, branch: wt.branch, base: wt.base);
-
-/// Writes a file owner-only, whole: to `<file>.tmp`, then renamed over it.
-void _writePrivate(String file, String data) {
-  final tmp = '$file.tmp';
-  File(tmp).writeAsStringSync(data, flush: true);
-  chmodSync(tmp, 0x180); // 0600
-  File(tmp).renameSync(file);
-}
-
-/// Where a Codex worker's sessions are logged, for reading its usage.
-String _codexHome(String cwd, Map<String, String> env) {
-  final configured = env['CODEX_HOME'];
-  final home = configured != null && configured.isNotEmpty
-      ? configured
-      : p.join(env['HOME'] ?? Platform.environment['HOME'] ?? '', '.codex');
-  return p.normalize(p.join(p.absolute(cwd), home));
-}
-
-/// [args] without any `--model`/`-m` option, for an OpenCode launch that picks its own model (or
-/// resumes a session, which keeps the one it had).
-List<String> withoutOpenCodeModel(List<String> args) {
-  final clean = <String>[];
-  for (var i = 0; i < args.length; i++) {
-    final arg = args[i];
-    if (arg == '--model' || arg == '-m') {
-      if (i + 1 < args.length && !args[i + 1].startsWith('-')) i++;
-      continue;
-    }
-    if (arg.startsWith('--model=') || (arg.startsWith('-m') && arg.length > 2)) continue;
-    clean.add(arg);
-  }
-  return clean;
-}
-
-/// The office's environment (or [base]), minus anything that would make a child think it's a nested session.
-Map<String, String> childEnv([Map<String, String>? base]) => {
-  for (final e in (base ?? Platform.environment).entries)
-    if (!_scrubbed(e.key)) e.key: e.value,
-};
+WorktreeRef _ref(WorkerWorktree wt) => WorktreeRef(path: wt.path, branch: wt.branch, base: wt.base, made: wt.made);
 
 WorkerTask? _validTask(Object? t) => t is Map && t['name'] is String && t['summary'] is String
     ? WorkerTask(name: t['name'] as String, summary: t['summary'] as String)
     : null;
-
-OpenCodeStatusEvent? _openCodeEvent(Object? v) {
-  if (v is! Map) return null;
-  final type = v['type'], sessionId = v['sessionId'];
-  final status = OpenCodeHookStatus.tryParse(v['status']);
-  if (type is! String || !OpenCodeStatusEvent.types.contains(type)) return null;
-  if (sessionId is! String || sessionId.isEmpty || status == null || v['status'] is! String) return null;
-  for (final k in ['prompt', 'tool', 'detail']) {
-    if (v[k] != null && v[k] is! String) return null;
-  }
-  return OpenCodeStatusEvent(
-    type: type,
-    sessionId: sessionId,
-    status: status,
-    prompt: v['prompt'] as String?,
-    tool: v['tool'] as String?,
-    detail: v['detail'] as String?,
-  );
-}
-
-/// First-run screens Claude shows before it can take a prompt.
-final _setupPrompt = RegExp(
-  r'trust this folder|Do you trust the files|Select login method|Choose the text style|Press Enter to continue|Bypass Permissions mode',
-  caseSensitive: false,
-);
-final _notLoggedIn = RegExp(r'Not logged in\s*·\s*Run /login|Invalid API key|Please run /login', caseSensitive: false);
 
 bool _executable(String file) {
   try {
@@ -1938,17 +1920,7 @@ String? _onPath(String cmd, Map<String, String> env) {
   return null;
 }
 
-String _describeTool(Map payload) {
-  final name = payload['tool_name'] ?? 'tool';
-  final input = payload['tool_input'];
-  Object? field(String k) => input is Map ? input[k] : null;
-  final detail =
-      field('command') ?? field('file_path') ?? field('pattern') ?? field('url') ?? field('description') ?? '';
-  final hasDetail = detail is String ? detail.isNotEmpty : detail != false && detail != 0;
-  return _truncate(hasDetail ? '$name: $detail' : '$name', 80);
-}
-
-String _offlineBanner(_Info info) {
+String _offlineBanner(LiveInfo info) {
   final hint = info.kind == WorkerKind.shell
       ? ' Press R to restart it.'
       : info.sessionId != null
@@ -1971,11 +1943,18 @@ String _messageOf(Object err) => switch (err) {
   _ => '$err',
 };
 
-/// Runs a command without blocking the office; throws with the last lines of its stderr.
-Future<String> _run(String cmd, List<String> args, String cwd, [int timeout = 30000]) async {
+/// Runs a command without blocking the office (with [env]: as someone else, with exactly that
+/// environment); throws with the last lines of its stderr.
+Future<String> _run(String cmd, List<String> args, String cwd, [int timeout = 30000, Map<String, String>? env]) async {
   Process proc;
   try {
-    proc = await Process.start(cmd, args, workingDirectory: cwd);
+    proc = await Process.start(
+      cmd,
+      args,
+      workingDirectory: cwd,
+      environment: env,
+      includeParentEnvironment: env == null,
+    );
   } on ProcessException catch (e) {
     throw _RunError(e.message.isNotEmpty ? e.message : '$cmd failed');
   }
@@ -1997,62 +1976,6 @@ Future<String> _run(String cmd, List<String> args, String cwd, [int timeout = 30
     throw _RunError(last.isNotEmpty ? last : '$cmd failed');
   }
   return stdout.trim();
-}
-
-Future<PrRef?> _findOpenPr(String branch, String cwd) async {
-  final out = await gh([
-    'pr',
-    'list',
-    '--head',
-    branch,
-    '--state',
-    'open',
-    '--limit',
-    '1',
-    '--json',
-    'number,url',
-  ], cwd);
-  final list = jsonDecode(out.trim().isEmpty ? '[]' : out);
-  if (list is! List || list.isEmpty || list.first is! Map) return null;
-  final found = list.first as Map;
-  return PrRef(number: (found['number'] as num).toInt(), url: '${found['url']}');
-}
-
-/// A pull request title and body from what the worker was asked to do. The title is the issue's
-/// title when the task came off the issues board, else the task's first line; the body carries the
-/// task, the commits, a "Closes #n" when the task asked for one, and which desk it came from.
-({String title, String body}) _draftPr(_Info info, List<String> commits, String by) {
-  final task = (info.prompt ?? '').replaceAll(RegExp(r'\r\n?'), '\n').trim();
-  final firstLine = task.split('\n').map((l) => l.trim()).firstWhere((l) => l.isNotEmpty, orElse: () => '');
-  // The issues board hands work over as: Work on GitHub issue #12: "Title".
-  final issue = RegExp(r'\bissue #(\d+):\s*["“](.+?)["”]\.?\s*$', caseSensitive: false).firstMatch(firstLine);
-  String? nonEmpty(String? s) => s != null && s.isNotEmpty ? s : null;
-  final title = _truncate(
-    nonEmpty(issue?.group(2)) ??
-        nonEmpty(firstLine.replaceFirst(RegExp(r'[.:;,]+$'), '')) ??
-        nonEmpty(commits.isNotEmpty ? commits.first.replaceFirst(RegExp(r'^\S+\s+'), '') : null) ??
-        nonEmpty(info.worktree?.branch) ??
-        info.name,
-    _prTitleMax,
-  );
-  final closes =
-      RegExp(
-        r'\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[^\n]{0,40}?#(\d+)',
-        caseSensitive: false,
-      ).firstMatch(task)?.group(1) ??
-      issue?.group(1);
-  final parts = <String>[];
-  if (task.isNotEmpty) parts.add('## Task\n\n${task.length > _prTaskMax ? '${task.substring(0, _prTaskMax)}…' : task}');
-  String commitLine(String c) {
-    final i = c.indexOf(' ');
-    final hash = i < 0 ? c.substring(0, max(0, c.length - 1)) : c.substring(0, i);
-    return '- `$hash` ${c.substring(i + 1)}';
-  }
-
-  parts.add('## Commits\n\n${commits.map(commitLine).join('\n')}');
-  if (closes != null) parts.add('Closes #$closes');
-  parts.add('_Opened from Agent Office by $by · ${info.name} at ${deskById[info.deskId]?.label ?? info.deskId}_');
-  return (title: title, body: parts.join('\n\n'));
 }
 
 String _truncate(String s, int n) {

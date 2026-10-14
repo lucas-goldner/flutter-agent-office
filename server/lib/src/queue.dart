@@ -7,6 +7,7 @@ import 'package:office_shared/shared.dart';
 import 'package:path/path.dart' as p;
 
 import 'agents.dart';
+import 'worker_pr.dart' show RepoSource;
 
 /// What the queue needs from the worker manager. Narrow on purpose, so a smoke test can fake it.
 abstract interface class QueueWorkers {
@@ -16,6 +17,9 @@ abstract interface class QueueWorkers {
   AgentChoice? get officeDefault;
   List<WorkerInfo> list();
   bool deskOccupied(String deskId);
+
+  /// How many rows the floor's back office is built out, for its desks (see Wing).
+  int wing();
 
   /// The new worker, or why there's none.
   ({WorkerInfo? worker, String? error}) spawn(
@@ -27,10 +31,18 @@ abstract interface class QueueWorkers {
     AgentProvider provider, [
     String? model,
     AgentEffort? effort,
+    ({String id, WorkerWorktree? worktree})? meeting,
+    List<RepoSource> repos,
+
+    /// The account the task is for: its worker runs on that account's sign-ins.
+    String? owner,
   ]);
 
   /// Resolves with a line about what became of the worker's worktree.
   Future<({String? note, String? error})> kill(String id);
+
+  /// Fetches what a new worktree starts from; null when there's nothing to wait for (see Worktrees.fetch).
+  Future<void>? fetchBase();
 }
 
 class QueueEvents {
@@ -49,7 +61,9 @@ class QueueEvents {
   final void Function(String text, ToastLevel level) toast;
 
   /// Mark the issue as taken on GitHub, so the board moves it to In progress. Resolves to an error message when it can't.
-  final Future<String?> Function(int issue) claimIssue;
+  /// Marks the issue as taken on GitHub (as [owner], when it's an account's task), so the board moves it
+  /// to In progress. Resolves to an error message when it can't.
+  final Future<String?> Function(int issue, String? owner) claimIssue;
 
   /// Ask GitHub for fresh pull requests, to pick up the one a worker just opened.
   final void Function() refreshGitHub;
@@ -92,6 +106,7 @@ class _Task {
     required this.title,
     required this.prompt,
     required this.addedBy,
+    this.owner,
     required this.addedAt,
     required this.status,
     this.workerId,
@@ -112,6 +127,9 @@ class _Task {
   final String title;
   final String prompt;
   final String addedBy;
+
+  /// The account that queued it, whose sign-ins its worker runs on.
+  final String? owner;
   final int addedAt;
   TaskStatus status;
   String? workerId;
@@ -132,6 +150,7 @@ class _Task {
     title: title,
     prompt: prompt,
     addedBy: addedBy,
+    owner: owner,
     addedAt: addedAt,
     status: status,
     workerId: workerId,
@@ -181,6 +200,7 @@ class TaskQueue {
   int get limit => _maxWorkers;
 
   /// Queues a task. With no [provider], it runs on the office's default worker, model and effort included.
+  /// [owner] is the account adding it, whose sign-ins its worker will run on.
   String? add(
     String prompt,
     String by, [
@@ -189,6 +209,7 @@ class TaskQueue {
     AgentProvider? provider,
     String? model,
     AgentEffort? effort,
+    String? owner,
   ]) {
     if (provider == null) {
       final d = _workers.officeDefault ?? AgentChoice(provider: _workers.defaultProvider);
@@ -216,12 +237,13 @@ class TaskQueue {
     final task = _Task(
       id: _randomHex(6),
       provider: provider,
-      model: provider == AgentProvider.opencode || provider == AgentProvider.claude ? model : null,
-      effort: provider == AgentProvider.claude ? effort : null,
+      model: takesModel(provider) ? model : null,
+      effort: takesEffort(provider) ? effort : null,
       issue: issue,
       title: heading.length > 120 ? heading.substring(0, 120) : heading,
       prompt: clean,
       addedBy: by,
+      owner: owner,
       addedAt: _now(),
       status: TaskStatus.queued,
     );
@@ -286,6 +308,7 @@ class TaskQueue {
         title: t.title,
         prompt: t.prompt,
         addedBy: t.addedBy,
+        owner: t.owner,
         addedAt: _now(),
         status: TaskStatus.queued,
       ),
@@ -313,6 +336,18 @@ class TaskQueue {
 
   /// A worker changed. Cheap unless its status moved, which can free a slot or finish a task.
   void onWorker(WorkerInfo info) {
+    // It switched to a branch of its own (see WorkerManager.syncBranches): its task's pull request comes from there.
+    final branch = info.worktree?.branch;
+    var moved = false;
+    if (branch != null) {
+      for (final t in _tasks) {
+        if (t.workerId == info.id && t.branch != null && t.branch != branch) {
+          t.branch = branch;
+          moved = true;
+        }
+      }
+    }
+    if (moved) _changed();
     if (_lastStatus[info.id] == info.status) return;
     _lastStatus[info.id] = info.status;
     pump();
@@ -433,24 +468,15 @@ class TaskQueue {
   int _busyCount() => _tasks.where((t) => t.status == TaskStatus.running).length;
 
   /// A free desk, else a free bean bag.
-  String? _freeDesk() => nextFreeSeat(_workers.deskOccupied)?.id;
+  /// A free desk (in the back office too, as far as it's built), else a free bean bag.
+  String? _freeDesk() => nextFreeSeat(_workers.deskOccupied, _workers.wing())?.id;
 
   /// No desk or bean bag is free: send home a worker the queue hired whose task is finished (nobody
   /// is looking at its terminal), and return its seat. Workers with a linked PR go first — their work
   /// is delivered.
   String? _recycleDesk() {
-    final byId = {for (final w in _workers.list()) w.id: w};
-    final candidates =
-        [
-          for (final t in _tasks)
-            if (t.status == TaskStatus.done && t.workerId != null && byId.containsKey(t.workerId))
-              (t: t, w: byId[t.workerId]!),
-        ].where((c) => _finished.contains(c.w.status) && c.w.viewers.isEmpty).toList()..sort((a, b) {
-          final byPr = (b.t.pr != null ? 1 : 0) - (a.t.pr != null ? 1 : 0);
-          return byPr != 0 ? byPr : (a.t.finishedAt ?? 0) - (b.t.finishedAt ?? 0);
-        });
-    if (candidates.isEmpty) return null;
-    final pick = candidates.first;
+    final pick = _recyclable();
+    if (pick == null) return null;
     final done = _workers.kill(pick.w.id);
     _events.toast(
       '📋 ${pick.w.name} went home after ${_label(pick.t)} to make room for the next task',
@@ -465,6 +491,21 @@ class TaskQueue {
     return pick.w.deskId;
   }
 
+  /// The finished worker [_recycleDesk] would send home, if there is one.
+  ({_Task t, WorkerInfo w})? _recyclable() {
+    final byId = {for (final w in _workers.list()) w.id: w};
+    final candidates =
+        [
+          for (final t in _tasks)
+            if (t.status == TaskStatus.done && t.workerId != null && byId.containsKey(t.workerId))
+              (t: t, w: byId[t.workerId]!),
+        ].where((c) => _finished.contains(c.w.status) && c.w.viewers.isEmpty).toList()..sort((a, b) {
+          final byPr = (b.t.pr != null ? 1 : 0) - (a.t.pr != null ? 1 : 0);
+          return byPr != 0 ? byPr : (a.t.finishedAt ?? 0) - (b.t.finishedAt ?? 0);
+        });
+    return candidates.firstOrNull;
+  }
+
   void _seat() {
     var changed = false;
     for (final t in _tasks) {
@@ -477,7 +518,16 @@ class TaskQueue {
       // workers going home makes room. Over the limit (it was just lowered), it waits for people to send some home.
       final room = _events.room?.call() ?? double.infinity;
       if (room < 0) break;
-      final desk = (room > 0 ? _freeDesk() : null) ?? _recycleDesk();
+      final free = room > 0 ? _freeDesk() : null;
+      if (free == null && _recyclable() == null) break;
+      // Its worktree starts from what's on GitHub now, PRs merged since included: fetch that first,
+      // and come back to seat it once it's in.
+      final fetching = _useWorktree ? _workers.fetchBase() : null;
+      if (fetching != null) {
+        unawaited(fetching.then((_) => pump()));
+        break;
+      }
+      final desk = free ?? _recycleDesk();
       if (desk == null) break;
       final note = _useWorktree ? (_events.worktreeNote?.call() ?? prompts['queue.worktree']!.text) : '';
       final r = _workers.spawn(
@@ -489,6 +539,9 @@ class TaskQueue {
         t.provider ?? _workers.defaultProvider,
         t.model,
         t.effort,
+        null,
+        const [],
+        t.owner,
       );
       changed = true;
       final worker = r.worker;
@@ -515,7 +568,7 @@ class TaskQueue {
       final issue = t.issue;
       if (issue != null) {
         unawaited(
-          _events.claimIssue(issue).then((err) {
+          _events.claimIssue(issue, t.owner).then((err) {
             if (err != null && err.isNotEmpty) {
               _events.toast("Couldn't assign issue #$issue on GitHub: $err", ToastLevel.warn);
             }
@@ -568,16 +621,13 @@ class TaskQueue {
         final t = _Task(
           id: id,
           provider: provider,
-          model:
-              (provider == AgentProvider.opencode && isValidOpenCodeModel(s['model'])) ||
-                  (provider == AgentProvider.claude && isClaudeModel(s['model']))
-              ? s['model'] as String
-              : null,
-          effort: provider == AgentProvider.claude ? AgentEffort.tryParse(s['effort']) : null,
+          model: savedModel(provider, s['model']),
+          effort: savedEffort(provider, s['effort']),
           issue: s['issue'] is num ? (s['issue'] as num).toInt() : null,
           title: title,
           prompt: prompt,
           addedBy: s['addedBy'] is String ? s['addedBy'] as String : '?',
+          owner: s['owner'] is String && (s['owner'] as String).isNotEmpty ? s['owner'] as String : null,
           addedAt: s['addedAt'] is num ? (s['addedAt'] as num).toInt() : _now(),
           status: status,
           workerId: s['workerId'] is String ? s['workerId'] as String : null,

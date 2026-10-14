@@ -12,23 +12,30 @@ import 'config.dart' show excludeFromGit;
 import 'court.dart';
 import 'decor.dart';
 import 'docs.dart';
+import 'garage.dart';
+import 'floorplan.dart';
 import 'dog.dart';
 import 'github.dart';
+import 'jail.dart';
 import 'jukebox.dart';
-import 'leave_on_merge.dart' show landedWorkers;
+import 'leave_on_merge.dart' show Landed, landedWork, landedWorkers;
 import 'machine.dart' show Capacity;
 import 'meetings.dart';
 import 'prompts.dart';
 import 'queue.dart';
+import 'signins.dart' show GhRunAs;
 import 'usage.dart' show Ledger;
 import 'whiteboard.dart';
 import 'workers.dart';
-import 'worktrees.dart' show Worktrees;
+import 'worktrees.dart' show WorktreeCleanup, Worktrees;
 
 /// What a floor needs from the building around it.
 abstract interface class FloorContext {
   String get agentCmd;
   List<String> get agentArgs;
+
+  /// The DSH profile a DeepSeek Harness worker boots (`--dsh-profile`).
+  String get dshProfile;
   HookEnv get hook;
 
   /// Spend, across every floor.
@@ -63,6 +70,32 @@ abstract interface class FloorContext {
 
   /// ⚙️ Settings: a worker whose pull request merged goes home by itself.
   bool leaveOnMerge();
+
+  /// Another floor of the building: a worker across repositories works in its project too (see WorkerInfo.repos).
+  Floor? floor(String id);
+
+  /// This floor's pull requests came back: a worker on another floor with a repository here may have landed.
+  void pullsChanged(Floor floor);
+
+  /// Whether a worker on another floor works in this floor's project too.
+  bool lent(Floor floor);
+
+  /// Whether the building's map locks up workers sent home (see MapPlan.sendHome), instead of letting them go.
+  bool locksUp();
+
+  /// Workers hired by an account run on its own sign-ins (see signins.dart).
+  RunAs? get runAs;
+
+  /// How to run gh as an account: its own sign-in, the office's (neither set), or why it can't.
+  GhRunAs ghAs(String? owner);
+}
+
+/// The open pull request on a floor's board whose head is [branch].
+PrRef? _openPull(Floor floor, String branch) {
+  for (final pr in floor.github.pulls.items) {
+    if (pr.state == 'OPEN' && pr.headRefName == branch) return PrRef(number: pr.number, url: pr.url);
+  }
+  return null;
 }
 
 /// How long after a PR list or a worker's change the office looks for workers whose PR merged.
@@ -109,6 +142,10 @@ class Floor {
     excludeFromGit(def.dir);
     project = projectInfo(def.dir, def.name, _ctx.agentCmd, _ctx.agentArgs);
 
+    jail = Jail(dataDir);
+    // Before the workers and the dog: the back office's desks are only there once it's built.
+    plan = FloorPlanStore(dataDir);
+
     // Before the workers, so it hears about the ones who wake up needing input.
     dog = Dog(
       def.id,
@@ -117,6 +154,7 @@ class Floor {
         workers: () => _workers?.list() ?? const [],
         people: () => _ctx.peers(this),
         send: (state) => _ctx.emit(this, DogMsg(state)),
+        wing: () => plan.wing,
       ),
     );
 
@@ -137,9 +175,15 @@ class Floor {
           // Its turn ended, or whoever had its terminal open closed it: it may be free to go now.
           sendLandedHome();
         },
-        remove: (workerId) {
+        remove: (workerId, info) {
           _changes?.forget(workerId);
-          _ctx.emit(this, WorkerRemoveMsg(workerId));
+          // Sent home on a map that keeps workers (the castle locks them up, the station puts them out
+          // of its airlock): it's kept, for good (a meeting's workers aren't sent home when it's over,
+          // just let go).
+          final jail = info.meeting == null && _ctx.locksUp()
+              ? this.jail.add(id: info.id, name: info.name, color: info.color, workedMs: workedMsOf(info))
+              : null;
+          _ctx.emit(this, WorkerRemoveMsg(workerId, jail: jail));
           _queue?.onWorkerGone(workerId);
           _meetings?.onWorkerGone(workerId);
           dog.onWorkerGone(workerId);
@@ -153,17 +197,22 @@ class Floor {
       env: env,
       capacity: _ctx.capacity,
       prompts: _ctx.prompts,
-    );
+      dshProfile: _ctx.dshProfile,
+      runAs: _ctx.runAs,
+    )..builtOut = () => plan.wing;
 
     github = GitHub(def.dir, (state) => _ctx.emit(this, GhIssuesMsg(state)), (state) {
       _ctx.emit(this, GhPullsMsg(state));
       _queue?.onPulls(state.items);
       if (state.loading || state.error != null) return;
+      // A worker may have opened one from a branch it made itself, mid-turn or from a shell.
+      unawaited(workers.syncBranches());
       for (final pr in _merges.look(state.items)) {
         _ctx.toast(this, '🎉 PR #${pr.number} merged: ${pr.title}');
         merged(pr.number);
       }
       sendLandedHome();
+      _ctx.pullsChanged(this);
     });
     // The 📋 task queue seats workers by itself: it watches the workers and links PRs from GitHub.
     _queue = TaskQueue(
@@ -177,7 +226,10 @@ class Floor {
           sendLandedHome();
         },
         toast: (text, level) => _ctx.toast(this, text, level),
-        claimIssue: (issue) => github.claim(issue),
+        claimIssue: (issue, owner) {
+          final as = _ctx.ghAs(owner);
+          return as.refused != null ? Future.value(as.refused) : github.claim(issue, as.as);
+        },
         refreshGitHub: () => unawaited(github.refresh()),
         hiringPaused: () => _ctx.ledger.hiringPaused,
         emptied: () {
@@ -199,7 +251,10 @@ class Floor {
         update: (state) => _ctx.emit(this, MeetingMsg(state)),
         toast: (text, level) => _ctx.toast(this, text, level),
         hiringPaused: () => _ctx.ledger.hiringPaused,
-        postReview: (pr, file) => github.review(pr, file),
+        postReview: (pr, file, owner) {
+          final as = _ctx.ghAs(owner);
+          return as.refused != null ? Future.error(GhError(as.refused!)) : github.review(pr, file, as.as);
+        },
         prompt: (id) => _ctx.prompts?.text(id) ?? prompts[id]!.text,
       ),
     );
@@ -208,23 +263,35 @@ class Floor {
     _changes = Changes(
       def.dir,
       project.branch,
-      (workerId) {
+      (workerId, repo) {
         final w = workers.get(workerId);
         if (w == null) return null;
         final wt = w.worktree;
+        if (repo == null) {
+          return ChangesTarget(
+            name: w.name,
+            cwd: wt != null ? p.join(def.dir, wt.path) : def.dir,
+            rel: wt?.path ?? '',
+            worktreeBase: wt?.base,
+          );
+        }
+        // One of the other floors' repositories it works in: diffed against, and PRs opened against, that floor's branch.
+        final r = w.repos?.where((x) => x.floor == repo).firstOrNull;
+        if (r == null) return null;
+        final other = _ctx.floor(r.floor);
         return ChangesTarget(
           name: w.name,
-          cwd: wt != null ? p.join(def.dir, wt.path) : def.dir,
-          rel: wt?.path ?? '',
-          worktreeBase: wt?.base,
+          cwd: p.join(def.dir, r.path),
+          rel: r.path,
+          worktreeBase: r.base,
+          baseBranch: (branch: r.from),
+          openPull: (branch) => other != null ? _openPull(other, branch) : null,
+          refreshGitHub: () {
+            if (other != null) unawaited(other.github.refresh());
+          },
         );
       },
-      (branch) {
-        for (final pr in github.pulls.items) {
-          if (pr.state == 'OPEN' && pr.headRefName == branch) return PrRef(number: pr.number, url: pr.url);
-        }
-        return null;
-      },
+      (branch) => _openPull(this, branch),
       ChangesEvents(
         state: (state, ids) => _ctx.changes(state, ids),
         toast: (text, level) => _ctx.toast(this, text, level),
@@ -269,6 +336,9 @@ class Floor {
   /// The basketball by the hoop: who has it, or its last throw.
   final Court court = Court();
 
+  /// The cars in the garage: who's in which, and where their drivers have left them.
+  final Garage garage = Garage();
+
   /// The bookshelf: the project's Markdown files.
   late final Docs docs = Docs(dir);
 
@@ -278,6 +348,12 @@ class Floor {
   /// Completes once the workers whose terminals outlived the last office are picked back up, and the rest woken.
   late final Future<void> ready;
   late final Dog dog;
+
+  /// Workers sent home on a map that keeps them (see MapPlan.sendHome).
+  late final Jail jail;
+
+  /// The signs over its desks, and how far its back office is built out.
+  late final FloorPlanStore plan;
   late final Timer _timer;
 
   /// Pull requests merging, to ring the gong for.
@@ -297,17 +373,54 @@ class Floor {
     _landedTimer = Timer(_landedDelay, () {
       _landedTimer = null;
       if (!_ctx.leaveOnMerge() || _closed) return;
-      for (final l in landedWorkers(workers.list(), github.pulls.items, queue.state().tasks)) {
-        final done = workers.kill(l.worker.id, null, l.head);
-        _ctx.toast(this, '🏠 ${l.worker.name} went home: PR #${l.pr} merged');
+      List<GhPull>? pullsOf(String id) => _ctx.floor(id)?.github.pulls.items;
+      for (final l in landedWorkers(workers.list(), github.pulls.items, queue.state().tasks, pullsOf)) {
+        final worker = l.worker;
+        if (worker.repos?.isEmpty ?? true) {
+          _goHome(worker, 'PR #${l.pr} merged', l.head);
+          continue;
+        }
+        // Across repositories, one PR can merge before another repository's work even has one:
+        // it goes once nothing is left that its merged PRs didn't deliver.
+        if (!_landing.add(worker.id)) continue;
         unawaited(
-          done.then((r) {
-            if (r.note != null) _ctx.toast(this, r.note!);
-            if (r.error != null) _ctx.toast(this, r.error!, ToastLevel.warn);
+          workers.holdsWork(worker.id, l.head, l.heads).catchError((_) => true).then((held) {
+            _landing.remove(worker.id);
+            if (!held && workers.get(worker.id)?.createdAt == worker.createdAt) {
+              _goHome(worker, 'its pull requests merged (${l.prs?.join(', ')})', l.head, l.heads);
+            }
           }),
         );
       }
     });
+  }
+
+  /// Whether a worker's work landed: a pull request of its merged and none is open, on this floor
+  /// and, for a worker across repositories, on the others too (see landedWork).
+  Landed? landed(WorkerInfo worker) =>
+      landedWork(worker, github.pulls.items, queue.state().tasks, (id) => _ctx.floor(id)?.github.pulls.items);
+
+  /// Sends a worker home as someone asked (not by itself, see [sendLandedHome]): with no [cleanup],
+  /// its worktree and branch go unless they hold work, where what its merged pull requests delivered
+  /// doesn't count. Resolves with the line about its worktree.
+  Future<({String? note, String? error})> sendHome(String workerId, [WorktreeCleanup? cleanup]) {
+    final info = workers.get(workerId);
+    final l = info != null ? landed(info) : null;
+    return workers.kill(workerId, cleanup, l?.head, l?.heads);
+  }
+
+  /// Workers across repositories whose worktrees are being checked before they go home.
+  final _landing = <String>{};
+
+  void _goHome(WorkerInfo worker, String why, [String? head, Map<String, String?>? heads]) {
+    final done = workers.kill(worker.id, null, head, heads);
+    _ctx.toast(this, '🏠 ${worker.name} went home: $why');
+    unawaited(
+      done.then((r) {
+        if (r.note != null) _ctx.toast(this, r.note!);
+        if (r.error != null) _ctx.toast(this, r.error!, ToastLevel.warn);
+      }),
+    );
   }
 
   bool _closed = false;
@@ -320,6 +433,7 @@ class Floor {
 
   bool _active() =>
       _ctx.people(this) > 0 ||
+      _ctx.lent(this) ||
       workers.list().any((w) => isBusy(w.status)) ||
       queue.state().tasks.any((t) => t.status != TaskStatus.done) ||
       meetings.state().current?.status == MeetingStatus.running;
@@ -332,6 +446,7 @@ class Floor {
       name: def.name,
       repo: def.repo,
       dir: dir,
+      branch: project.branch,
       palette: def.palette,
       local: local,
       addedBy: def.addedBy,
@@ -346,6 +461,7 @@ class Floor {
           )
           .length,
       people: _ctx.people(this),
+      wing: plan.wing,
     );
   }
 
@@ -385,8 +501,9 @@ class _FloorMeetingWorkers implements MeetingWorkers {
     AgentProvider provider,
     String? model,
     AgentEffort? effort,
-    ({String id, WorkerWorktree? worktree}) meeting,
-  ) => _w.spawn(deskId, by, prompt, false, WorkerKind.agent, provider, model, effort, meeting);
+    ({String id, WorkerWorktree? worktree}) meeting, [
+    String? owner,
+  ]) => _w.spawn(deskId, by, prompt, false, WorkerKind.agent, provider, model, effort, meeting, const [], owner);
   @override
   String? prompt(String id, String text, [String? by]) => _w.prompt(id, text, by);
   @override

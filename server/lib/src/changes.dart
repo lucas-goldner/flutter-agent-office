@@ -24,7 +24,15 @@ const int _maxCountBytes = 8 * 1024 * 1024;
 const int _maxImageBytes = 10 * 1024 * 1024;
 
 class ChangesTarget {
-  const ChangesTarget({required this.name, required this.cwd, required this.rel, this.worktreeBase});
+  const ChangesTarget({
+    required this.name,
+    required this.cwd,
+    required this.rel,
+    this.worktreeBase,
+    this.baseBranch,
+    this.openPull,
+    this.refreshGitHub,
+  });
 
   /// The worker's name, for toasts.
   final String name;
@@ -37,6 +45,13 @@ class ChangesTarget {
 
   /// The commit its worktree branched from, when it has one.
   final String? worktreeBase;
+
+  /// For another floor's repository a worker works in (see WorkerInfo.repos): the branch diffs are
+  /// taken against and PRs target, instead of the one the office was opened on (`branch` null:
+  /// none), where that repository's open pull requests are, and how to refresh its boards.
+  final ({String? branch})? baseBranch;
+  final PrRef? Function(String branch)? openPull;
+  final void Function()? refreshGitHub;
 }
 
 class ChangesEvents {
@@ -50,6 +65,12 @@ class ChangesEvents {
 }
 
 class _Watch {
+  _Watch(this.workerId, this.repo);
+
+  final String workerId;
+
+  /// One of the other floors' repositories of a worker across repositories; none for its own.
+  final String? repo;
   final Set<String> clients = {};
   Timer? timer;
   bool polling = false;
@@ -74,11 +95,18 @@ class _Result {
   final int code;
 }
 
-/// Runs a command; a non-zero exit is a result, not an error. Only "can't run it at all" throws.
-Future<_Result> _run(String cmd, List<String> args, String cwd, [int timeout = 30000]) async {
+/// Runs a command; a non-zero exit is a result, not an error. Only "can't run it at all" throws. With
+/// [env], it runs as someone signed in to their own GitHub (see signins.dart) instead of the office.
+Future<_Result> _run(String cmd, List<String> args, String cwd, [int timeout = 30000, Map<String, String>? env]) async {
   Process proc;
   try {
-    proc = await Process.start(cmd, args, workingDirectory: cwd, environment: {'GIT_OPTIONAL_LOCKS': '0'});
+    proc = await Process.start(
+      cmd,
+      args,
+      workingDirectory: cwd,
+      environment: {...?env, 'GIT_OPTIONAL_LOCKS': '0'},
+      includeParentEnvironment: env == null,
+    );
   } on ProcessException catch (e) {
     if (e.errorCode == 2) throw _GitError('$cmd is not installed on the server');
     throw _GitError(e.message);
@@ -165,8 +193,8 @@ String _reason(_Result r, String fallback) {
   return line != null ? line.replaceFirst(_fatalPrefix, '') : fallback;
 }
 
-Future<String> _git(List<String> args, String cwd, [int? timeout]) async {
-  final r = await _run('git', args, cwd, timeout ?? 30000);
+Future<String> _git(List<String> args, String cwd, [int? timeout, Map<String, String>? env]) async {
+  final r = await _run('git', args, cwd, timeout ?? 30000, env);
   if (r.code != 0) throw _GitError(_reason(r, 'git ${args[0]} failed'));
   return r.out.endsWith('\n') ? r.out.substring(0, r.out.length - 1) : r.out;
 }
@@ -251,6 +279,7 @@ class _File {
 
 ChangesState _withBusy(ChangesState s, String? busy) => ChangesState(
   workerId: s.workerId,
+  repo: s.repo,
   dir: s.dir,
   branch: s.branch,
   base: s.base,
@@ -283,40 +312,41 @@ class Changes {
   // ignore: unused_field
   final String _dir;
   final String? _baseBranch;
-  final ChangesTarget? Function(String workerId) _target;
+
+  /// A worker's checkout; with `repo`, its worktree of that floor's repository (see WorkerInfo.repos).
+  final ChangesTarget? Function(String workerId, String? repo) _target;
   final PrRef? Function(String branch) _openPull;
   final ChangesEvents _events;
   final Map<String, _Watch> _watches = {};
 
-  /// PRs opened from the office, until the GitHub boards catch up.
+  /// PRs opened from the office, until the GitHub boards catch up, by repository and branch.
   final Map<String, PrRef> _opened = {};
 
-  void watch(String workerId, String clientId) {
-    final w = _watches.putIfAbsent(workerId, _Watch.new);
+  void watch(String workerId, String clientId, [String? repo]) {
+    final key = _watchKey(workerId, repo);
+    final w = _entry(workerId, repo);
     // An entry an action made (see _action()) has no timer yet.
-    w.timer ??= Timer.periodic(_pollEvery, (_) => unawaited(_poll(workerId)));
+    w.timer ??= Timer.periodic(_pollEvery, (_) => unawaited(_poll(key)));
     w.clients.add(clientId);
     final last = w.last;
     if (last != null) _events.state(last, [clientId]);
-    unawaited(_poll(workerId, true));
+    unawaited(_poll(key, true));
   }
 
-  void unwatch(String workerId, String clientId) {
-    final w = _watches[workerId];
-    if (w == null) return;
-    w.clients.remove(clientId);
-    // Keep the entry while an action runs, so its outcome still reaches whoever asked for it.
-    if (w.clients.isEmpty && w.busy == null) _drop(workerId);
-  }
+  void unwatch(String workerId, String clientId, [String? repo]) => _unwatchKey(_watchKey(workerId, repo), clientId);
 
   void unwatchAll(String clientId) {
-    for (final id in [..._watches.keys]) {
-      unwatch(id, clientId);
+    for (final key in [..._watches.keys]) {
+      _unwatchKey(key, clientId);
     }
   }
 
   /// The worker is gone.
-  void forget(String workerId) => _drop(workerId);
+  void forget(String workerId) {
+    for (final e in [..._watches.entries]) {
+      if (e.value.workerId == workerId) _drop(e.key);
+    }
+  }
 
   void stop() {
     for (final id in [..._watches.keys]) {
@@ -325,11 +355,11 @@ class Changes {
   }
 
   /// The diff of one changed file, as `git diff` prints it; `error` says why there's none.
-  Future<({String diff, bool truncated, String? error})> diff(String workerId, String filePath) async {
+  Future<({String diff, bool truncated, String? error})> diff(String workerId, String filePath, [String? repo]) async {
     ({String diff, bool truncated, String? error}) fail(String e) => (diff: '', truncated: false, error: e);
-    final t = _target(workerId);
+    final t = _target(workerId, repo);
     if (t == null) return fail('No such worker');
-    final changed = await _changedFile(workerId, t, filePath);
+    final changed = await _changedFile(workerId, repo, t, filePath);
     if (changed.error != null) return fail(changed.error!);
     final file = changed.file!;
     try {
@@ -355,11 +385,11 @@ class Changes {
   /// One side of a changed picture, for the preview in the Changes window: 'old' is the file at the
   /// commit the diff is taken from, 'new' is what's in the checkout now. Only files in the worker's
   /// list of changes are served, and only pictures.
-  Future<ImageResult> file(String workerId, String filePath, {required bool old}) async {
+  Future<ImageResult> file(String workerId, String filePath, {required bool old, String? repo}) async {
     if (changedImageType(filePath) == null) return const ImageError(415, 'Only pictures can be previewed');
-    final t = _target(workerId);
+    final t = _target(workerId, repo);
     if (t == null) return const ImageError(404, 'No such worker');
-    final changed = await _changedFile(workerId, t, filePath);
+    final changed = await _changedFile(workerId, repo, t, filePath);
     if (changed.error != null) return ImageError(404, changed.error!);
     final file = changed.file!;
     // A renamed file was something else before; its old side is only a picture if that name was one.
@@ -394,12 +424,13 @@ class Changes {
   }
 
   /// Stages everything in the checkout and commits it.
-  Future<String?> commit(String workerId, String message, String who) async {
+  /// With [env], as whoever pressed the button (their git name and email).
+  Future<String?> commit(String workerId, String message, String who, [String? repo, Map<String, String>? env]) async {
     final msg = message.trim();
     if (msg.isEmpty) return 'The commit needs a message';
-    return _action(workerId, 'Committing…', (t, w) async {
+    return _action(workerId, repo, 'Committing…', (t, w) async {
       await _git(['add', '-A'], t.cwd);
-      await _git(['commit', '-q', '-m', msg], t.cwd, 120000);
+      await _git(['commit', '-q', '-m', msg], t.cwd, 120000, env);
       final subject = msg.split('\n')[0];
       _events.toast(
         '$who committed “${subject.length > 60 ? '${subject.substring(0, 59)}…' : subject}” at ${t.name}\'s desk',
@@ -410,8 +441,8 @@ class Changes {
   }
 
   /// Throws away uncommitted changes: one file's, or every one in the checkout.
-  Future<String?> discard(String workerId, String? filePath, String who) async {
-    return _action(workerId, 'Discarding…', (t, w) async {
+  Future<String?> discard(String workerId, String? filePath, String who, [String? repo]) async {
+    return _action(workerId, repo, 'Discarding…', (t, w) async {
       if (filePath != null) {
         ChangedFile? file;
         for (final f in w.last?.files ?? const <ChangedFile>[]) {
@@ -439,10 +470,18 @@ class Changes {
   }
 
   /// Pushes the branch and opens a pull request for it with `gh`.
-  Future<String?> pullRequest(String workerId, String title, String body, String who) async {
+  /// With [env], pushed and opened as whoever pressed the button.
+  Future<String?> pullRequest(
+    String workerId,
+    String title,
+    String body,
+    String who, [
+    String? repo,
+    Map<String, String>? env,
+  ]) async {
     if (title.trim().isEmpty) return 'The pull request needs a title';
-    return _action(workerId, 'Pushing the branch and opening a pull request…', (t, w) async {
-      final s = w.last ?? await _compute(workerId, t);
+    return _action(workerId, repo, 'Pushing the branch and opening a pull request…', (t, w) async {
+      final s = w.last ?? await _compute(w, t);
       final branch = s.branch;
       final prBase = s.prBase;
       if (branch == null || branch.isEmpty || prBase == null || prBase.isEmpty) {
@@ -454,21 +493,22 @@ class Changes {
       final remotes = (await _git(['remote'], t.cwd)).split('\n').where((r) => r.isNotEmpty).toList();
       final remote = remotes.contains('origin') ? 'origin' : (remotes.isEmpty ? null : remotes.first);
       if (remote == null) return 'This project has no git remote to push to';
-      await _git(['push', '-u', remote, branch], t.cwd, 120000);
+      await _git(['push', '-u', remote, branch], t.cwd, 120000, env);
       final r = await _run(
         'gh',
         ['pr', 'create', '--head', branch, '--base', prBase, '--title', title.trim(), '--body', body],
         t.cwd,
         120000,
+        env,
       );
       final url = r.out.trim().split('\n').last;
       if (r.code != 0 || !RegExp(r'^https?://').hasMatch(url)) {
         throw _GitError(_reason(r, url.isNotEmpty ? url : 'gh pr create failed'));
       }
       final number = int.tryParse(RegExp(r'/(\d+)$').firstMatch(url)?.group(1) ?? '') ?? 0;
-      _opened[branch] = PrRef(number: number, url: url);
+      _opened[_openedKey(repo, branch)] = PrRef(number: number, url: url);
       _events.toast('$who opened a pull request for ${t.name}: $url', ToastLevel.info);
-      _events.refreshGitHub();
+      (t.refreshGitHub ?? _events.refreshGitHub)();
       return null;
     });
   }
@@ -476,25 +516,48 @@ class Changes {
   // ---------------------------------------------------------------------------
 
   /// A file in the worker's list of changes, looking again when it isn't in the last one.
-  Future<({ChangedFile? file, String? error})> _changedFile(String workerId, ChangesTarget t, String filePath) async {
-    var state = _watches[workerId]?.last;
-    if (state == null || !state.files.any((f) => f.path == filePath)) state = await _compute(workerId, t);
+  Future<({ChangedFile? file, String? error})> _changedFile(
+    String workerId,
+    String? repo,
+    ChangesTarget t,
+    String filePath,
+  ) async {
+    var state = _watches[_watchKey(workerId, repo)]?.last;
+    if (state == null || !state.files.any((f) => f.path == filePath)) state = await _compute(_Watch(workerId, repo), t);
     for (final f in state.files) {
       if (f.path == filePath) return (file: f, error: null);
     }
     return (file: null, error: state.error ?? 'That file has no changes');
   }
 
-  void _drop(String workerId) {
-    final w = _watches.remove(workerId);
+  void _drop(String key) {
+    final w = _watches.remove(key);
     w?.timer?.cancel();
   }
 
-  /// Runs one commit / discard / PR at a time per worker, showing watchers that it's in progress.
-  Future<String?> _action(String workerId, String label, Future<String?> Function(ChangesTarget t, _Watch w) fn) async {
-    final t = _target(workerId);
+  void _unwatchKey(String key, String clientId) {
+    final w = _watches[key];
+    if (w == null) return;
+    w.clients.remove(clientId);
+    // Keep the entry while an action runs, so its outcome still reaches whoever asked for it.
+    if (w.clients.isEmpty && w.busy == null) _drop(key);
+  }
+
+  /// The watch on a worker's checkout, made when there is none yet.
+  _Watch _entry(String workerId, String? repo) =>
+      _watches.putIfAbsent(_watchKey(workerId, repo), () => _Watch(workerId, repo));
+
+  /// Runs one commit / discard / PR at a time per checkout, showing watchers that it's in progress.
+  Future<String?> _action(
+    String workerId,
+    String? repo,
+    String label,
+    Future<String?> Function(ChangesTarget t, _Watch w) fn,
+  ) async {
+    final t = _target(workerId, repo);
     if (t == null) return 'No such worker';
-    final w = _watches.putIfAbsent(workerId, _Watch.new);
+    final key = _watchKey(workerId, repo);
+    final w = _entry(workerId, repo);
     final busy = w.busy;
     if (busy != null) return 'Hold on — still ${busy.toLowerCase().replaceFirst(RegExp(r'…$'), '')}';
     w.busy = label;
@@ -508,18 +571,18 @@ class Changes {
     }
     w.busy = null;
     w.lastKey = null; // the next poll always reaches the watchers, to clear the busy state
-    await _poll(workerId, true);
-    if (w.clients.isEmpty) _drop(workerId);
+    await _poll(key, true);
+    if (w.clients.isEmpty) _drop(key);
     return error;
   }
 
-  Future<void> _poll(String workerId, [bool now = false]) async {
-    final w = _watches[workerId];
+  Future<void> _poll(String key, [bool now = false]) async {
+    final w = _watches[key];
     if (w == null || w.polling || (!now && w.clients.isEmpty)) return;
     w.polling = true;
     try {
-      final t = _target(workerId);
-      var state = t != null ? await _compute(workerId, t) : _errorState(workerId, '', 'No such worker');
+      final t = _target(w.workerId, w.repo);
+      var state = t != null ? await _compute(w, t) : _errorState(w, '', 'No such worker');
       if (w.busy != null) state = _withBusy(state, w.busy);
       final key = jsonEncode({...state.toJson(), 'at': 0});
       if (key != w.lastKey) {
@@ -548,33 +611,40 @@ class Changes {
     final abbrev = await _gitMaybe(['rev-parse', '--abbrev-ref', 'HEAD'], t.cwd);
     final branch = abbrev == null || abbrev.isEmpty ? 'HEAD' : abbrev;
     final onBranch = branch != 'HEAD';
-    final baseBranch = _baseBranch;
-    String? ref;
+    final own = t.baseBranch;
+    final baseBranch = own == null ? _baseBranch : (own.branch == 'HEAD' ? null : own.branch);
+    var refs = <String>[];
     var label = 'HEAD';
     if (baseBranch != null &&
         baseBranch.isNotEmpty &&
         branch != baseBranch &&
         ((await _gitMaybe(['rev-parse', '--verify', '--quiet', 'refs/heads/$baseBranch'], t.cwd)) ?? '').isNotEmpty) {
-      ref = baseBranch;
+      // Origin's copy too, whichever is newer: a worktree starts from PRs merged there that the
+      // project may never have pulled (see Worktrees.create), and they aren't this worker's changes.
+      final remote = 'refs/remotes/origin/$baseBranch';
+      final hasRemote = ((await _gitMaybe(['rev-parse', '--verify', '--quiet', remote], t.cwd)) ?? '').isNotEmpty;
+      refs = hasRemote ? [baseBranch, remote] : [baseBranch];
       label = baseBranch;
     } else if (t.worktreeBase != null && t.worktreeBase!.isNotEmpty && branch != baseBranch) {
-      ref = t.worktreeBase;
+      refs = [t.worktreeBase!];
       label = t.worktreeBase!.length > 7 ? t.worktreeBase!.substring(0, 7) : t.worktreeBase!;
     } else {
       // On the base branch itself: what isn't pushed yet, when it tracks a remote.
       final up = await _gitMaybe(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'], t.cwd);
       if (up != null && up.isNotEmpty) {
-        ref = up;
+        refs = [up];
         label = up;
       }
     }
-    final mb = ref != null ? await _gitMaybe(['merge-base', ref, 'HEAD'], t.cwd) : null;
+    // With two refs, git takes the merge base with a merge of them both: the newer one's, as a rule.
+    final mb = refs.isNotEmpty ? await _gitMaybe(['merge-base', 'HEAD', ...refs], t.cwd) : null;
     final commit = mb != null && mb.isNotEmpty ? mb : head;
     final prBase = onBranch && baseBranch != null && baseBranch.isNotEmpty && branch != baseBranch ? baseBranch : null;
     return (commit: commit, label: label, branch: onBranch ? branch : null, prBase: prBase);
   }
 
-  Future<ChangesState> _compute(String workerId, ChangesTarget t) async {
+  Future<ChangesState> _compute(_Watch w, ChangesTarget t) async {
+    final workerId = w.workerId, repo = w.repo;
     try {
       final base = await _baseCommit(t);
       final outs = await Future.wait([
@@ -668,9 +738,10 @@ class Changes {
           int.tryParse((await _gitMaybe(['rev-list', '--count', '${base.commit}..HEAD'], t.cwd) ?? '').trim()) ?? 0;
       final subject = ahead > 0 ? await _gitMaybe(['log', '-1', '--format=%s'], t.cwd) : null;
       final branch = base.branch;
-      final pr = branch != null ? _opened[branch] ?? _openPull(branch) : null;
+      final pr = branch != null ? _opened[_openedKey(repo, branch)] ?? (t.openPull ?? _openPull)(branch) : null;
       return ChangesState(
         workerId: workerId,
+        repo: repo,
         dir: t.rel,
         branch: branch ?? 'HEAD',
         base: base.label,
@@ -683,13 +754,20 @@ class Changes {
         at: DateTime.now().millisecondsSinceEpoch,
       );
     } catch (err) {
-      return _errorState(workerId, t.rel, _errorText(err));
+      return _errorState(w, t.rel, _errorText(err));
     }
   }
 }
 
-ChangesState _errorState(String workerId, String dir, String error) => ChangesState(
-  workerId: workerId,
+/// A worker's checkout the Changes window can show: its own, or one of its other repositories'.
+String _watchKey(String workerId, String? repo) => repo != null ? '$workerId $repo' : workerId;
+
+/// A worker across repositories has the same branch name in each of them.
+String _openedKey(String? repo, String branch) => '${repo ?? ''}\n$branch';
+
+ChangesState _errorState(_Watch w, String dir, String error) => ChangesState(
+  workerId: w.workerId,
+  repo: w.repo,
   dir: dir,
   base: 'HEAD',
   ahead: 0,

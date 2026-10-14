@@ -30,8 +30,9 @@ abstract interface class MeetingWorkers {
     AgentProvider provider,
     String? model,
     AgentEffort? effort,
-    ({String id, WorkerWorktree? worktree}) meeting,
-  );
+    ({String id, WorkerWorktree? worktree}) meeting, [
+    String? owner,
+  ]);
 
   /// Why it couldn't, or null.
   String? prompt(String id, String text, [String? by]);
@@ -43,7 +44,8 @@ abstract interface class MeetingWorkers {
 
 /// Git for the meeting's own worktree: made when it starts, tidied away once everyone has gone home.
 abstract interface class MeetingTrees {
-  ({WorkerWorktree? worktree, String? error}) create(String slug);
+  /// `note` says when commits the project has were left out of it (see Worktrees.create).
+  ({WorkerWorktree? worktree, String? note, String? error}) create(String slug);
   Future<WorktreeState> inspect(WorktreeRef wt);
 
   /// [cleanup] is worktree or all. Returns what went wrong, if anything.
@@ -56,7 +58,7 @@ class GitMeetingTrees implements MeetingTrees {
   final Worktrees _trees;
 
   @override
-  ({WorkerWorktree? worktree, String? error}) create(String slug) => _trees.create(slug);
+  ({WorkerWorktree? worktree, String? note, String? error}) create(String slug) => _trees.create(slug);
   @override
   Future<WorktreeState> inspect(WorktreeRef wt) => _trees.inspect(wt);
   @override
@@ -79,7 +81,8 @@ class MeetingEvents {
   final String? Function() hiringPaused;
 
   /// Posts the review panel's review on its pull request. Resolves to the review's URL.
-  final Future<String> Function(int pr, String file) postReview;
+  /// As [owner] when the meeting was called by an account (see signins.dart).
+  final Future<String> Function(int pr, String file, String? owner) postReview;
 
   /// One of the office's prompts as it has it now (rewritten in ⚙️ Settings, or the default).
   final String Function(PromptId id)? prompt;
@@ -160,6 +163,7 @@ class _Meeting {
     this.effort,
     required this.rounds,
     required this.calledBy,
+    this.owner,
     required this.startedAt,
     this.worktree,
     required this.notes,
@@ -181,6 +185,7 @@ class _Meeting {
           effort: m.effort,
           rounds: m.rounds,
           calledBy: m.calledBy,
+          owner: m.owner,
           startedAt: m.startedAt,
           worktree: m.worktree,
           notes: m.notes,
@@ -223,6 +228,9 @@ class _Meeting {
   MeetingStatus status = MeetingStatus.running;
   String? reason;
   final String calledBy;
+
+  /// The account that called it, whose sign-ins its workers run on.
+  final String? owner;
   final int startedAt;
   int? finishedAt;
   final WorkerWorktree? worktree;
@@ -256,6 +264,7 @@ class _Meeting {
     status: status,
     reason: reason,
     calledBy: calledBy,
+    owner: owner,
     startedAt: startedAt,
     finishedAt: finishedAt,
     worktree: worktree,
@@ -271,8 +280,8 @@ class _Meeting {
 /// through the rounds of its pattern (office_shared's meetings.dart): in each step every worker with
 /// a part gets it as a prompt, and the step is over when each of them has ended its turn with its
 /// part written to the file it names. Checking the files, not the talk, is what moves a meeting on.
-/// It ends when the output file is written, and stops early, saying why, when it runs over its token
-/// budget, when a worker won't write its part, or when a worker leaves.
+/// It ends when the output file is written, and stops early, saying why, when a worker won't write its
+/// part or when a worker leaves. What the table has used is added up to be shown, and never stops it.
 ///
 /// Everyone at the table shares the meeting's own git worktree (in a git project). When it's done,
 /// the office commits the output there, or for a review panel posts it on the pull request. The
@@ -314,7 +323,8 @@ class MeetingRoom {
   MeetingState state() => MeetingState(current: _current?.view, past: List.of(_past));
 
   /// Calls a meeting. Returns why it couldn't, or null once everyone is sitting down.
-  String? start(MeetingRequest req, String by) {
+  /// [owner] is the account calling it: the workers run on its sign-ins, and a review panel's review is posted as it.
+  String? start(MeetingRequest req, String by, [String? owner]) {
     final cur = _current;
     if (cur != null && cur.status == MeetingStatus.running) {
       return 'The meeting room is busy with “${cur.title}”: stop that meeting first';
@@ -333,10 +343,8 @@ class MeetingRoom {
     if (provider == AgentProvider.custom && _workers.defaultProvider != AgentProvider.custom) {
       return 'Unknown agent provider';
     }
-    final model = (provider == AgentProvider.claude || provider == AgentProvider.opencode) && (picked.model ?? '') != ''
-        ? picked.model
-        : null;
-    final effort = provider == AgentProvider.claude ? picked.effort : null;
+    final model = takesModel(provider) && (picked.model ?? '') != '' ? picked.model : null;
+    final effort = takesEffort(provider) ? picked.effort : null;
     final bad =
         validateWorkerModel(WorkerKind.agent, provider, model) ??
         validateWorkerEffort(WorkerKind.agent, provider, effort);
@@ -403,6 +411,8 @@ class MeetingRoom {
       final made = trees.create('meeting-$slug-${id.substring(0, 4)}');
       if (made.worktree == null) return made.error ?? "Couldn't make the meeting's worktree";
       worktree = made.worktree;
+      final note = made.note;
+      if (note != null) _events.toast("🌿 The meeting's worktree $note", ToastLevel.info);
     }
     final m = _Meeting(
       id: id,
@@ -419,6 +429,7 @@ class MeetingRoom {
       effort: effort,
       rounds: rounds,
       calledBy: by,
+      owner: owner,
       startedAt: _now(),
       worktree: worktree,
       // Without git, the notes go with the floor's other state.
@@ -436,7 +447,7 @@ class MeetingRoom {
       final r = _workers.seat(m.seats[i].deskId, '$by (meeting)', text, provider, model, effort, (
         id: id,
         worktree: worktree,
-      ));
+      ), owner);
       final w = r.worker;
       if (w == null) {
         for (final s in m.seats) {
@@ -653,7 +664,7 @@ class MeetingRoom {
     if (m.pattern == MeetingPattern.review && pr != null) {
       unawaited(
         _events
-            .postReview(pr, p.join(cwd, m.output))
+            .postReview(pr, p.join(cwd, m.output), m.owner)
             .then(
               (url) {
                 m.review = MeetingReview(url: url);
@@ -765,7 +776,8 @@ class MeetingRoom {
       final usage = w?.usage;
       if (w != null && usage != null) {
         s.tokens = tokensOf(usage);
-        s.cost = usage.costKnown == false || (w.provider == AgentProvider.codex && usage.costKnown != true)
+        s.cost =
+            usage.costKnown == false || ((providerMeta(w.provider)?.usage.noCost ?? false) && usage.costKnown != true)
             ? null
             : usage.cost;
       }

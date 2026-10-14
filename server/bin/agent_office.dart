@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 
 import 'package:agent_office_server/src/accounts.dart' show accountsCommand;
+import 'package:agent_office_server/src/browser.dart' show openBrowser;
 import 'package:agent_office_server/src/building.dart' show tildify;
 import 'package:agent_office_server/src/config.dart';
 import 'package:agent_office_server/src/hook.dart' show runHook;
@@ -11,8 +12,10 @@ import 'package:agent_office_server/src/prune.dart' show prune;
 import 'package:agent_office_server/src/ptyhost.dart';
 import 'package:agent_office_server/src/ptys.dart' show ptyHostCommand;
 import 'package:agent_office_server/src/queue_cmd.dart' show runQueueCommand;
+import 'package:agent_office_server/src/workers_cmd.dart' show runWorkersCommand;
 import 'package:agent_office_server/src/server.dart';
 import 'package:agent_office_server/src/setup.dart' show interactive, setupCommand, welcome;
+import 'package:agent_office_server/src/tunnel/tunnel.dart' show tunnelCommand;
 import 'package:agent_office_server/src/upgrade.dart' show Upgrader;
 
 /// The office's one executable: the CLI and the server, plus the PTY host and the hook helper the
@@ -24,7 +27,10 @@ Future<void> main(List<String> argv) async {
   if (cmd == 'prune') return _exit(await prune(argv.sublist(1)));
   if (cmd == 'accounts') return _exit(accountsCommand(argv.sublist(1)));
   if (cmd == 'queue') return _exit(await runQueueCommand(argv.sublist(1)));
+  // `office-workers` on a worker's PATH runs this (see WorkerManager._writeOfficeCommands).
+  if (cmd == 'workers') return _exit(await runWorkersCommand(argv.sublist(1)));
   if (cmd == 'setup') return _exit(await setupCommand(argv.sublist(1)));
+  if (cmd == 'tunnel') return _exit(await tunnelCommand(argv.sublist(1)));
   if (cmd == '--version') {
     // Without the environment, the upgrader only works out the version (it never checks GitHub).
     stdout.writeln(
@@ -135,7 +141,7 @@ Future<void> _serve(Config cfg, bool atTerminal) async {
   var opened = false;
   if (atTerminal && office.accounts.sharedPassword && (cfg.claimToken ?? '').isEmpty) {
     signIn = here + office.signInLink();
-    if (cfg.open) opened = _openBrowser(signIn);
+    if (cfg.open) opened = openBrowser(signIn);
   }
 
   final agent = office.resolvedAgent;
@@ -158,22 +164,6 @@ ${cfg.tls != null || loopback ? '' : '\n  tip: voice & screen share need https o
 
   ProcessSignal.sigint.watch().listen((s) => unawaited(stop(s)));
   if (!Platform.isWindows) ProcessSignal.sigterm.watch().listen((s) => unawaited(stop(s)));
-}
-
-/// Opens the office in this computer's browser. Not over SSH, in CI, or on a Linux box without a
-/// desktop: nobody would see it there.
-bool _openBrowser(String url) {
-  final env = Platform.environment;
-  bool set(String k) => (env[k] ?? '').isNotEmpty;
-  if (set('SSH_CONNECTION') || set('SSH_TTY') || set('CI')) return false;
-  if (Platform.isLinux && !set('DISPLAY') && !set('WAYLAND_DISPLAY')) return false;
-  final (cmd, args) = Platform.isMacOS
-      ? ('open', [url])
-      : Platform.isWindows
-      ? ('rundll32', ['url.dll,FileProtocolHandler', url])
-      : ('xdg-open', [url]);
-  unawaited(Process.start(cmd, args, mode: ProcessStartMode.detached).then((_) {}, onError: (Object _) {}));
-  return true;
 }
 
 /// Exits once what was printed is out: dart:io's `exit` doesn't wait for piped output.

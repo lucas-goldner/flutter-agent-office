@@ -11,7 +11,9 @@ import 'package:office_shared/shared.dart';
 // spell after another, with snow only in winter. --weather pins it either way.
 
 const _forecastMs = 15 * 60000;
-const _retryMs = 2 * 60000;
+
+/// After a forecast that didn't come: soon at first (a network still waking up), then every couple of minutes.
+const _retryMs = [15000, 30000, 60000, 2 * 60000];
 const _geocode = 'https://geocoding-api.open-meteo.com/v1/search';
 const _forecast = 'https://api.open-meteo.com/v1/forecast';
 
@@ -134,22 +136,52 @@ Future<_Place?> _locate(String city) async {
   return _Place((hit['latitude'] as num).toDouble(), (hit['longitude'] as num).toDouble(), label);
 }
 
-SkyState _skyAt(({double lat, double lon}) here, int utcOffset, WeatherSpell w, {String? city, double? temp}) =>
-    SkyState(
-      lat: here.lat,
-      lon: here.lon,
-      utcOffset: utcOffset,
-      weather: w.weather,
-      intensity: w.intensity,
-      city: city,
-      temp: temp,
-    );
+SkyState _skyAt(
+  ({double lat, double lon}) here,
+  int utcOffset,
+  WeatherSpell w, {
+  String? city,
+  double? temp,
+  bool realTime = false,
+}) => SkyState(
+  lat: here.lat,
+  lon: here.lon,
+  utcOffset: utcOffset,
+  weather: w.weather,
+  intensity: w.intensity,
+  city: city,
+  temp: temp,
+  realTime: realTime ? true : null,
+);
+
+SkyState _withClock(SkyState s, bool realTime) => SkyState(
+  lat: s.lat,
+  lon: s.lon,
+  utcOffset: s.utcOffset,
+  weather: s.weather,
+  intensity: s.intensity,
+  city: s.city,
+  temp: s.temp,
+  realTime: realTime ? true : null,
+);
 
 class Sky {
-  Sky({String? city, Weather? weather, required void Function(SkyState state) onChange})
-    : _city = city,
-      _weather = weather,
-      _onChange = onChange {
+  /// [placeFile] (sky-place.json) keeps where the last forecast put [city], so a restart is already
+  /// there; [clockFile] (sky-clock.json) the clock picked in ⚙️ Settings, which wins over [realTime]
+  /// (--real-time-sky).
+  Sky({
+    String? city,
+    Weather? weather,
+    bool realTime = false,
+    String? placeFile,
+    String? clockFile,
+    required void Function(SkyState state) onChange,
+  }) : _city = city,
+       _weather = weather,
+       _placeFile = placeFile,
+       _clockFile = clockFile,
+       _onChange = onChange {
+    _realTime = _savedClock() ?? realTime;
     final now = DateTime.now();
     final here = guessPlace(now);
     final w = weather != null
@@ -157,18 +189,74 @@ class Sky {
         : city != null
         ? _pinned(Weather.clear)
         : wander(null, now.month - 1, here.lat < 0);
-    state = _skyAt(here, now.timeZoneOffset.inMinutes, w);
+    final known = city != null ? _knownPlace(city) : null;
+    if (known != null) {
+      state = _skyAt((lat: known.lat, lon: known.lon), known.utcOffset, w, city: known.name, realTime: _realTime);
+      _place = _Place(known.lat, known.lon, known.name);
+    } else {
+      state = _skyAt(here, now.timeZoneOffset.inMinutes, w, realTime: _realTime);
+    }
   }
 
   late SkyState state;
   String? _city;
   final Weather? _weather;
+  final String? _placeFile;
+  final String? _clockFile;
   final void Function(SkyState state) _onChange;
   Timer? _timer;
   _Place? _place;
 
   /// Whether we've said the forecast is missing, so a flaky network doesn't flood the log.
   bool _warned = false;
+
+  /// Forecasts missed in a row (see [_retryMs]).
+  int _misses = 0;
+
+  /// The sky keeps the real time of day, not a day every hour (see [setClock]).
+  late bool _realTime;
+
+  /// Where the last forecast for [city] put it (see placeFile), if it's that city.
+  ({double lat, double lon, String name, int utcOffset})? _knownPlace(String city) {
+    final file = _placeFile;
+    if (file == null) return null;
+    try {
+      final j = jsonDecode(File(file).readAsStringSync());
+      if (j is! Map || j['city'] != city) return null;
+      final lat = j['lat'], lon = j['lon'], off = j['utcOffset'], name = j['name'];
+      if (lat is! num || lon is! num || off is! num || name is! String) return null;
+      if (!lat.isFinite || !lon.isFinite || !off.isFinite) return null;
+      return (lat: lat.toDouble(), lon: lon.toDouble(), name: name, utcOffset: off.round());
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Which clock the sky keeps, picked in ⚙️ Settings: the real time of day (true), or a whole day and
+  /// night every hour. Kept in clockFile, so it outlasts a restart; until someone picks, --real-time-sky says.
+  void setClock(bool real) {
+    _realTime = real;
+    final file = _clockFile;
+    if (file != null) {
+      try {
+        File(file).writeAsStringSync(jsonEncode({'realTime': real}));
+      } catch (_) {
+        // It still changes for now.
+      }
+    }
+    _set(state);
+  }
+
+  bool? _savedClock() {
+    final file = _clockFile;
+    if (file == null) return null;
+    try {
+      final saved = jsonDecode(File(file).readAsStringSync());
+      return saved is Map && saved['realTime'] is bool ? saved['realTime'] as bool : null;
+    } catch (_) {
+      return null;
+    }
+  }
 
   void start() {
     if (_city != null) {
@@ -189,6 +277,7 @@ class Sky {
   }
 
   void _set(SkyState next) {
+    next = _withClock(next, _realTime);
     if (jsonEncode(next.toJson()) == jsonEncode(state.toJson())) return;
     state = next;
     _onChange(next);
@@ -232,15 +321,27 @@ class Sky {
           temp: temp is num && temp.isFinite ? temp.round().toDouble() : null,
         ),
       );
+      if (_warned) stdout.writeln('agent-office: the weather for ${place.name} came through');
       _warned = false;
+      _misses = 0;
+      final file = _placeFile;
+      if (file != null) {
+        try {
+          File(file).writeAsStringSync(
+            jsonEncode({'city': city, 'lat': place.lat, 'lon': place.lon, 'name': place.name, 'utcOffset': utcOffset}),
+          );
+        } catch (_) {
+          // Only a head start for the next restart.
+        }
+      }
       _later(_forecastMs, () => unawaited(_forecastNow()));
     } catch (err) {
       if (!_warned) {
         final why = err is FormatException ? err.message : (err is HttpException ? err.message : '$err');
-        stderr.writeln('agent-office: no weather for $city yet ($why); trying again in a couple of minutes');
+        stderr.writeln('agent-office: no weather for $city yet ($why); trying again shortly');
       }
       _warned = true;
-      _later(_retryMs, () => unawaited(_forecastNow()));
+      _later(_retryMs[min(_misses++, _retryMs.length - 1)], () => unawaited(_forecastNow()));
     }
   }
 }

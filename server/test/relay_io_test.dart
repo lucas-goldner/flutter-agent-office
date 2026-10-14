@@ -90,4 +90,28 @@ void main() {
     expect(seen.last.value('x-agent-office-relay'), '1');
     expect(seen.last.value('cookie'), 'a=b');
   });
+
+  test("from the tailnet, the worker's server gets a localhost Host and no office cookie", () async {
+    const tailnet = 'agent-office.tail1234.ts.net';
+    final client = HttpClient();
+    addTearDown(client.close);
+    Future<void> get(String host) async {
+      final req = await client.get('127.0.0.1', office.port, '/x');
+      req.headers
+        ..set('host', host)
+        ..set('cookie', 'ao_session=abc; theirs=1')
+        ..set('x-forwarded-host', host)
+        ..set('x-forwarded-proto', 'https');
+      await (await req.close()).drain<void>();
+    }
+
+    await get('$tailnet:${upstream.port}');
+    expect(seen.last.value('host'), 'localhost:${upstream.port}');
+    expect(seen.last.value('x-forwarded-host'), '$tailnet:${upstream.port}');
+    expect(seen.last.value('cookie'), 'theirs=1');
+
+    // Through an SSH tunnel it already is one, and stays as it was.
+    await get('127.0.0.1:${upstream.port}');
+    expect(seen.last.value('host'), '127.0.0.1:${upstream.port}');
+  });
 }

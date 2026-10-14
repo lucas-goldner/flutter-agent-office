@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:office_shared/shared.dart';
+
 import 'hook.dart';
 
 const codexHookEvents = [
@@ -101,4 +103,23 @@ List<String> codexHookArgs([List<String>? office]) {
     args.addAll(['-c', config]);
   }
   return args;
+}
+
+/// A worker's own model and reasoning effort on Codex's command line. Codex takes --model only once,
+/// so one the office's --agent-args set gives way to the worker's; the effort is a config override,
+/// and the last of those wins.
+List<String> codexModelArgs(List<String> args, [String? model, AgentEffort? effort]) {
+  final out = <String>[];
+  final hasModel = model != null && model.isNotEmpty;
+  for (var i = 0; i < args.length; i++) {
+    final arg = args[i];
+    if (hasModel && (arg == '-m' || arg == '--model')) {
+      i++;
+    } else if (!hasModel || !(arg.startsWith('--model=') || RegExp(r'^-m.').hasMatch(arg))) {
+      out.add(arg);
+    }
+  }
+  if (hasModel) out.addAll(['--model', model]);
+  if (effort != null) out.addAll(['-c', 'model_reasoning_effort=${jsonEncode(effort.wire)}']);
+  return out;
 }

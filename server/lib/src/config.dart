@@ -44,16 +44,20 @@ class Config {
     required void Function(Config) markClaimed,
     required this.agentCmd,
     required this.agentArgs,
+    this.dshProfile = 'acp',
     this.tls,
     required this.trustProxy,
     required this.iceServers,
+    this.deployScript,
     this.publicHost,
+    this.tailnet,
     this.budget,
     required this.budgetPause,
     this.maxWorkers,
     this.webhook,
     this.city,
     this.weather,
+    this.realTimeSky = false,
   }) : _markClaimed = markClaimed;
 
   /// The office's own folder: the building's data lives in its .agent-office.
@@ -92,12 +96,23 @@ class Config {
   void markClaimed() => _markClaimed(this);
   final String agentCmd;
   final List<String> agentArgs;
+
+  /// The DSH profile a DeepSeek Harness worker boots (`--dsh-profile`, default "acp").
+  final String dshProfile;
   TlsFiles? tls;
   final bool trustProxy;
   final List<IceServer> iceServers;
 
-  /// Address teammates SSH-tunnel to (set by deploy/aws.sh); enables invites from the office.
+  /// How to run the script that deployed the office, e.g. "deploy/azure.sh --name team2" (set by
+  /// deploy/provision.sh), for the commands it suggests.
+  final String? deployScript;
+
+  /// Address teammates SSH-tunnel to (set by deploy/provision.sh); enables invites from the office.
   final String? publicHost;
+
+  /// The office's name on a Tailscale network, e.g. agent-office.tail1234.ts.net (set by
+  /// deploy/provision.sh --tailscale).
+  final String? tailnet;
 
   /// Daily tracked Claude Code spend budget, USD. OpenCode/Codex spend is excluded.
   final double? budget;
@@ -116,9 +131,13 @@ class Config {
 
   /// Weather pinned for good, instead of made up or forecast.
   final Weather? weather;
+
+  /// The sky keeps real time (a day a day), instead of a whole day and night every hour.
+  final bool realTimeSky;
 }
 
-const help = '''agent-office — a 3D office for your team and its Claude Code / OpenCode / Codex workers
+const help =
+    '''agent-office — a 3D office for your team and its Claude Code / OpenCode / Codex / Grok / Muse / DeepSeek Harness / Pi / Cursor workers
 
 Usage:
   agent-office [options]
@@ -127,6 +146,8 @@ Usage:
   agent-office prune [dir] [--dry-run] [--force]
   agent-office accounts [list|invite|revoke|role|password] ...
   agent-office queue [list|add|remove] ...
+  agent-office workers [list|hire|home|tell|pr|mcp] ...   (office-workers, in a worker's terminal)
+  agent-office tunnel [office@address | url]
 
 Runs the office. Every project is a floor of the building: ride the elevator,
 pick one of the repositories your `gh` login can see, and the office clones it
@@ -153,6 +174,9 @@ Commands:
   queue                   The task queue, for the agents standing by the boards:
                           list, add --title "…" [--issue n] (prompt on stdin),
                           remove <id>. Only works from a board agent's terminal
+  tunnel                  On your own computer, for an office that runs somewhere
+                          else: every web server a worker starts there opens on the
+                          same port here, by itself (see tunnel --help)
 
 Options:
       --home <dir>        Where the office keeps its data when no [dir] is given
@@ -175,16 +199,20 @@ Options:
                           (env AGENT_OFFICE_NO_OPEN=1)
       --agent <cmd>       Default agent command (default "claude", env AGENT_OFFICE_AGENT)
       --agent-args <str>  Extra args for the configured agent, e.g. "--model opus"
-                          Workers can also select Claude Code, OpenCode or Codex in the UI
+                          Workers can also select Claude Code, OpenCode, Codex, Grok,
+                          Muse, DeepSeek Harness, Pi or Cursor in the UI
+      --dsh-profile <n>   DeepSeek Harness profile for its workers, over the ACP
+                          server (default "acp", env AGENT_OFFICE_DSH_PROFILE)
       --tls-cert <file>   Serve HTTPS with this certificate (PEM)
       --tls-key <file>    ...and this private key (PEM)
       --self-signed       Serve HTTPS with a generated self-signed certificate
       --trust-proxy       Trust X-Forwarded-* headers (behind Caddy/nginx)
       --turn <url>        Add a TURN server for voice (repeatable), e.g.
-                          turn:user:pass@turn.example.com:3478
+                          turn:user:pass@turn.example.com:3478 (env
+                          AGENT_OFFICE_TURN, several separated by spaces)
       --budget <usd>      Daily budget for tracked Claude Code spend (env
                           AGENT_OFFICE_BUDGET). Everyone is warned when the
-                          day's spend passes it. OpenCode/Codex spend is excluded
+                          day's spend passes it. OpenCode/Codex/Grok/Muse spend is excluded
       --budget-pause      ...and no new workers can be hired until the next
                           day (env AGENT_OFFICE_BUDGET_PAUSE=1)
       --max-workers <n>   Run at most this many workers at once, across every
@@ -195,12 +223,17 @@ Options:
                           needs input or finishes (env AGENT_OFFICE_WEBHOOK).
                           Also settable from ⚙️ Settings in the office; "" turns it off
       --city <name>       Put the office in a real city, e.g. "Berlin" or
-                          "Portland, Oregon" (env AGENT_OFFICE_CITY): day, night
-                          and the weather outside follow its live forecast from
-                          open-meteo.com. Without it the sun follows this
-                          machine's clock and the weather is made up
+                          "Portland, Oregon" (env AGENT_OFFICE_CITY): the sun
+                          keeps its hours of daylight and the weather outside
+                          follows its live forecast from open-meteo.com.
+                          Without it the weather is made up. Either way a
+                          whole day and night go by every hour
       --weather <kind>    Pin the weather: clear, cloudy, rain, storm, snow or
                           fog (env AGENT_OFFICE_WEATHER)
+      --real-time-sky     Start the sky on the office's real clock, so it's night when
+                          it's night there, instead of a day and night every hour
+                          (⚙️ Settings can switch it)
+                          (env AGENT_OFFICE_SKY_CLOCK=real)
       --version           Print the office's version
   -h, --help              Show this help
 
@@ -244,6 +277,12 @@ IceServer parseTurn(String url) {
   return IceServer(urls: [url], urlsIsList: false);
 }
 
+/// AGENT_OFFICE_TURN: TURN URLs as [parseTurn] reads them, several separated by spaces.
+List<IceServer> turnServersFromEnv(String? value) => [
+  for (final url in (value ?? '').split(RegExp(r'\s+')))
+    if (url.isNotEmpty) parseTurn(url),
+];
+
 /// JavaScript's `Number(s)` for the strings a flag can hold: '' is 0, junk is NaN.
 double _jsNumber(String? s) {
   final t = (s ?? '').trim();
@@ -263,8 +302,9 @@ String? _env(String name) {
 /// Where the office lives when it isn't started in a project: ~/agent-office, or $AGENT_OFFICE_HOME.
 String officeHome() => _resolve(_env('AGENT_OFFICE_HOME') ?? p.join(homeDir(), 'agent-office'));
 
-/// Keep the office's own data out of git without touching the project's .gitignore.
-void excludeFromGit(String dir) {
+/// Keep the office's own data (or another [entry] it writes into the project) out of git without
+/// touching the project's .gitignore.
+void excludeFromGit(String dir, [String entry = '.agent-office/']) {
   try {
     final r = Process.runSync('git', ['rev-parse', '--git-common-dir'], workingDirectory: dir);
     if (r.exitCode != 0) return; // not a git repo; nothing to exclude
@@ -272,12 +312,10 @@ void excludeFromGit(String dir) {
     final exclude = _resolve(p.join(dir, gitDir, 'info', 'exclude'));
     final f = File(exclude);
     final cur = f.existsSync() ? f.readAsStringSync() : '';
-    if (!cur.split('\n').any((l) => l.trim() == '.agent-office/' || l.trim() == '.agent-office')) {
+    final bare = entry.replaceFirst(RegExp(r'/$'), '');
+    if (!cur.split('\n').any((l) => l.trim() == entry || l.trim() == bare)) {
       Directory(p.dirname(exclude)).createSync(recursive: true);
-      f.writeAsStringSync(
-        '${cur.isNotEmpty && !cur.endsWith('\n') ? '\n' : ''}.agent-office/\n',
-        mode: FileMode.append,
-      );
+      f.writeAsStringSync('${cur.isNotEmpty && !cur.endsWith('\n') ? '\n' : ''}$entry\n', mode: FileMode.append);
     }
   } catch (_) {
     // not a git repo (or no git); nothing to exclude
@@ -300,6 +338,7 @@ Config loadConfig(List<String> argv) {
   var password = _env('AGENT_OFFICE_PASSWORD') ?? '';
   var agentCmd = _env('AGENT_OFFICE_AGENT') ?? 'claude';
   var agentArgs = splitArgs(_env('AGENT_OFFICE_AGENT_ARGS') ?? '');
+  var dshProfile = _env('AGENT_OFFICE_DSH_PROFILE') ?? 'acp';
   var tlsCert = '';
   var tlsKey = '';
   var selfSigned = false;
@@ -314,8 +353,11 @@ Config loadConfig(List<String> argv) {
   var webhook = Platform.environment['AGENT_OFFICE_WEBHOOK'];
   var city = _env('AGENT_OFFICE_CITY') ?? '';
   var weather = _env('AGENT_OFFICE_WEATHER') ?? '';
+  var realTimeSky = Platform.environment['AGENT_OFFICE_SKY_CLOCK'] == 'real';
   final iceServers = <IceServer>[
     const IceServer(urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302']),
+    // A container can't take --turn (deploy/container), so the TURN servers come from the environment too.
+    ...turnServersFromEnv(Platform.environment['AGENT_OFFICE_TURN']),
   ];
 
   for (var i = 0; i < argv.length; i++) {
@@ -341,6 +383,8 @@ Config loadConfig(List<String> argv) {
         // Its value is flags itself ("--model opus"), so a leading -- doesn't mean the value is missing.
         if (i + 1 >= argv.length) _takeValue(argv, i, a);
         agentArgs = splitArgs(argv[++i]);
+      case '--dsh-profile':
+        dshProfile = _takeValue(argv, i++, a);
       case '--tls-cert':
         tlsCert = _takeValue(argv, i++, a);
       case '--tls-key':
@@ -372,6 +416,8 @@ Config loadConfig(List<String> argv) {
         city = _takeValue(argv, i++, a);
       case '--weather':
         weather = _takeValue(argv, i++, a);
+      case '--real-time-sky':
+        realTimeSky = true;
       default:
         if (a.startsWith('-')) {
           stderr.writeln('agent-office: unknown option $a\n');
@@ -498,17 +544,26 @@ Config loadConfig(List<String> argv) {
     },
     agentCmd: agentCmd,
     agentArgs: agentArgs,
+    dshProfile: dshProfile.trim().isEmpty ? 'acp' : dshProfile.trim(),
     tls: tls,
     trustProxy: trustProxy,
     iceServers: iceServers,
+    deployScript: _env('AGENT_OFFICE_DEPLOY_SCRIPT'),
     publicHost: _env('AGENT_OFFICE_PUBLIC_HOST'),
+    tailnet: _tailnetName(_env('AGENT_OFFICE_TAILSCALE_HOST')),
     budget: budgetUsd,
     budgetPause: budgetPause,
     maxWorkers: workerLimit,
     webhook: webhook,
     city: city.trim().isEmpty ? null : city.trim(),
     weather: weather.isEmpty ? null : Weather.parse(weather),
+    realTimeSky: realTimeSky,
   );
+}
+
+String? _tailnetName(String? host) {
+  final h = (host ?? '').toLowerCase().replaceFirst(RegExp(r'\.$'), '');
+  return h.isEmpty ? null : h;
 }
 
 /// Fills in `--self-signed`'s certificate: the one made on an earlier start, or a new one from

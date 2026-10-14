@@ -95,6 +95,12 @@ void main() {
   );
 
   test(
+    "an OpenCode worker's first message runs at the effort picked for it, for the model it was picked with",
+    () => runScenario('effort', 'agent-office-opencode-effort-'),
+    skip: _runtime == null ? 'no JavaScript runtime' : null,
+  );
+
+  test(
     'marks live OpenCode usage incomplete when hydration fails',
     () => runScenario('partial', 'agent-office-opencode-partial-'),
     skip: _runtime == null ? 'no JavaScript runtime' : null,
@@ -236,6 +242,47 @@ const scenarios = {
     } } } });
     await new Promise(resolve => setTimeout(resolve, 20));
     assert.equal(sent.filter(event => event.type === 'usage').at(-1)?.usage.incomplete, true);
+  },
+
+  // The tests/opencode.test.ts effort cases: a worker hired with an effort (and a model).
+  async effort() {
+    process.env.AGENT_OFFICE_SESSION_ID = '';
+    const plugin = async (effort, model = '') => {
+      process.env.AGENT_OFFICE_EFFORT = effort;
+      process.env.AGENT_OFFICE_MODEL = model;
+      const mod = await import(`${pluginUrl}?effort=${Date.now()}-${Math.random()}`);
+      const hooks = await mod.default({});
+      return async (sessionID, tui, modelID = 'claude-opus-5-5', variants = true) => {
+        const message = { model: { providerID: 'anthropic', modelID, ...(variants ? { variant: tui } : {}) } };
+        await hooks['chat.message']({ sessionID, ...(variants ? { variant: tui } : {}) }, { message, parts: [] });
+        return message.model.variant;
+      };
+    };
+    // Its first message runs at the worker's effort, whatever variant OpenCode remembers for the model.
+    let send = await plugin('low', 'anthropic/claude-opus-5-5');
+    assert.equal(await send('ses_root', 'high'), 'low');
+    assert.equal(await send('ses_child', 'high'), 'high');
+    assert.equal(await send('ses_root', 'low'), 'low');
+    assert.equal(await send('ses_root', 'max'), 'max');
+    assert.equal(await send('ses_root', 'high'), 'high');
+    // A TUI that doesn't take the variant up stays on the worker's effort until someone picks another.
+    send = await plugin('high');
+    assert.equal(await send('ses_root', undefined), 'high');
+    assert.equal(await send('ses_root', undefined), 'high');
+    assert.equal(await send('ses_root', 'low'), 'low');
+    assert.equal(await send('ses_root', undefined), undefined);
+    // An effort is for the model it was picked with.
+    send = await plugin('high', 'anthropic/claude-opus-5-5');
+    assert.equal(await send('ses_root', undefined, 'claude-haiku-4-5'), undefined);
+    assert.equal(await send('ses_root', undefined), undefined);
+    send = await plugin('high');
+    assert.equal(await send('ses_root', undefined, 'claude-haiku-4-5'), 'high');
+    // An OpenCode from before variants is left alone, and so is a worker with no effort.
+    send = await plugin('high');
+    assert.equal(await send('ses_root', undefined, 'claude-opus-5-5', false), undefined);
+    send = await plugin('');
+    assert.equal(await send('ses_root', 'high'), 'high');
+    assert.equal(await send('ses_root', undefined), undefined);
   },
 };
 

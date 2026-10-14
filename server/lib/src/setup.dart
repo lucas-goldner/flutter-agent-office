@@ -63,7 +63,7 @@ bool interactive() {
 /// The office starting in a terminal with no floors yet: walk through the workspace folder, GitHub
 /// sign-in and the first projects before it opens. Enter skips any of it; the elevator does the same.
 Future<void> welcome(Config cfg) async {
-  final building = Building(cfg.dataDir, cfg.projectsDir);
+  final building = Building(cfg.dataDir, cfg.projectsDir, terminal: true);
   if (building.list().isNotEmpty) return;
   // --projects is the answer to the first question (the office applies it again as it starts).
   final folderGiven = cfg.projects != null && building.setProjectsDir(cfg.projects!, 'the command line') == null;
@@ -146,7 +146,7 @@ Future<int> setupCommand(List<String> argv) async {
     );
     return 1;
   }
-  final building = Building(dataDir, inProject ? p.join(homeDir(), 'agent-office') : dir);
+  final building = Building(dataDir, inProject ? p.join(homeDir(), 'agent-office') : dir, terminal: true);
 
   if (projects.isNotEmpty || repos.isNotEmpty || !interactive()) {
     if (projects.isEmpty && repos.isEmpty) {
@@ -351,7 +351,7 @@ Future<void> _pickProjects(Building building, String login) async {
 /// Clones [repo] as a new floor, saying how it went.
 Future<bool> _addFloor(Building building, String repo, String by) async {
   final r = await building.add(repo, by, (def) {
-    stdout.writeln('     ⏳ Cloning ${def.repo ?? repo} into ${tildify(def.dir)}… (a big repository can take a minute)');
+    stdout.writeln('     ⏳ Cloning ${def.repo ?? repo} into ${tildify(def.dir)}…');
   });
   final def = r.floor;
   if (def == null) {

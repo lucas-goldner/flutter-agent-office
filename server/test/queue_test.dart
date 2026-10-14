@@ -1,9 +1,11 @@
+import 'dart:async';
 // Port of tests/queue.test.ts.
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:agent_office_server/src/agents.dart' show validateWorkerEffort;
 import 'package:agent_office_server/src/queue.dart';
+import 'package:agent_office_server/src/worker_pr.dart' show RepoSource;
 import 'package:office_shared/shared.dart';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
@@ -19,6 +21,7 @@ class FakeWorkers implements QueueWorkers {
   @override
   final AgentChoice? officeDefault;
   final List<WorkerInfo> workers = [];
+  final List<String?> owners = [];
   int hired = 0;
 
   @override
@@ -26,6 +29,11 @@ class FakeWorkers implements QueueWorkers {
 
   @override
   bool deskOccupied(String deskId) => workers.any((w) => w.deskId == deskId);
+
+  /// How far the back office is built out.
+  int built = 0;
+  @override
+  int wing() => built;
 
   @override
   ({WorkerInfo? worker, String? error}) spawn(
@@ -37,9 +45,14 @@ class FakeWorkers implements QueueWorkers {
     AgentProvider provider, [
     String? model,
     AgentEffort? effort,
+    ({String id, WorkerWorktree? worktree})? meeting,
+    List<RepoSource> repos = const [],
+    String? owner,
   ]) {
+    owners.add(owner);
+    final id = 'worker-${hired++}';
     final worker = WorkerInfo(
-      id: 'worker-${hired++}',
+      id: id,
       deskId: deskId,
       kind: kind,
       provider: provider,
@@ -55,9 +68,22 @@ class FakeWorkers implements QueueWorkers {
       cols: 80,
       rows: 24,
       viewers: const [],
+      worktree: worktree
+          ? WorkerWorktree(path: '.agent-office/worktrees/$id', branch: 'office/$id', base: 'abc')
+          : null,
     );
     workers.add(worker);
     return (worker: worker, error: null);
+  }
+
+  /// What [fetchBase] hands the queue: a fetch in flight, or null for nothing to wait for.
+  Future<void>? fetching;
+  int fetches = 0;
+
+  @override
+  Future<void>? fetchBase() {
+    fetches++;
+    return fetching;
   }
 
   @override
@@ -93,7 +119,7 @@ class Fixture {
         worktreeNote: worktreeNote,
         update: (_) {},
         toast: (_, _) {},
-        claimIssue: (_) async => null,
+        claimIssue: (_, _) async => null,
         refreshGitHub: () {},
         hiringPaused: () => null,
         emptied: () => emptied++,
@@ -131,6 +157,50 @@ void main() {
     expect(f.workers[1].provider, AgentProvider.opencode);
   });
 
+  test('the queue seats its workers at the back office once it is built, before any bean bag', () {
+    for (final built in [0, 1]) {
+      final f = fixture();
+      f.manager.built = built;
+      // Every desk in the room taken, by hand.
+      for (final d in desks) {
+        f.manager.workers.add(
+          WorkerInfo(
+            id: 'hand-${d.id}',
+            kind: WorkerKind.agent,
+            deskId: d.id,
+            name: 'Hand',
+            color: '#000000',
+            status: WorkerStatus.idle,
+            acked: true,
+            createdBy: 'Ada',
+            createdAt: 0,
+            cols: 80,
+            rows: 24,
+            viewers: const [],
+          ),
+        );
+      }
+      final q = f.open();
+      expect(q.add('Fix login', 'Tester', null, null, AgentProvider.claude), isNull);
+      expect(f.workers.last.deskId, built == 0 ? beanbags.first.id : wingDesks.first.id);
+    }
+  });
+
+  test("a task runs on the sign-ins of whoever queued it, after a restart and a retry too", () {
+    final f = fixture();
+    final q = f.open();
+    q.setLimit(0);
+    q.add('Fix login', 'Ada', null, null, AgentProvider.claude, null, null, 'acct01');
+    q.add('Fix logout', 'Guest', null, null, AgentProvider.claude);
+    expect(q.state().tasks.map((t) => t.owner), ['acct01', null]);
+    q.shutdown();
+    final restored = f.open();
+    restored.setLimit(2);
+    expect(f.manager.owners, ['acct01', null]);
+    restored.onWorker(f.manager.set(0, WorkerStatus.done));
+    restored.retry(restored.state().tasks.firstWhere((t) => t.owner == 'acct01').id);
+    expect(f.manager.owners.last, 'acct01');
+  });
   test('queued provider survives restart even when the configured default differs', () {
     final f = fixture();
     final q = f.open();
@@ -231,12 +301,13 @@ void main() {
     expect(f.emptied, 0);
   });
 
-  test('queue rejects reasoning effort unless the task is Claude and the level is known', () {
+  test('queue rejects a reasoning effort its provider takes none of, or nobody knows', () {
     final f = fixture();
     final q = f.open();
+    // Cursor's effort is part of its model id: it takes none of its own.
     expect(
-      q.add('Task', 'Tester', null, null, AgentProvider.opencode, null, AgentEffort.high) ?? '',
-      matches(RegExp('effort|Claude', caseSensitive: false)),
+      q.add('Task', 'Tester', null, null, AgentProvider.cursor, null, AgentEffort.high) ?? '',
+      matches(RegExp('effort', caseSensitive: false)),
     );
     // An unknown level ('overdrive') can't be an AgentEffort in Dart; the validator still says so.
     expect(validateEffortText('overdrive'), matches(RegExp('effort', caseSensitive: false)));
@@ -367,6 +438,104 @@ void main() {
     final none = fixture();
     none.open(worktree: true, worktreeNote: () => '').add('Fix it', 'Ada');
     expect(none.workers[0].prompt, 'Fix it');
+  });
+
+  test('a worktree task waits for the fetch of what its worktree starts from, then sits down', () async {
+    final dir = Directory.systemTemp.createTempSync('office-queue-');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final manager = FakeWorkers(AgentProvider.claude);
+    final fetched = Completer<void>();
+    manager.fetching = fetched.future;
+    final q = TaskQueue(
+      dir.path,
+      manager,
+      true,
+      QueueEvents(
+        update: (_) {},
+        toast: (_, _) {},
+        claimIssue: (_, _) async => null,
+        refreshGitHub: () {},
+        hiringPaused: () => null,
+        emptied: () {},
+      ),
+    );
+    addTearDown(q.shutdown);
+    q.add('Fix login', 'Tester');
+    q.add('Fix logout', 'Tester');
+    expect(manager.workers, isEmpty);
+    expect(q.state().tasks[0].status, TaskStatus.queued);
+    q.pump();
+    expect(manager.workers, isEmpty);
+    manager.fetching = null;
+    fetched.complete();
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+    // One fetch for the pair of them.
+    expect(manager.workers.length, 2);
+    expect([for (final t in q.state().tasks) t.status], [TaskStatus.running, TaskStatus.running]);
+  });
+
+  test("a queue that has nowhere to seat anyone doesn't fetch", () {
+    final dir = Directory.systemTemp.createTempSync('office-queue-');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final manager = FakeWorkers(AgentProvider.claude)..fetching = Completer<void>().future;
+    final q = TaskQueue(
+      dir.path,
+      manager,
+      true,
+      QueueEvents(
+        update: (_) {},
+        toast: (_, _) {},
+        claimIssue: (_, _) async => null,
+        refreshGitHub: () {},
+        hiringPaused: () => null,
+        emptied: () {},
+        room: () => 0,
+      ),
+    );
+    addTearDown(q.shutdown);
+    q.add('Fix login', 'Tester');
+    expect(manager.fetches, 0);
+  });
+
+  test("a queue worker that switches to a branch of its own takes its task's branch along, so the PR from there is "
+      'linked', () {
+    final f = fixture();
+    final q = f.open(worktree: true);
+    expect(q.add('Fix login', 'Tester'), isNull);
+    expect(q.state().tasks[0].branch, 'office/worker-0');
+    q.onWorker(f.manager.set(0, WorkerStatus.done));
+    expect(q.state().tasks[0].outcome, TaskOutcome.done);
+    // The office noticed it had run `git checkout -b fix-login` (see WorkerManager.syncBranches).
+    final w = f.workers[0];
+    f.workers[0] = WorkerInfo.fromJson({
+      ...w.toJson(),
+      'worktree': {...w.worktree!.toJson(), 'branch': 'fix-login', 'made': 'office/worker-0'},
+    });
+    q.onWorker(f.workers[0]);
+    expect(q.state().tasks[0].branch, 'fix-login');
+    q.onPulls([
+      GhPull.fromJson({
+        'number': 242,
+        'title': 'Fix login',
+        'state': 'OPEN',
+        'isDraft': false,
+        'url': 'https://github.com/o/r/pull/242',
+        'author': '',
+        'labels': <String>[],
+        'reviewDecision': '',
+        'headRefName': 'fix-login',
+        'baseRefName': 'main',
+        'createdAt': DateTime.now().toIso8601String(),
+        'updatedAt': '',
+        'additions': 0,
+        'deletions': 0,
+        'checks': 'none',
+        'body': '',
+        'closes': <int>[],
+      }),
+    ]);
+    expect(q.state().tasks[0].pr?.number, 242);
   });
 }
 

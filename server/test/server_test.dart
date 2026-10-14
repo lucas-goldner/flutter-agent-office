@@ -123,6 +123,9 @@ void main() {
     expect(await post('/hooks/elsewhere'), 404);
     // The board agents' queue: only for a worker that proves who it is.
     expect(await post('/office/queue?worker=nobody'), 401);
+    // The office's workers, for every worker (office-workers): the same.
+    expect(await post('/office/workers?worker=nobody'), 401);
+    expect(await post('/office/workers/home?worker=nobody'), 401);
   });
 
   test('WebSocket: welcome, a shell worker typed into, and sent home', () async {
@@ -193,12 +196,66 @@ void main() {
     await sub.cancel();
     expect(output, matches(echoed));
 
+    // Coming back in: on the same floor at the same spot, or up on the roof when that floor is gone.
+    Future<Map<String, dynamic>> me(String query) async {
+      final other = await WebSocket.connect(
+        'ws://127.0.0.1:$port/ws?$query',
+        headers: {'cookie': cookie, 'origin': 'http://127.0.0.1:$port'},
+      );
+      final hello = jsonDecode(await other.first as String) as Map<String, dynamic>;
+      await other.close();
+      return (hello['peers'] as List).cast<Map<String, dynamic>>().firstWhere((p) => p['id'] == hello['you']);
+    }
+
+    final back = await me('floor=project&x=1.5&y=0&z=2&rotY=0.5');
+    expect([back['floor'], back['x'], back['z'], back['rotY']], ['project', 1.5, 2, 0.5]);
+    final roofed = await me('floor=taken-off&x=1.5&z=2');
+    expect(roofed['floor'], '@roof');
+    expect(roofed['x'], isNot(1.5));
+
     send({'t': 'ping', 'at': 42});
     final pong = await next((m) => m['t'] == 'pong');
     expect(pong['at'], 42, reason: 'whole numbers go out as the Node server sent them');
 
+    // A screenshot dropped into its terminal is kept on this machine, and goes when the worker does.
+    Future<HttpClientResponse> drop(String query, List<int> bytes, {String? origin}) async {
+      final req = await client.post('127.0.0.1', port, '/api/term/drop?$query');
+      req.headers.set('cookie', cookie);
+      if (origin != null) req.headers.set('origin', origin);
+      req.headers.set('content-type', 'image/png');
+      req.add(bytes);
+      return req.close();
+    }
+
+    final dropped = await drop('floor=project&worker=$id&name=my%20shot.png', [
+      1,
+      2,
+      3,
+    ], origin: 'http://127.0.0.1:$port');
+    final droppedBody = jsonDecode(await utf8.decoder.bind(dropped).join()) as Map<String, dynamic>;
+    expect(dropped.statusCode, 200);
+    final droppedPath = droppedBody['path'] as String;
+    expect(
+      droppedPath,
+      matches(
+        RegExp(
+          r'/\.agent-office/drops/'
+          '$id'
+          r'/[0-9a-f]{8}-my-shot\.png$',
+        ),
+      ),
+    );
+    expect(File(droppedPath).readAsBytesSync(), [1, 2, 3]);
+    final foreign = await drop('floor=project&worker=$id', [1], origin: 'http://evil.example');
+    await foreign.drain<void>();
+    expect(foreign.statusCode, 403);
+    final nobody = await drop('floor=project&worker=nobody', [1], origin: 'http://127.0.0.1:$port');
+    await nobody.drain<void>();
+    expect(nobody.statusCode, 404);
+
     send({'t': 'worker.kill', 'workerId': id});
     expect(await next((m) => m['t'] == 'worker.remove'), {'t': 'worker.remove', 'workerId': id});
+    expect(File(droppedPath).existsSync(), isFalse);
     await ws.close();
 
     expect(ptyHosts(), isNotEmpty, reason: 'the terminals ran in the PTY host');

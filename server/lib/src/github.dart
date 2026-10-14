@@ -5,24 +5,93 @@ import 'dart:io';
 import 'package:office_shared/json_util.dart';
 import 'package:office_shared/shared.dart';
 
+import 'signins.dart' show GhAs;
+
 const Duration _refreshEvery = Duration(milliseconds: 90000);
 
 /// How long the repo's list of labels is kept before the label picker asks GitHub again.
 const _labelsMs = 60000;
 
 /// Turns gh's stderr into something a person standing at the board can act on.
-String _friendly(String raw) {
-  if (RegExp(r'no git remotes found|none of the git remotes', caseSensitive: false).hasMatch(raw)) {
+String friendlyGhError(String raw) {
+  final lines = [
+    for (final l in raw.trim().split('\n'))
+      if (l.trim().isNotEmpty) l.trim(),
+  ];
+  final text = lines.join(' ');
+  final first = lines.isNotEmpty ? lines.first : raw.trim();
+  bool has(String pattern, String s) => RegExp(pattern, caseSensitive: false).hasMatch(s);
+  if (has(r'^Unknown JSON field:', first)) return first;
+  if (has(r'no git remotes found|none of the git remotes', text)) {
     return 'This project has no GitHub remote yet. Push it to GitHub (git remote add origin <url>) to fill the boards.';
   }
-  if (RegExp(r'not a git repository', caseSensitive: false).hasMatch(raw)) return "This folder isn't a git repository";
-  if (RegExp(r'auth login|not logged in|authentication', caseSensitive: false).hasMatch(raw)) {
-    return "gh isn't logged in on the server — run `gh auth login`";
+  if (has(r'not a git repository', text)) return "This folder isn't a git repository";
+  if (has(r'auth login|not logged in|authentication', text)) {
+    return "gh isn't signed in to GitHub on the office's machine — run `gh auth login` there";
   }
-  if (RegExp(r'could not resolve to a repository|not found', caseSensitive: false).hasMatch(raw)) {
+  if (has(r'could not resolve to a repository|not found', text)) {
     return "gh can't find this repository on GitHub (check the remote and access)";
   }
-  return raw;
+  final last = lines.sublist(lines.length > 2 ? lines.length - 2 : 0).join(' ');
+  return last.isNotEmpty ? last : raw;
+}
+
+/// How the GitHub boards run gh (tests stand one in).
+typedef GhRunner = Future<String> Function(List<String> args, String cwd, [int timeout, Map<String, String>? env]);
+
+const _pullListFields = [
+  'number', 'title', 'state', 'isDraft', 'url', 'author', 'labels', 'reviewDecision', 'headRefName', //
+  'headRefOid', 'baseRefName', 'createdAt', 'updatedAt', 'additions', 'deletions', 'statusCheckRollup', //
+  'body', 'closingIssuesReferences',
+];
+const _requiredPullListFields = {'number', 'title', 'state'};
+
+/// The field an older gh turned down (`Unknown JSON field: "x"`), when that's what it said.
+String? _unsupportedJsonField(String message) =>
+    RegExp(r'^Unknown JSON field: "([^"]+)"', caseSensitive: false).firstMatch(message.trim())?.group(1);
+
+/// The issues workers just took. Assigning one on GitHub and listing the issues again takes seconds,
+/// so each is marked `taken` on the board from the moment it's handed over until a list has its assignee.
+class Claims {
+  /// By issue number: when GitHub had it assigned (null until it answers).
+  final _claimed = <int, _Claim>{};
+
+  /// A worker took issue [n]. Call what it returns once GitHub has answered, with whether it's
+  /// assigned now ([now] defaults to the clock).
+  void Function(bool assigned, [int? now]) take(int n) {
+    final claim = _Claim();
+    _claimed[n] = claim;
+    return (assigned, [now]) {
+      if (assigned) {
+        claim.at = now ?? DateTime.now().millisecondsSinceEpoch;
+      } else if (identical(_claimed[n], claim)) {
+        // Unless someone handed it over again meanwhile, and GitHub hasn't answered them yet.
+        _claimed.remove(n);
+      }
+    };
+  }
+
+  bool has(int n) => _claimed.containsKey(n);
+
+  /// [items] with the taken ones marked. A list asked for ([asked]) before an issue was assigned
+  /// doesn't have its assignee yet, so it stays marked over it; one asked for after is believed, and
+  /// the claim forgotten.
+  List<GhIssue> mark(List<GhIssue> items, [int asked = 0]) {
+    _claimed.removeWhere((_, claim) => claim.at != null && claim.at! < asked);
+    return [
+      for (final it in items)
+        if (_claimed.containsKey(it.number))
+          GhIssue.fromJson({...it.toJson(), 'taken': true})
+        else if (it.taken != null)
+          GhIssue.fromJson({...it.toJson()}..remove('taken'))
+        else
+          it,
+    ];
+  }
+}
+
+class _Claim {
+  int? at;
 }
 
 /// What a finished (or stopped) child process left behind.
@@ -38,8 +107,14 @@ class _Ran {
 
 /// Runs a command like Node's execFile: collects its output and kills it once [timeout] passes.
 /// Throws a [ProcessException] when it can't be run at all.
-Future<_Ran> _exec(String cmd, List<String> args, String cwd, Duration timeout) async {
-  final proc = await Process.start(cmd, args, workingDirectory: cwd);
+Future<_Ran> _exec(String cmd, List<String> args, String cwd, Duration timeout, [Map<String, String>? env]) async {
+  final proc = await Process.start(
+    cmd,
+    args,
+    workingDirectory: cwd,
+    environment: env,
+    includeParentEnvironment: env == null,
+  );
   var killed = false;
   final timer = Timer(timeout, () {
     killed = true;
@@ -53,19 +128,26 @@ Future<_Ran> _exec(String cmd, List<String> args, String cwd, Duration timeout) 
 }
 
 /// Runs the GitHub CLI in [cwd] and resolves to its stdout; a failure throws a message worth showing.
-Future<String> gh(List<String> args, String cwd, [int timeout = 30000]) async {
+/// The GitHub CLI the office runs: `gh` on PATH. Tests put a fake one in its place.
+String ghCommand = 'gh';
+
+///
+/// With [env] it runs as someone signed in to their own GitHub (see signins.dart), with exactly that
+/// environment, instead of as the office.
+Future<String> gh(List<String> args, String cwd, [int timeout = 30000, Map<String, String>? env]) async {
   _Ran r;
   try {
-    r = await _exec('gh', args, cwd, Duration(milliseconds: timeout));
+    r = await _exec(ghCommand, args, cwd, Duration(milliseconds: timeout), env);
   } on ProcessException catch (e) {
     if (e.errorCode == 2) throw GhError('GitHub CLI (gh) is not installed on the server');
-    throw GhError(_friendly(e.message));
+    throw GhError(friendlyGhError(e.message));
   }
   if (r.code == 0 && !r.killed) return r.out;
   final raw = r.err.isNotEmpty ? r.err : 'Command failed: gh ${args.join(' ')}';
-  final lines = raw.trim().split('\n');
-  final msg = lines.sublist(lines.length > 2 ? lines.length - 2 : 0).join(' ');
-  throw GhError(_friendly(msg));
+  if (env != null && RegExp('auth login|not logged in|authentication', caseSensitive: false).hasMatch(raw)) {
+    throw GhError('Your GitHub sign-in stopped working — sign in again (☰ → 🔐 Your sign-ins)');
+  }
+  throw GhError(friendlyGhError(raw));
 }
 
 /// Why a gh command failed, in words for the person at the board.
@@ -183,9 +265,14 @@ class MergeWatch {
 }
 
 class GitHub {
-  GitHub(this._dir, this._onIssues, this._onPulls);
+  GitHub(this._dir, this._onIssues, this._onPulls, [GhRunner? runGh]) : _runGh = runGh ?? gh;
 
   final String _dir;
+  final GhRunner _runGh;
+  final _claims = Claims();
+
+  /// The look at the issues that's under way, if one is.
+  Future<void>? _listing;
   final void Function(GhState<GhIssue> s) _onIssues;
   final void Function(GhState<GhPull> s) _onPulls;
 
@@ -217,7 +304,7 @@ class GitHub {
     final existing = _repo;
     if (existing != null) return existing;
     final f =
-        gh([
+        _runGh([
           'repo',
           'view',
           '--json',
@@ -252,7 +339,7 @@ class GitHub {
   Future<String> viewer() {
     var f = _login;
     if (f == null) {
-      final asked = gh(['api', 'user', '--jq', '.login'], _dir).then((out) => out.trim());
+      final asked = _runGh(['api', 'user', '--jq', '.login'], _dir).then((out) => out.trim());
       _login = f = asked;
       asked.then(
         (_) {},
@@ -265,14 +352,21 @@ class GitHub {
   }
 
   /// A PR's description, conversation, line comments, checks and whether it can merge.
-  Future<GhPullDetail> pullDetail(int n) async {
+  /// [me] is the GitHub login of whoever asked, when they're signed in to their own; else it's the office's.
+  Future<GhPullDetail> pullDetail(int n, [String? me]) async {
     const fields =
         'number,body,state,isDraft,reviewDecision,headRefName,baseRefName,mergeable,mergeStateStatus,commits,comments,reviews,statusCheckRollup';
     const jq = '.[] | {id, in_reply_to_id, path, line, side, body, user: .user.login, created_at, html_url}';
-    final viewF = gh(['pr', 'view', '$n', '--json', fields], _dir);
-    final linesF = gh(['api', 'repos/{owner}/{repo}/pulls/$n/comments?per_page=100', '--paginate', '--jq', jq], _dir);
+    final viewF = _runGh(['pr', 'view', '$n', '--json', fields], _dir);
+    final linesF = _runGh([
+      'api',
+      'repos/{owner}/{repo}/pulls/$n/comments?per_page=100',
+      '--paginate',
+      '--jq',
+      jq,
+    ], _dir);
     final repoF = repoInfo();
-    final viewerF = viewer();
+    final viewerF = me != null ? Future.value(me) : viewer();
     // Like Promise.all: every one is awaited, and the first failure is what's thrown.
     await Future.wait<Object?>([viewF, linesF, repoF, viewerF], eagerError: true);
     final view = await viewF;
@@ -321,11 +415,11 @@ class GitHub {
   }
 
   /// The PR's unified diff, as `git diff` prints it.
-  Future<String> pullDiff(int n) => gh(['pr', 'diff', '$n', '--color', 'never'], _dir, 60000);
+  Future<String> pullDiff(int n) => _runGh(['pr', 'diff', '$n', '--color', 'never'], _dir, 60000);
 
-  Future<GhIssueDetail> issueDetail(int n) async {
-    final viewF = gh(['issue', 'view', '$n', '--json', 'number,state,body,comments'], _dir);
-    final viewerF = viewer();
+  Future<GhIssueDetail> issueDetail(int n, [String? me]) async {
+    final viewF = _runGh(['issue', 'view', '$n', '--json', 'number,state,body,comments'], _dir);
+    final viewerF = me != null ? Future.value(me) : viewer();
     await Future.wait<Object?>([viewF, viewerF], eagerError: true);
     final i = asMap(jsonDecode(await viewF));
     return GhIssueDetail(
@@ -337,23 +431,19 @@ class GitHub {
     );
   }
 
-  /// Comments on an issue, or on a PR's conversation (to GitHub a PR is an issue too), as whoever gh
-  /// is signed in as. Returns the comment as GitHub saved it, or why it couldn't.
-  Future<({GhComment? comment, String? error})> comment(GhKind kind, int n, String body) async {
+  /// Comments on an issue, or on a PR's conversation (to GitHub a PR is an issue too), as [as] or else
+  /// the office. Returns the comment as GitHub saved it, or why it couldn't.
+  Future<({GhComment? comment, String? error})> comment(GhKind kind, int n, String body, [GhAs? as]) async {
     GhComment comment;
     try {
       // -f sends the body as a plain string: no @file reading, no {owner} filling in.
       const jq = '{id: .node_id, author: {login: .user.login}, body, createdAt: .created_at, url: .html_url}';
-      final out = await gh([
-        'api',
-        '--method',
-        'POST',
-        'repos/{owner}/{repo}/issues/$n/comments',
-        '-f',
-        'body=$body',
-        '--jq',
-        jq,
-      ], _dir);
+      final out = await _runGh(
+        ['api', '--method', 'POST', 'repos/{owner}/{repo}/issues/$n/comments', '-f', 'body=$body', '--jq', jq],
+        _dir,
+        30000,
+        as?.env,
+      );
       comment = _commentsOf([jsonDecode(out)]).first;
     } catch (err) {
       return (comment: null, error: _messageOf(err));
@@ -364,7 +454,7 @@ class GitHub {
   }
 
   /// Merges a PR, or with `auto` has GitHub merge it once its requirements pass. Returns an error.
-  Future<String?> merge(int n, GhMergeMethod method, bool deleteBranch, bool auto) async {
+  Future<String?> merge(int n, GhMergeMethod method, bool deleteBranch, bool auto, [GhAs? as]) async {
     try {
       final repo = await repoInfo();
       // --repo keeps gh out of the office's own checkout: without it, --delete-branch also deletes
@@ -372,7 +462,7 @@ class GitHub {
       final args = ['pr', 'merge', '$n', '--${method.wire}', '--repo', repo.nameWithOwner];
       if (deleteBranch) args.add('--delete-branch');
       if (auto) args.add('--auto');
-      await gh(args, _dir, 90000);
+      await _runGh(args, _dir, 90000, as?.env);
     } catch (err) {
       return _messageOf(err);
     }
@@ -381,7 +471,14 @@ class GitHub {
   }
 
   /// Closes an issue, or a pull request without merging it, optionally saying why. Returns an error.
-  Future<String?> close(GhKind kind, int n, {String? comment, GhCloseReason? reason, bool deleteBranch = false}) async {
+  Future<String?> close(
+    GhKind kind,
+    int n, {
+    String? comment,
+    GhCloseReason? reason,
+    bool deleteBranch = false,
+    GhAs? as,
+  }) async {
     try {
       final repo = await repoInfo();
       // --repo for the same reason as merge: --delete-branch must leave the office's checkout alone.
@@ -390,7 +487,7 @@ class GitHub {
       if (comment != null && comment.isNotEmpty) args.add('--comment=$comment');
       if (kind == GhKind.issue && reason != null) args.add('--reason=${reason.wire}');
       if (kind == GhKind.pull && deleteBranch) args.add('--delete-branch');
-      await gh(args, _dir);
+      await _runGh(args, _dir, 30000, as?.env);
     } catch (err) {
       return _messageOf(err);
     }
@@ -409,9 +506,9 @@ class GitHub {
 
   /// Posts a review on a pull request that only comments (the meeting room's review panel), its body
   /// read from [file]. Resolves to the review's URL.
-  Future<String> review(int n, String file) async {
+  Future<String> review(int n, String file, [GhAs? as]) async {
     // -F reads @file's contents as the value; {owner}/{repo} are filled in from the checkout's remote.
-    final url = (await gh(
+    final url = (await _runGh(
       [
         'api',
         '--method',
@@ -426,6 +523,7 @@ class GitHub {
       ],
       _dir,
       60000,
+      as?.env,
     )).trim();
     unawaited(_refreshPulls());
     return url;
@@ -436,7 +534,7 @@ class GitHub {
     final known = _labelList;
     if (known != null && _now() - known.at <= _labelsMs) return known.list;
     final list =
-        gh([
+        _runGh([
           'api',
           'repos/{owner}/{repo}/labels?per_page=100',
           '--paginate',
@@ -464,14 +562,15 @@ class GitHub {
     return list;
   }
 
-  /// Puts labels on an issue or PR and takes others off (to GitHub a PR is an issue too), as whoever
-  /// gh is signed in as. Returns the labels it has now, or why they didn't change.
+  /// Puts labels on an issue or PR and takes others off (to GitHub a PR is an issue too), as [as] or
+  /// else the office. Returns the labels it has now, or why they didn't change.
   Future<({List<GhLabel>? labels, String? error})> setLabels(
     GhKind kind,
     int n,
     List<String> add,
-    List<String> remove,
-  ) async {
+    List<String> remove, [
+    GhAs? as,
+  ]) async {
     final path = 'repos/{owner}/{repo}/issues/$n/labels';
     const jq = '[.[] | {name, color}]';
     List<GhLabel>? now;
@@ -480,29 +579,41 @@ class GitHub {
       if (add.isNotEmpty) {
         now = _labels(
           jsonDecode(
-            await gh([
-              'api',
-              '--method',
-              'POST',
-              path,
-              for (final l in add) ...['-f', 'labels[]=$l'],
-              '--jq',
-              jq,
-            ], _dir),
+            await _runGh(
+              [
+                'api',
+                '--method',
+                'POST',
+                path,
+                for (final l in add) ...['-f', 'labels[]=$l'],
+                '--jq',
+                jq,
+              ],
+              _dir,
+              30000,
+              as?.env,
+            ),
           ),
         );
       }
       for (final l in remove) {
         try {
           now = _labels(
-            jsonDecode(await gh(['api', '--method', 'DELETE', '$path/${Uri.encodeComponent(l)}', '--jq', jq], _dir)),
+            jsonDecode(
+              await _runGh(
+                ['api', '--method', 'DELETE', '$path/${Uri.encodeComponent(l)}', '--jq', jq],
+                _dir,
+                30000,
+                as?.env,
+              ),
+            ),
           );
         } catch (err) {
           // Someone took it off already, which is what was asked for.
           if (!RegExp('label does not exist', caseSensitive: false).hasMatch(_messageOf(err))) rethrow;
         }
       }
-      now ??= _labels(jsonDecode(await gh(['api', '$path?per_page=100', '--jq', jq], _dir)));
+      now ??= _labels(jsonDecode(await _runGh(['api', '$path?per_page=100', '--jq', jq], _dir)));
     } catch (err) {
       // Some may have changed before it failed.
       unawaited(kind == GhKind.issue ? _refreshIssues() : _refreshPulls());
@@ -559,19 +670,41 @@ class GitHub {
     return (it is GhIssue ? GhIssue.fromJson(json) : GhPull.fromJson(json)) as T;
   }
 
-  /// Assigns the issue to whoever gh is signed in as, which moves it to In progress on the board.
-  Future<String?> claim(int issue) async {
+  /// A worker took the issue: it moves to In progress on the board at once, and is assigned on GitHub
+  /// to [as] (else whoever the office's own gh is signed in as), which is what keeps it there. Returns an
+  /// error when GitHub wouldn't assign it, and the card goes back to where it was.
+  Future<String?> claim(int issue, [GhAs? as]) async {
+    final answered = _claims.take(issue);
+    _showClaims();
     try {
-      await gh(['issue', 'edit', '$issue', '--add-assignee', '@me'], _dir);
+      await _runGh(['issue', 'edit', '$issue', '--add-assignee', '@me'], _dir, 30000, as?.env);
     } catch (err) {
+      answered(false);
+      _showClaims();
       return _messageOf(err);
     }
-    unawaited(_refreshIssues());
+    answered(true);
+    // For its assignee's name. A look already under way was asked before it was assigned, so look again after it.
+    unawaited(_refreshIssues().then((_) => _claims.has(issue) ? _refreshIssues() : null));
     return null;
   }
 
-  Future<void> _refreshIssues() async {
-    if (issues.loading) return;
+  /// Puts the issues workers have taken (or no longer have) on the board, ahead of the next look at GitHub.
+  void _showClaims() {
+    issues = GhState(
+      items: _claims.mark(issues.items),
+      error: issues.error,
+      fetchedAt: issues.fetchedAt,
+      loading: issues.loading,
+    );
+    _onIssues(issues);
+  }
+
+  /// Asks GitHub for the issues. With a look already under way it's that one, which may have been
+  /// asked before whatever just changed.
+  Future<void> _refreshIssues() => _listing ??= _listIssues().whenComplete(() => _listing = null);
+
+  Future<void> _listIssues() async {
     issues = GhState(items: issues.items, error: issues.error, fetchedAt: issues.fetchedAt, loading: true);
     _onIssues(issues);
     final asked = _now();
@@ -579,8 +712,8 @@ class GitHub {
       // Open and closed separately, so old open issues are never crowded out by recent closed ones.
       const fields = 'number,title,state,url,author,labels,assignees,createdAt,updatedAt,body,comments';
       final lists = await Future.wait([
-        gh(['issue', 'list', '--state', 'open', '--limit', '300', '--json', fields], _dir),
-        gh(['issue', 'list', '--state', 'closed', '--limit', '40', '--json', fields], _dir),
+        _runGh(['issue', 'list', '--state', 'open', '--limit', '300', '--json', fields], _dir),
+        _runGh(['issue', 'list', '--state', 'closed', '--limit', '40', '--json', fields], _dir),
       ]);
       final items = <GhIssue>[
         for (final out in lists)
@@ -602,11 +735,44 @@ class GitHub {
               comments: i['comments'] is List ? (i['comments'] as List).length : asInt(i['comments']),
             ),
       ];
-      issues = GhState(items: _relabel(GhKind.issue, items, asked), fetchedAt: _now(), loading: false);
+      issues = GhState(
+        items: _claims.mark(_relabel(GhKind.issue, items, asked), asked),
+        fetchedAt: _now(),
+        loading: false,
+      );
     } catch (err) {
       issues = GhState(items: issues.items, loading: false, error: _messageOf(err), fetchedAt: _now());
     }
     _onIssues(issues);
+  }
+
+  /// One state's pull requests, as JSON. An older gh turns down a field it doesn't know
+  /// (`Unknown JSON field`): it's left out and gh asked again, unless the board can't do without it.
+  Future<List> _listPulls(String state, int limit) async {
+    var fields = [..._pullListFields];
+    for (;;) {
+      try {
+        final out = await _runGh([
+          'pr',
+          'list',
+          '--state',
+          state,
+          '--limit',
+          '$limit',
+          '--json',
+          fields.join(','),
+        ], _dir);
+        final list = jsonDecode(out);
+        return list is List ? list : const [];
+      } catch (err) {
+        final field = _unsupportedJsonField(_messageOf(err));
+        if (field == null || _requiredPullListFields.contains(field) || !fields.contains(field)) rethrow;
+        fields = [
+          for (final f in fields)
+            if (f != field) f,
+        ];
+      }
+    }
   }
 
   Future<void> _refreshPulls() async {
@@ -615,20 +781,23 @@ class GitHub {
     _onPulls(pulls);
     final asked = _now();
     try {
-      const fields =
-          'number,title,state,isDraft,url,author,labels,reviewDecision,headRefName,headRefOid,baseRefName,createdAt,updatedAt,additions,deletions,statusCheckRollup,body,closingIssuesReferences';
-      final lists = await Future.wait([
-        gh(['pr', 'list', '--state', 'open', '--limit', '150', '--json', fields], _dir),
-        gh(['pr', 'list', '--state', 'merged', '--limit', '30', '--json', fields], _dir),
-        gh(['pr', 'list', '--state', 'closed', '--limit', '40', '--json', fields], _dir),
-      ]);
+      final lists = await Future.wait([_listPulls('open', 150), _listPulls('merged', 30), _listPulls('closed', 40)]);
       // `--state closed` includes merged PRs; keep only the ones closed without merging.
       final seen = <Object?>{};
       final all = [
-        for (final out in lists)
-          for (final p in (jsonDecode(out) as List).whereType<Map>())
+        for (final list in lists)
+          for (final p in list.whereType<Map>())
             if (seen.add(p['number'])) p,
       ];
+      bool hasUrl(Map p) => p['url'] is String && (p['url'] as String).isNotEmpty;
+      GhRepoInfo? repo;
+      if (all.any((p) => !hasUrl(p))) {
+        try {
+          repo = await repoInfo();
+        } catch (_) {
+          // the PRs still show, without a link
+        }
+      }
       final items = [
         for (final p in all)
           GhPull(
@@ -636,7 +805,11 @@ class GitHub {
             title: asString(p['title']),
             state: asString(p['state']),
             isDraft: _truthy(p['isDraft']),
-            url: asString(p['url']),
+            url: hasUrl(p)
+                ? p['url'] as String
+                : repo != null
+                ? 'https://github.com/${repo.nameWithOwner}/pull/${p['number']}'
+                : '',
             author: _loginOf(p['author']),
             labels: _labels(p['labels']),
             reviewDecision: _str(p['reviewDecision']) ?? '',
@@ -644,7 +817,7 @@ class GitHub {
             headRefOid: _str(p['headRefOid']),
             baseRefName: asString(p['baseRefName']),
             createdAt: asString(p['createdAt']),
-            updatedAt: asString(p['updatedAt']),
+            updatedAt: _str(p['updatedAt']) ?? asString(p['createdAt']),
             additions: asInt(p['additions']),
             deletions: asInt(p['deletions']),
             checks: _checksOf(p['statusCheckRollup']),

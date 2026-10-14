@@ -1,0 +1,15 @@
+# Only what the image builds from: install.sh, deploy/ and a release tarball if you give one
+# (AGENT_OFFICE_TARBALL). deploy/railway.sh uploads with .gitignore applied too, and deploy/fly.sh
+# hands this file to Fly's builder.
+*
+!install.sh
+!deploy/
+!dist/agent-office-*.tar.gz
+# Keep local secrets out of the image even under deploy/: env files, keys, the dev password file.
+**/.env*
+**/.claude
+**/.agent-office
+**/*.pem
+**/*.key
+**/id_*
+**/pw.txt
