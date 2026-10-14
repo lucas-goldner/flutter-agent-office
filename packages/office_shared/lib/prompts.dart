@@ -12,6 +12,7 @@ enum PromptGroup implements WireEnum {
   issues('issues'),
   pulls('pulls'),
   queue('queue'),
+  repos('repos'),
   stations('stations'),
   meetings('meetings'),
   office('office');
@@ -26,6 +27,7 @@ const Map<PromptGroup, String> promptGroups = {
   PromptGroup.issues: '📌 Issues board',
   PromptGroup.pulls: '🔀 Pull requests board',
   PromptGroup.queue: '📋 Task queue',
+  PromptGroup.repos: '🗂️ Across repositories',
   PromptGroup.stations: '🧑‍💼 Board agents',
   PromptGroup.meetings: '🤝 Meeting room',
   PromptGroup.office: '🏷️ Worker signs',
@@ -238,6 +240,30 @@ final Map<PromptId, PromptDef> prompts = Map.unmodifiable(<PromptId, PromptDef>{
         "You're in your own git worktree, on a fresh branch made for this task. Commit there, push it, and open the pull request from it.",
   ),
 
+  // --- 🗂️ Across repositories ---
+  'worker.repos': PromptDef(
+    group: PromptGroup.repos,
+    label: '🗂️ Workspace brief',
+    used:
+        "Written into the workspace of a worker hired across several floors' repositories, as its CLAUDE.md and AGENTS.md, which the agent reads when it starts.",
+    vars: {
+      'branch': 'The branch every worktree in the workspace is on',
+      'repos': "One line per repository: its folder in the workspace, its project and the branch it's cut from",
+      'home': 'The project of the floor the worker was hired on (owner/name when it is on GitHub)',
+    },
+    needs: ['repos'],
+    text: [
+      "You're working across several repositories at once. This folder is your workspace, not a repository itself: each folder in it is a git worktree of one of the office's projects, on the branch `{{branch}}` made for this task.",
+      '',
+      '{{repos}}',
+      '',
+      "- Make every change inside these folders. The projects' own checkouts are other people's and other workers': don't edit them, switch their branches, stash or reset them.",
+      "- cd into a project's folder before running git or its tools, read its own instructions (CLAUDE.md, AGENTS.md, README) before changing it, and install its dependencies there when you need them.",
+      '- When the task spans projects, keep them working together and test them together. Commit in each project you change.',
+      "- Each project gets its own pull request, from its folder. An issue number in your task (#12) is one of {{home}}'s; in the other projects' pull requests write it as {{home}}#12. When you open the pull requests yourself, name the others in each description so they are reviewed and merged together.",
+    ].join('\n'),
+  ),
+
   // --- Board agents ---
   'station.issues': _station(StationKind.issues),
   'station.pulls': _station(StationKind.pulls),
@@ -262,7 +288,6 @@ final Map<PromptId, PromptDef> prompts = Map.unmodifiable(<PromptId, PromptDef>{
       'output': "The output file, as it's named in the project",
       'outputPath': 'The output file, by its full path',
       'rounds': 'The round limit: "3 rounds"',
-      'budget': 'The token budget for the whole table: "300k"',
       'where': 'What they may and may not do in the checkout (commit, push, switch branches)',
     },
     text: [
@@ -271,7 +296,7 @@ final Map<PromptId, PromptDef> prompts = Map.unmodifiable(<PromptId, PromptDef>{
       'What the meeting is about:\n{{about}}',
       '{{pullRequest}}',
       '{{issue}}',
-      'How it runs: the office hands each of you your part of every round in a message like this one. Do just that part, write it to the file it names, and end your turn; the next round starts once every part of this one is written. Your working directory is {{cwd}}, and every file of the meeting is in it: the notes go in {{notes}}/, which is where you read what the others wrote. The meeting ends when {{output}} ({{outputPath}}) is written, and only the part that says so writes it. It has {{rounds}} at most and {{budget}} tokens between all of you, so keep your notes short: bullets over prose.',
+      'How it runs: the office hands each of you your part of every round in a message like this one. Do just that part, write it to the file it names, and end your turn; the next round starts once every part of this one is written. Your working directory is {{cwd}}, and every file of the meeting is in it: the notes go in {{notes}}/, which is where you read what the others wrote. The meeting ends when {{output}} ({{outputPath}}) is written, and only the part that says so writes it. It has {{rounds}} at most, so keep your notes short: bullets over prose.',
       '{{where}}',
     ].join('\n\n'),
   ),

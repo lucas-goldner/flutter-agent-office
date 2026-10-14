@@ -226,7 +226,6 @@ void main() {
           parts: ['src/a', 'src/b'],
           issue: 4,
           rounds: 2,
-          budget: 2000000,
           provider: AgentProvider.claude,
           model: 'sonnet',
           effort: AgentEffort.low,
@@ -242,7 +241,6 @@ void main() {
         'parts': ['src/a', 'src/b'],
         'issue': 4,
         'rounds': 2,
-        'budget': 2000000,
         'provider': 'claude',
         'model': 'sonnet',
         'effort': 'low',
@@ -457,7 +455,7 @@ void main() {
     expect(isThemePick('auto') && !isThemePick('easter'), isTrue);
   });
 
-  WorkerInfo w({PrRef? pr, WorkerWorktree? worktree}) => WorkerInfo(
+  WorkerInfo w({PrRef? pr, WorkerWorktree? worktree, List<int> pastPrs = const []}) => WorkerInfo(
     id: 'w1',
     kind: WorkerKind.agent,
     deskId: 'desk-1',
@@ -471,6 +469,7 @@ void main() {
     rows: 24,
     viewers: const [],
     pr: pr,
+    pastPrs: pastPrs,
     worktree: worktree,
   );
   GhPull pull(int number, String state, [String head = 'x']) => GhPull(
@@ -523,5 +522,17 @@ void main() {
     // Its task's PR, even once it has dropped off the board.
     expect(workerPr(w(), const [], [task(7, 'MERGED')]), (state: WorkerPrState.merged, number: 7));
     expect(workerPr(w(), [pull(8, 'CLOSED')], [task(8, 'CLOSED')]), isNull);
+    // One it opened itself before its latest, still open: its work hasn't all landed.
+    expect(
+      workerPr(
+        w(
+          pr: const PrRef(number: 10, url: ''),
+          pastPrs: [9],
+        ),
+        [pull(9, 'OPEN'), pull(10, 'MERGED')],
+        const [],
+      ),
+      (state: WorkerPrState.open, number: 9),
+    );
   });
 }

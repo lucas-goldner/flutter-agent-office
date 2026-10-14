@@ -4,10 +4,17 @@ import 'dart:math' as math;
 import 'package:office_shared/shared.dart';
 import 'package:test/test.dart';
 
+/// Every place a worker can be on a floor built out `wing` rows, at each build-out there is.
+List<(DeskDef, int)> everywhere() => [
+  for (var wing = 0; wing <= Wing.rows; wing++)
+    for (final d in [...seats, ...stations, ...meetingSeats])
+      if (deskBuilt(d, wing)) (d, wing),
+];
+
 void main() {
   test('a worker sent home walks round the furniture, out the exit door and off along the sidewalk', () {
-    for (final seat in [...seats, ...stations, ...meetingSeats]) {
-      final way = wayHome(seat);
+    for (final (seat, wing) in everywhere()) {
+      final way = wayHome(seat, wing);
       // It hops down right beside where it sat.
       expect(
         math.sqrt(math.pow(way[0].$1 - seat.x, 2) + math.pow(way[0].$2 - seat.z, 2)),
@@ -25,9 +32,10 @@ void main() {
           final x = x0 + ((x1 - x0) * k) / n;
           final z = z0 + ((z1 - z0) * k) / n;
           expect(
-            walkable(x, z),
+            walkable(x, z, wing),
             isTrue,
-            reason: '${seat.id} walks into something at (${x.toStringAsFixed(2)}, ${z.toStringAsFixed(2)})',
+            reason:
+                '${seat.id} (built out $wing) walks into something at (${x.toStringAsFixed(2)}, ${z.toStringAsFixed(2)})',
           );
         }
       }
@@ -60,7 +68,7 @@ void main() {
 
   test('route matches the TS corners across the room', () {
     // (15, 10) is under the meeting table now: the route ends at the nearest open cell to it.
-    // Expected values from running src/shared/nav.ts.
+    // Expected values from running src/shared/nav.ts (upstream/main).
     expectPts(route((-15, -10), (15, 10)), [
       [-15, -10],
       [-14.25, -8.75],
@@ -69,8 +77,8 @@ void main() {
       [10.25, 7.25],
       [10.75, 8.25],
       [10.75, 8.75],
-      [15.75, 8.75],
-      [15.75, 9.25],
+      [13.75, 8.75],
+      [14.25, 9.25],
     ]);
   });
 
@@ -112,8 +120,8 @@ void main() {
       [8.5, -10.1],
       [9.75, 6.25],
       [10.75, 8.25],
-      [10.849999999999998, 9.850000000000001],
-      [11.299999999999999, 9.850000000000001],
+      [10.649999999999999, 9.8],
+      [11.1, 9.8],
     ]);
     expectPts(wayToBalcony(stations[2]), [
       [-6.85, -12.25],
@@ -128,13 +136,13 @@ void main() {
   double hypot(double a, double b) => math.sqrt(a * a + b * b);
 
   /// Every step from a to b is on open floor.
-  void clear(Pt a, Pt b, String what) {
+  void clear(Pt a, Pt b, String what, [int wing = 0]) {
     final n = (hypot(b.$1 - a.$1, b.$2 - a.$2) / 0.2).ceil();
     for (var k = 0; k <= n; k++) {
       final x = a.$1 + ((b.$1 - a.$1) * k) / n;
       final z = a.$2 + ((b.$2 - a.$2) * k) / n;
       expect(
-        walkable(x, z),
+        walkable(x, z, wing),
         isTrue,
         reason: '$what walks into something at (${x.toStringAsFixed(2)}, ${z.toStringAsFixed(2)})',
       );
@@ -176,8 +184,8 @@ void main() {
   );
 
   test('upstairs, with no exit door, a worker sent home walks out onto the balcony to the railing', () {
-    for (final seat in [...seats, ...stations, ...meetingSeats]) {
-      final way = wayToBalcony(seat);
+    for (final (seat, wing) in everywhere()) {
+      final way = wayToBalcony(seat, wing);
       expect(
         hypot(way[0].$1 - seat.x, way[0].$2 - seat.z),
         lessThan(1.2),
@@ -186,7 +194,7 @@ void main() {
       final out = way.indexWhere((p) => p.$2 > Floor.maxZ);
       expect(out, greaterThan(1), reason: '${seat.id} goes out onto the balcony');
       for (var i = 2; i < out; i++) {
-        clear(way[i - 1], way[i], seat.id);
+        clear(way[i - 1], way[i], '${seat.id} (built out $wing)', wing);
       }
       // Through the balcony doors, then straight across to the railing.
       for (final (x, _) in way.sublist(out - 1)) {
@@ -200,6 +208,30 @@ void main() {
       expect([jx, jz], [Parachute.jump.x, Parachute.jump.z]);
       expect(jz < Balcony.maxZ && jz > Balcony.maxZ - 0.6, isTrue, reason: '${seat.id} ends up at the railing');
     }
+  });
+
+  test('the back office is only floor once it is built out, and only as far as it goes', () {
+    const Pt inside = ((Wing.minX + Wing.maxX) / 2 + 1.7, Floor.minZ - 1);
+    expect(walkable(inside.$1, inside.$2, 0), isFalse, reason: 'behind the north wall there is nothing');
+    for (var wing = 1; wing <= Wing.rows; wing++) {
+      expect(walkable(inside.$1, inside.$2, wing), isTrue, reason: 'built out $wing, its first row is open floor');
+      expect(
+        walkable(inside.$1, wingMinZ(wing) - 0.5, wing),
+        isFalse,
+        reason: 'built out $wing, past its back wall is not',
+      );
+      // And there's a way from the room to the back of it.
+      final Pt back = (Wing.minX + 0.6, wingMinZ(wing) + 0.6);
+      final way = route((0, 0), back, wing);
+      final (ex, ez) = way.last;
+      expect(
+        hypot(ex - back.$1, ez - back.$2),
+        lessThan(0.6),
+        reason: 'built out $wing, the route gets to the back of it',
+      );
+    }
+    // Nowhere else through the north wall.
+    expect(walkable(0, Floor.minZ - 1, Wing.rows), isFalse);
   });
 
   test('nearestWalkable leaves open floor alone and moves off furniture', () {

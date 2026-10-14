@@ -4,8 +4,30 @@
 import 'dart:math' as math;
 
 const List<String> skinTones = ['#ffe3cc', '#ffd7b5', '#f1c27d', '#e0ac69', '#c68642', '#a0663a', '#8d5524', '#5c3a21'];
-const List<String> hairColors = ['#2b2d42', '#4a3222', '#6f4e37', '#e9c46a', '#c1440e', '#d9d9d9', '#d62828', '#ff8fab', '#9d4edd', '#264653'];
-const List<String> hairColorNames = ['Black', 'Dark brown', 'Brown', 'Blonde', 'Ginger', 'Silver', 'Red', 'Pink', 'Purple', 'Teal'];
+const List<String> hairColors = [
+  '#2b2d42',
+  '#4a3222',
+  '#6f4e37',
+  '#e9c46a',
+  '#c1440e',
+  '#d9d9d9',
+  '#d62828',
+  '#ff8fab',
+  '#9d4edd',
+  '#264653',
+];
+const List<String> hairColorNames = [
+  'Black',
+  'Dark brown',
+  'Brown',
+  'Blonde',
+  'Ginger',
+  'Silver',
+  'Red',
+  'Pink',
+  'Purple',
+  'Teal',
+];
 const List<String> hairStyles = ['Short', 'Long', 'Bun', 'Spiky', 'Curly', 'Ponytail', 'Bald'];
 
 class Look {
@@ -60,7 +82,86 @@ Look lookFromSeed(String seed) {
 
 Look randomLook([math.Random? random]) {
   final r = random ?? math.Random();
-  return Look(skin: r.nextInt(skinTones.length), hair: r.nextInt(hairColors.length), style: r.nextInt(hairStyles.length));
+  return Look(
+    skin: r.nextInt(skinTones.length),
+    hair: r.nextInt(hairColors.length),
+    style: r.nextInt(hairStyles.length),
+  );
+}
+
+const List<String> _nameAdjectives = [
+  'Sunny',
+  'Cosmic',
+  'Quiet',
+  'Speedy',
+  'Clever',
+  'Brave',
+  'Jolly',
+  'Mellow',
+  'Nimble',
+  'Plucky',
+  'Snappy',
+  'Witty',
+  'Zesty',
+  'Cozy',
+  'Lucky',
+  'Breezy',
+  'Chipper',
+  'Dapper',
+  'Fuzzy',
+  'Gentle',
+  'Groovy',
+  'Humble',
+  'Keen',
+  'Lively',
+  'Merry',
+  'Nifty',
+  'Peppy',
+  'Spry',
+  'Swift',
+  'Tidy',
+  'Zippy',
+  'Bold',
+];
+const List<String> _nameAnimals = [
+  'Otter',
+  'Heron',
+  'Panda',
+  'Falcon',
+  'Badger',
+  'Koala',
+  'Lynx',
+  'Marmot',
+  'Narwhal',
+  'Octopus',
+  'Penguin',
+  'Quokka',
+  'Raccoon',
+  'Sloth',
+  'Tapir',
+  'Walrus',
+  'Yak',
+  'Beaver',
+  'Capybara',
+  'Dolphin',
+  'Ferret',
+  'Gecko',
+  'Hedgehog',
+  'Ibis',
+  'Jaguar',
+  'Lemur',
+  'Moose',
+  'Newt',
+  'Owl',
+  'Puffin',
+  'Robin',
+  'Seal',
+];
+
+/// A made-up name like "Sunny Otter", for people who'd rather not think of one.
+String randomName([math.Random? random]) {
+  final r = random ?? math.Random();
+  return '${_nameAdjectives[r.nextInt(_nameAdjectives.length)]} ${_nameAnimals[r.nextInt(_nameAnimals.length)]}';
 }
 
 /// Coerces anything into a valid look, keeping each part of `fallback` that `x` gets wrong.

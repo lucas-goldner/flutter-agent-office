@@ -6,13 +6,17 @@
 // undefined ones.
 
 import 'avatar.dart';
+import 'bargames.dart';
 import 'cabinet.dart';
 import 'decor.dart';
 import 'dog.dart';
 import 'emotes.dart';
+import 'floorplan.dart';
+import 'garage.dart';
 import 'hoop.dart';
 import 'json_util.dart';
 import 'jukebox.dart';
+import 'maps/maps.dart' show CustomMap;
 import 'rooftop.dart';
 import 'whiteboard.dart';
 
@@ -65,6 +69,11 @@ enum AgentProvider implements WireEnum {
   claude('claude'),
   opencode('opencode'),
   codex('codex'),
+  grok('grok'),
+  muse('muse'),
+  dsh('dsh'),
+  pi('pi'),
+  cursor('cursor'),
   custom('custom');
 
   const AgentProvider(this.wire);
@@ -116,7 +125,8 @@ enum AgentEffort implements WireEnum {
 const List<AgentEffort> agentEfforts = AgentEffort.values;
 bool isAgentEffort(Object? value) => AgentEffort.tryParse(value) != null;
 
-/// Which agent a worker runs: its provider, and optionally the model and (Claude only) the reasoning effort.
+/// Which agent a worker runs: its provider, and optionally the model and the reasoning effort (see
+/// [providerMetaTable] for which each takes).
 class AgentChoice {
   const AgentChoice({required this.provider, this.model, this.effort});
 
@@ -128,7 +138,8 @@ class AgentChoice {
 
   final AgentProvider provider;
 
-  /// An OpenCode provider/model id, or a Claude model alias; unset for the provider's own default.
+  /// A model id its provider takes (a Claude model alias, an OpenCode provider/model, a Codex model
+  /// id…); unset for the provider's own default.
   final String? model;
   final AgentEffort? effort;
 
@@ -429,24 +440,107 @@ class WorkerTask implements JsonObject {
 }
 
 /// A worker's own git worktree (path relative to the office dir). `from` is the branch the office
-/// was on when the worktree was cut, which its pull request targets.
+/// was on when the worktree was cut, which its pull request targets. `branch` is the branch the
+/// worktree is on: the office's own office/<name>-<id> until the worker switches to one of its own
+/// (`git checkout -b fix-x`), which `made` then remembers.
 class WorkerWorktree implements JsonObject {
-  const WorkerWorktree({required this.path, required this.branch, required this.base, this.from});
+  const WorkerWorktree({required this.path, required this.branch, required this.base, this.from, this.made});
 
   factory WorkerWorktree.fromJson(Map<String, dynamic> j) => WorkerWorktree(
     path: asString(j['path']),
     branch: asString(j['branch']),
     base: asString(j['base']),
     from: asStringOrNull(j['from']),
+    made: asStringOrNull(j['made']),
   );
 
   final String path;
   final String branch;
   final String base;
   final String? from;
+  final String? made;
 
   @override
-  Map<String, dynamic> toJson() => {'path': path, 'branch': branch, 'base': base, 'from': ?from};
+  Map<String, dynamic> toJson() => {'path': path, 'branch': branch, 'base': base, 'from': ?from, 'made': ?made};
+}
+
+/// Where the branch of a worker whose worktree was deleted still is (see [WorkerInfo.lost]).
+enum LostBranch implements WireEnum {
+  here('here'),
+  origin('origin'),
+  gone('gone');
+
+  const LostBranch(this.wire);
+  @override
+  final String wire;
+
+  static LostBranch parse(Object? v) => parseWire(values, v, LostBranch.gone);
+}
+
+/// Another floor's repository a worker also works in (see [WorkerInfo.repos]): a worktree of it in
+/// the worker's workspace.
+class WorkerRepo implements JsonObject {
+  const WorkerRepo({
+    required this.floor,
+    required this.name,
+    this.repo,
+    required this.dir,
+    required this.path,
+    required this.branch,
+    required this.base,
+    this.from,
+    this.pr,
+  });
+
+  factory WorkerRepo.fromJson(Map<String, dynamic> j) => WorkerRepo(
+    floor: asString(j['floor']),
+    name: asString(j['name']),
+    repo: asStringOrNull(j['repo']),
+    dir: asString(j['dir']),
+    path: asString(j['path']),
+    branch: asString(j['branch']),
+    base: asString(j['base']),
+    from: asStringOrNull(j['from']),
+    pr: _obj(j['pr'], PrRef.fromJson),
+  );
+
+  /// The floor whose project it is.
+  final String floor;
+
+  /// Its folder in the workspace, named after its checkout ("api").
+  final String name;
+
+  /// owner/name on GitHub, when known.
+  final String? repo;
+
+  /// The checkout the worktree was cut from, on the office's machine.
+  final String dir;
+
+  /// The worktree, relative to the worker's own floor's dir, like [WorkerInfo.worktree].
+  final String path;
+  final String branch;
+
+  /// The commit it was branched from.
+  final String base;
+
+  /// The branch that checkout was on, which its pull request targets.
+  final String? from;
+
+  /// Its pull request, once opened from the desk.
+  final PrRef? pr;
+
+  @override
+  Map<String, dynamic> toJson() => {
+    'floor': floor,
+    'name': name,
+    'repo': ?repo,
+    'dir': dir,
+    'path': path,
+    'branch': branch,
+    'base': base,
+    'from': ?from,
+    'pr': ?pr?.toJson(),
+  };
 }
 
 /// A pull request: its number and link.
@@ -492,7 +586,10 @@ class WorkerInfo implements JsonObject {
     required this.createdAt,
     this.prompt,
     this.worktree,
+    this.lost,
     this.pr,
+    this.pastPrs = const [],
+    this.repos,
     this.prOpening,
     this.title,
     this.sessionId,
@@ -507,6 +604,9 @@ class WorkerInfo implements JsonObject {
     this.usage,
     this.lastInput,
     this.meeting,
+    this.workedMs,
+    this.workingSince,
+    this.via,
   });
 
   factory WorkerInfo.fromJson(Map<String, dynamic> j) => WorkerInfo(
@@ -525,7 +625,10 @@ class WorkerInfo implements JsonObject {
     createdAt: asInt(j['createdAt']),
     prompt: asStringOrNull(j['prompt']),
     worktree: _obj(j['worktree'], WorkerWorktree.fromJson),
+    lost: j['lost'] is Map ? LostBranch.parse(j['lost']['branch']) : null,
     pr: _obj(j['pr'], PrRef.fromJson),
+    pastPrs: asIntList(j['pastPrs']),
+    repos: j['repos'] is List ? asList(j['repos'], WorkerRepo.fromJson) : null,
     prOpening: asBoolOrNull(j['prOpening']),
     title: asStringOrNull(j['title']),
     sessionId: asStringOrNull(j['sessionId']),
@@ -540,6 +643,9 @@ class WorkerInfo implements JsonObject {
     usage: _obj(j['usage'], Usage.fromJson),
     lastInput: _obj(j['lastInput'], LastInput.fromJson),
     meeting: asStringOrNull(j['meeting']),
+    workedMs: asIntOrNull(j['workedMs']),
+    workingSince: asIntOrNull(j['workingSince']),
+    via: asStringOrNull(j['via']),
   );
 
   final String id;
@@ -548,11 +654,12 @@ class WorkerInfo implements JsonObject {
   final WorkerKind kind;
   final AgentProvider? provider;
 
-  /// Model requested for this worker, instead of the office's configured default: an OpenCode
-  /// provider/model id, or a Claude model alias.
+  /// Model requested for this worker, instead of the office's configured default: a Claude model
+  /// alias, an OpenCode provider/model id, a Codex, Grok, Muse or Pi model id, or an opaque DeepSeek
+  /// Harness catalog id. What its session says it runs on is `usage.model`.
   final String? model;
 
-  /// Reasoning effort requested for this worker, when one was chosen (Claude only).
+  /// Reasoning effort requested for this worker, when one was chosen.
   final AgentEffort? effort;
   final String deskId;
   final String name;
@@ -571,8 +678,23 @@ class WorkerInfo implements JsonObject {
   /// Set when the worker runs in its own git worktree.
   final WorkerWorktree? worktree;
 
-  /// The pull request opened from this desk for the worktree branch (see 'worker.pr').
+  /// Set while the folder it works in (its worktree, or its workspace across repositories) is gone:
+  /// deleted outside the office, so it can't start there until it's rebuilt ('worker.rebuild') or sent
+  /// home. Where its branch still is: in the project, only on origin, or nowhere. On the wire it's
+  /// `lost: { branch }`.
+  final LostBranch? lost;
+
+  /// Its pull request: opened from this desk for the worktree branch (see 'worker.pr'), by itself
+  /// with `gh pr create`, or said to be its own.
   final PrRef? pr;
+
+  /// The pull requests it opened itself before `pr`: while one of them is open, its work hasn't all landed.
+  final List<int> pastPrs;
+
+  /// Other floors' repositories it works in too, for a task that spans them. It then starts in a
+  /// workspace folder with a worktree of each repository in it, its own floor's (`worktree`) and
+  /// these, all on the same branch, and each repository gets a pull request of its own.
+  final List<WorkerRepo>? repos;
 
   /// True while the branch is being pushed and its pull request opened.
   final bool? prOpening;
@@ -606,6 +728,15 @@ class WorkerInfo implements JsonObject {
   /// The meeting it was called to, for a worker at the meeting room's table (see [Meeting]).
   final String? meeting;
 
+  /// How long it has spent working (ms), over the stretches that have ended, and when the one it's in
+  /// now started (while it's working): on the castle map, the longer it has worked, the more worn out it looks.
+  final int? workedMs;
+  final int? workingSince;
+
+  /// 'herald': sent out by a map's herald (the castle's Hand of the King), so every browser has it run
+  /// to its seat from beside them.
+  final String? via;
+
   @override
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -623,7 +754,10 @@ class WorkerInfo implements JsonObject {
     'createdAt': createdAt,
     'prompt': ?prompt,
     'worktree': ?worktree?.toJson(),
+    if (lost != null) 'lost': {'branch': lost!.wire},
     'pr': ?pr?.toJson(),
+    if (pastPrs.isNotEmpty) 'pastPrs': pastPrs,
+    if (repos != null) 'repos': _list(repos!),
     'prOpening': ?prOpening,
     'title': ?title,
     'sessionId': ?sessionId,
@@ -638,6 +772,9 @@ class WorkerInfo implements JsonObject {
     'usage': ?usage?.toJson(),
     'lastInput': ?lastInput?.toJson(),
     'meeting': ?meeting,
+    'workedMs': ?workedMs,
+    'workingSince': ?workingSince,
+    'via': ?via,
   };
 }
 
@@ -655,6 +792,8 @@ class Usage implements JsonObject {
     required this.calls,
     this.callsKnown,
     this.totalTokens,
+    this.contextSize,
+    this.model,
   });
 
   static const Usage zero = Usage(input: 0, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, calls: 0);
@@ -671,6 +810,8 @@ class Usage implements JsonObject {
     calls: asInt(j['calls']),
     callsKnown: asBoolOrNull(j['callsKnown']),
     totalTokens: asIntOrNull(j['totalTokens']),
+    contextSize: asIntOrNull(j['contextSize']),
+    model: asStringOrNull(j['model']),
   );
 
   /// Input tokens that missed the prompt cache.
@@ -704,6 +845,13 @@ class Usage implements JsonObject {
   /// Authoritative provider total when it cannot be reconstructed from the displayed buckets.
   final int? totalTokens;
 
+  /// Size of the context window in tokens, when the provider reports one (DeepSeek Harness over ACP).
+  final int? contextSize;
+
+  /// The model its latest call ran on, as its session names it (`claude-opus-5-5`), when the office
+  /// reads that off the session: what a worker's card says it runs, whatever was asked for.
+  final String? model;
+
   @override
   Map<String, dynamic> toJson() => {
     'input': input,
@@ -717,10 +865,12 @@ class Usage implements JsonObject {
     'calls': calls,
     'callsKnown': ?callsKnown,
     'totalTokens': ?totalTokens,
+    'contextSize': ?contextSize,
+    'model': ?model,
   };
 }
 
-/// Every token a session used, cache reads and writes included: what the office shows and budgets meetings by.
+/// Every token a session used, cache reads and writes included: what the office shows.
 int tokensOf(Usage u) => u.totalTokens ?? (u.input + u.output + (u.reasoning ?? 0) + u.cacheWrite + u.cacheRead);
 
 /// e.g. 950, 12k, 1.25M
@@ -840,6 +990,7 @@ class WorktreeState implements JsonObject {
     required this.ahead,
     required this.unpushed,
     this.error,
+    this.repos,
   });
 
   factory WorktreeState.fromJson(Map<String, dynamic> j) => WorktreeState(
@@ -848,6 +999,12 @@ class WorktreeState implements JsonObject {
     ahead: asInt(j['ahead']),
     unpushed: asInt(j['unpushed']),
     error: asStringOrNull(j['error']),
+    repos: j['repos'] is List
+        ? [
+            for (final r in j['repos'] as List)
+              if (r is Map) (name: asString(r['name']), state: WorktreeState.fromJson(asMap(r['state']))),
+          ]
+        : null,
   );
 
   /// The worktree folder is still there.
@@ -865,6 +1022,9 @@ class WorktreeState implements JsonObject {
   /// Set when git couldn't tell, e.g. the branch is gone.
   final String? error;
 
+  /// A worker across repositories: each worktree's own state, its own floor's first. The fields above add them up.
+  final List<({String name, WorktreeState state})>? repos;
+
   @override
   Map<String, dynamic> toJson() => {
     'exists': exists,
@@ -872,6 +1032,10 @@ class WorktreeState implements JsonObject {
     'ahead': ahead,
     'unpushed': unpushed,
     'error': ?error,
+    if (repos != null)
+      'repos': [
+        for (final r in repos!) {'name': r.name, 'state': r.state.toJson()},
+      ],
   };
 }
 
@@ -907,6 +1071,7 @@ class PeerInfo implements JsonObject {
     required this.sharing,
     this.smoking,
     this.golfing,
+    this.throwing,
     this.seat,
     this.carrying,
     this.drink,
@@ -914,6 +1079,7 @@ class PeerInfo implements JsonObject {
     this.floor,
     this.doing,
     this.reading,
+    this.lite,
   });
 
   factory PeerInfo.fromJson(Map<String, dynamic> j) => PeerInfo(
@@ -931,6 +1097,7 @@ class PeerInfo implements JsonObject {
     sharing: asBool(j['sharing']),
     smoking: asBoolOrNull(j['smoking']),
     golfing: asBoolOrNull(j['golfing']),
+    throwing: BarGame.tryParse(j['throwing']),
     seat: asStringOrNull(j['seat']),
     carrying: _obj(j['carrying'], CarriedIssue.fromJson),
     drink: DrinkId.tryParse(j['drink']),
@@ -938,6 +1105,7 @@ class PeerInfo implements JsonObject {
     floor: asStringOrNull(j['floor']),
     doing: asStringOrNull(j['doing']),
     reading: asBoolOrNull(j['reading']),
+    lite: asBoolOrNull(j['lite']),
   );
 
   final String id;
@@ -961,6 +1129,9 @@ class PeerInfo implements JsonObject {
   /// At the golf tee on the balcony, club in hand.
   final bool? golfing;
 
+  /// At the rooftop bar's dart board or axe lane, a dart or an axe in hand.
+  final BarGame? throwing;
+
   /// Sitting down: the place they're in (see seatAt in layout), like "couch:1".
   final String? seat;
 
@@ -983,6 +1154,9 @@ class PeerInfo implements JsonObject {
   /// Reading something off the bookshelf: an open book in their hands, its pages turning.
   final bool? reading;
 
+  /// On the 2D view (/lite: a phone, say, or a slow computer): in the office, but not standing anywhere in it.
+  final bool? lite;
+
   @override
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -999,6 +1173,7 @@ class PeerInfo implements JsonObject {
     'sharing': sharing,
     'smoking': ?smoking,
     'golfing': ?golfing,
+    'throwing': ?throwing?.wire,
     'seat': ?seat,
     'carrying': ?carrying?.toJson(),
     'drink': ?drink?.wire,
@@ -1006,6 +1181,7 @@ class PeerInfo implements JsonObject {
     'floor': ?floor,
     'doing': ?doing,
     'reading': ?reading,
+    'lite': ?lite,
   };
 }
 
@@ -1084,6 +1260,7 @@ class GhIssue implements JsonObject {
     required this.author,
     required this.labels,
     required this.assignees,
+    this.taken,
     required this.createdAt,
     required this.updatedAt,
     required this.body,
@@ -1098,6 +1275,7 @@ class GhIssue implements JsonObject {
     author: asString(j['author']),
     labels: asList(j['labels'], GhLabel.fromJson),
     assignees: asStringList(j['assignees']),
+    taken: asBoolOrNull(j['taken']),
     createdAt: asString(j['createdAt']),
     updatedAt: asString(j['updatedAt']),
     body: asString(j['body']),
@@ -1111,6 +1289,9 @@ class GhIssue implements JsonObject {
   final String author;
   final List<GhLabel> labels;
   final List<String> assignees;
+
+  /// A worker in the office just took it, so it's In progress on the board before GitHub lists its assignee.
+  final bool? taken;
   final String createdAt;
   final String updatedAt;
   final String body;
@@ -1125,6 +1306,7 @@ class GhIssue implements JsonObject {
     'author': author,
     'labels': _list(labels),
     'assignees': assignees,
+    'taken': ?taken,
     'createdAt': createdAt,
     'updatedAt': updatedAt,
     'body': body,
@@ -1528,6 +1710,7 @@ class QueueTask implements JsonObject {
     required this.title,
     required this.prompt,
     required this.addedBy,
+    this.owner,
     required this.addedAt,
     required this.status,
     this.workerId,
@@ -1549,6 +1732,7 @@ class QueueTask implements JsonObject {
     title: asString(j['title']),
     prompt: asString(j['prompt']),
     addedBy: asString(j['addedBy']),
+    owner: asStringOrNull(j['owner']),
     addedAt: asInt(j['addedAt']),
     status: TaskStatus.parse(j['status']),
     workerId: asStringOrNull(j['workerId']),
@@ -1564,8 +1748,8 @@ class QueueTask implements JsonObject {
   final String id;
   final AgentProvider? provider;
 
-  /// Model requested for this task, instead of the office's configured default: an OpenCode
-  /// provider/model id, or a Claude model alias.
+  /// Model requested for this task, instead of the office's configured default: an id its provider
+  /// takes (see [WorkerInfo.model]).
   final String? model;
 
   /// Reasoning effort requested for this task, when one was chosen (Claude only).
@@ -1576,6 +1760,9 @@ class QueueTask implements JsonObject {
   final String title;
   final String prompt;
   final String addedBy;
+
+  /// The account that queued it: its worker runs on that account's own sign-ins. None: the office's own.
+  final String? owner;
   final int addedAt;
   final TaskStatus status;
 
@@ -1605,6 +1792,7 @@ class QueueTask implements JsonObject {
     'title': title,
     'prompt': prompt,
     'addedBy': addedBy,
+    'owner': ?owner,
     'addedAt': addedAt,
     'status': status.wire,
     'workerId': ?workerId,
@@ -1773,7 +1961,7 @@ class MeetingReview implements JsonObject {
 }
 
 /// A meeting in the meeting room: 2–5 workers on one question or task, in rounds, following a pattern.
-/// It ends when its output file is written, or stops at its round limit or token budget and says why.
+/// It ends when its output file is written, or stops at its round limit and says why.
 class Meeting implements JsonObject {
   const Meeting({
     required this.id,
@@ -1793,13 +1981,13 @@ class Meeting implements JsonObject {
     required this.step,
     this.lastRound,
     required this.turns,
-    required this.budget,
     required this.tokens,
     required this.cost,
     required this.costKnown,
     required this.status,
     this.reason,
     required this.calledBy,
+    this.owner,
     required this.startedAt,
     this.finishedAt,
     this.worktree,
@@ -1828,13 +2016,13 @@ class Meeting implements JsonObject {
     step: asInt(j['step']),
     lastRound: asIntOrNull(j['lastRound']),
     turns: asList(j['turns'], MeetingTurn.fromJson),
-    budget: asInt(j['budget']),
     tokens: asInt(j['tokens']),
     cost: asDouble(j['cost']),
     costKnown: asBool(j['costKnown']),
     status: MeetingStatus.parse(j['status']),
     reason: asStringOrNull(j['reason']),
     calledBy: asString(j['calledBy']),
+    owner: asStringOrNull(j['owner']),
     startedAt: asInt(j['startedAt']),
     finishedAt: asIntOrNull(j['finishedAt']),
     worktree: _obj(j['worktree'], WorkerWorktree.fromJson),
@@ -1883,8 +2071,7 @@ class Meeting implements JsonObject {
   /// The current step's parts.
   final List<MeetingTurn> turns;
 
-  /// Tokens every worker in the meeting may use between them, and how many they have.
-  final int budget;
+  /// Tokens every worker in the meeting has used between them: shown, never a limit.
   final int tokens;
 
   /// USD, where the providers report it.
@@ -1897,6 +2084,9 @@ class Meeting implements JsonObject {
   /// Why it stopped short.
   final String? reason;
   final String calledBy;
+
+  /// The account that called it: its workers run on that account's own sign-ins, and its review is posted as them.
+  final String? owner;
   final int startedAt;
   final int? finishedAt;
 
@@ -1937,13 +2127,13 @@ class Meeting implements JsonObject {
     'step': step,
     'lastRound': ?lastRound,
     'turns': _list(turns),
-    'budget': budget,
     'tokens': tokens,
     'cost': cost,
     'costKnown': costKnown,
     'status': status.wire,
     'reason': ?reason,
     'calledBy': calledBy,
+    'owner': ?owner,
     'startedAt': startedAt,
     'finishedAt': ?finishedAt,
     'worktree': ?worktree?.toJson(),
@@ -2036,7 +2226,6 @@ class MeetingRequest implements JsonObject {
     this.pr,
     this.issue,
     this.rounds,
-    this.budget,
     this.provider,
     this.model,
     this.effort,
@@ -2052,7 +2241,6 @@ class MeetingRequest implements JsonObject {
     pr: asIntOrNull(j['pr']),
     issue: asIntOrNull(j['issue']),
     rounds: asIntOrNull(j['rounds']),
-    budget: asIntOrNull(j['budget']),
     provider: AgentProvider.tryParse(j['provider']),
     model: asStringOrNull(j['model']),
     effort: AgentEffort.tryParse(j['effort']),
@@ -2071,7 +2259,6 @@ class MeetingRequest implements JsonObject {
   final int? pr;
   final int? issue;
   final int? rounds;
-  final int? budget;
   final AgentProvider? provider;
   final String? model;
   final AgentEffort? effort;
@@ -2087,7 +2274,6 @@ class MeetingRequest implements JsonObject {
     'pr': ?pr,
     'issue': ?issue,
     'rounds': ?rounds,
-    'budget': ?budget,
     'provider': ?provider?.wire,
     'model': ?model,
     'effort': ?effort?.wire,
@@ -2282,8 +2468,10 @@ class FloorInfo implements JsonObject {
     required this.name,
     this.repo,
     required this.dir,
+    this.branch,
     required this.palette,
     this.cloning,
+    this.clone,
     this.local,
     required this.addedBy,
     required this.addedAt,
@@ -2291,6 +2479,7 @@ class FloorInfo implements JsonObject {
     required this.busy,
     required this.waiting,
     required this.people,
+    this.wing = 0,
   });
 
   factory FloorInfo.fromJson(Map<String, dynamic> j) => FloorInfo(
@@ -2298,8 +2487,10 @@ class FloorInfo implements JsonObject {
     name: asString(j['name']),
     repo: asStringOrNull(j['repo']),
     dir: asString(j['dir']),
+    branch: asStringOrNull(j['branch']),
     palette: asInt(j['palette']),
     cloning: asBoolOrNull(j['cloning']),
+    clone: _obj(j['clone'], CloneProgress.fromJson),
     local: asBoolOrNull(j['local']),
     addedBy: asString(j['addedBy']),
     addedAt: asInt(j['addedAt']),
@@ -2307,6 +2498,7 @@ class FloorInfo implements JsonObject {
     busy: asInt(j['busy']),
     waiting: asInt(j['waiting']),
     people: asInt(j['people']),
+    wing: asInt(j['wing']),
   );
 
   final String id;
@@ -2320,11 +2512,17 @@ class FloorInfo implements JsonObject {
   /// Its checkout on the office's machine.
   final String dir;
 
+  /// The branch that checkout is on ('HEAD' when detached); none when it isn't a git checkout.
+  final String? branch;
+
   /// Which of floorPalettes it's painted in.
   final int palette;
 
   /// Being cloned: on the elevator panel, but nobody can go there yet.
   final bool? cloning;
+
+  /// How the clone is getting on, once git says.
+  final CloneProgress? clone;
 
   /// The project the office was started in (`agent-office <dir>`): the office keeps its own data in its checkout.
   final bool? local;
@@ -2340,14 +2538,19 @@ class FloorInfo implements JsonObject {
   final int waiting;
   final int people;
 
+  /// How many rows its back office is built out (see Wing), for the building's outside.
+  final int wing;
+
   @override
   Map<String, dynamic> toJson() => {
     'id': id,
     'name': name,
     'repo': ?repo,
     'dir': dir,
+    'branch': ?branch,
     'palette': palette,
     'cloning': ?cloning,
+    'clone': ?clone?.toJson(),
     'local': ?local,
     'addedBy': addedBy,
     'addedAt': addedAt,
@@ -2355,7 +2558,28 @@ class FloorInfo implements JsonObject {
     'busy': busy,
     'waiting': waiting,
     'people': people,
+    'wing': wing,
   };
+}
+
+/// How far a new floor's clone has got, from git's progress.
+class CloneProgress implements JsonObject {
+  const CloneProgress({required this.step, this.percent, this.detail});
+
+  factory CloneProgress.fromJson(Map<String, dynamic> j) =>
+      CloneProgress(step: asString(j['step']), percent: asIntOrNull(j['percent']), detail: asStringOrNull(j['detail']));
+
+  /// What it's doing, in words: "Downloading", "Checking out files"…
+  final String step;
+
+  /// How far through that step, 0–100, when git says.
+  final int? percent;
+
+  /// How much has come down and how fast, like "231.4 MiB · 1.5 MiB/s".
+  final String? detail;
+
+  @override
+  Map<String, dynamic> toJson() => {'step': step, 'percent': ?percent, 'detail': ?detail};
 }
 
 /// Where the elevator's "add a project" clones to: <dir>/<owner>/<repo> on the office's machine.
@@ -2419,6 +2643,7 @@ class FloorView implements JsonObject {
     required this.pulls,
     required this.queue,
     required this.decor,
+    this.plan = emptyPlan,
     required this.services,
     required this.dog,
     required this.jukebox,
@@ -2426,6 +2651,8 @@ class FloorView implements JsonObject {
     required this.whiteboard,
     this.meeting = const MeetingState(),
     this.ball = const BallState(),
+    this.cars = const [],
+    this.jail = const JailState(),
   });
 
   factory FloorView.fromJson(Map<String, dynamic> j) => FloorView(
@@ -2436,6 +2663,7 @@ class FloorView implements JsonObject {
     pulls: GhState.fromJson(asMap(j['pulls']), GhPull.fromJson),
     queue: QueueState.fromJson(asMap(j['queue'])),
     decor: asList(j['decor'], Decoration.fromJson),
+    plan: FloorPlan.fromJson(asMap(j['plan'])),
     services: ServicesState.fromJson(asMap(j['services'])),
     dog: _obj(j['dog'], DogState.fromJson),
     jukebox: JukeboxState.fromJson(asMap(j['jukebox'])),
@@ -2443,6 +2671,8 @@ class FloorView implements JsonObject {
     whiteboard: WhiteboardView.fromJson(asMap(j['whiteboard'])),
     meeting: MeetingState.fromJson(asMap(j['meeting'])),
     ball: BallState.fromJson(asMap(j['ball'])),
+    cars: asList(j['cars'], CarState.fromJson),
+    jail: JailState.fromJson(asMap(j['jail'])),
   );
 
   /// The floor you're on; null while the building has none.
@@ -2455,6 +2685,9 @@ class FloorView implements JsonObject {
 
   /// Pictures on this floor's walls.
   final List<Decoration> decor;
+
+  /// The signs over this floor's desks, and how far its back office is built out.
+  final FloorPlan plan;
   final ServicesState services;
 
   /// The floor's dog; null in a building with no floors yet.
@@ -2475,6 +2708,12 @@ class FloorView implements JsonObject {
   /// The basketball by the hoop: who has it, or how it was last thrown.
   final BallState ball;
 
+  /// The cars in the garage (see [cars] in garage.dart): where each one is, and who's in it.
+  final List<CarState> cars;
+
+  /// Workers sent home and locked up in the dungeon, on a map that has one.
+  final JailState jail;
+
   /// `floor`, `project` and `dog` are always sent, as null when there's none.
   @override
   Map<String, dynamic> toJson() => {
@@ -2485,6 +2724,7 @@ class FloorView implements JsonObject {
     'pulls': pulls.toJson(),
     'queue': queue.toJson(),
     'decor': [for (final d in decor) d.toJson()],
+    'plan': plan.toJson(),
     'services': services.toJson(),
     'dog': dog?.toJson(),
     'jukebox': jukebox.toJson(),
@@ -2492,7 +2732,52 @@ class FloorView implements JsonObject {
     'whiteboard': whiteboard.toJson(),
     'meeting': meeting.toJson(),
     'ball': ball.toJson(),
+    'cars': [for (final c in cars) c.toJson()],
+    'jail': jail.toJson(),
   };
+}
+
+/// A worker sent home on a map that keeps them (see the map's sendHome): locked up in the castle's
+/// dungeon, or adrift outside the station's airlock. Who it was, and when it went, which is how far it
+/// has wasted away (and, adrift, how far off it has got) since.
+class Prisoner implements JsonObject {
+  const Prisoner({required this.id, required this.name, required this.color, required this.at, this.workedMs});
+
+  factory Prisoner.fromJson(Map<String, dynamic> j) => Prisoner(
+    id: asString(j['id']),
+    name: asString(j['name']),
+    color: asString(j['color'], '#888888'),
+    at: asInt(j['at']),
+    workedMs: asIntOrNull(j['workedMs']),
+  );
+
+  final String id;
+  final String name;
+  final String color;
+
+  /// When it was locked up (ms).
+  final int at;
+
+  /// How long it had worked, for how worn out it looks (see the map's agents.ageMinutes).
+  final int? workedMs;
+
+  @override
+  Map<String, dynamic> toJson() => {'id': id, 'name': name, 'color': color, 'at': at, 'workedMs': ?workedMs};
+}
+
+/// Everyone a floor has kept (in its dungeon, or adrift outside its airlock), first to last, and how
+/// many from before them are only bones on the heap now.
+class JailState implements JsonObject {
+  const JailState({this.prisoners = const [], this.bones = 0});
+
+  factory JailState.fromJson(Map<String, dynamic> j) =>
+      JailState(prisoners: asList(j['prisoners'], Prisoner.fromJson), bones: asInt(j['bones']));
+
+  final List<Prisoner> prisoners;
+  final int bones;
+
+  @override
+  Map<String, dynamic> toJson() => {'prisoners': _list(prisoners), 'bones': bones};
 }
 
 // ---- Accounts and the team ----------------------------------------------------------------------
@@ -2526,6 +2811,106 @@ class Me implements JsonObject {
 
   @override
   Map<String, dynamic> toJson() => {'account': ?account?.toJson(), 'admin': admin};
+}
+
+/// What someone signs in to for their own workers: Claude Code, and the GitHub CLI.
+enum SignInKind implements WireEnum {
+  claude('claude'),
+  github('github');
+
+  const SignInKind(this.wire);
+  @override
+  final String wire;
+
+  static SignInKind? tryParse(Object? v) => parseWireOrNull(values, v);
+}
+
+/// ok: signed in. none: not yet. busy: signing in, or being looked at.
+enum SignInStatus implements WireEnum {
+  ok('ok'),
+  none('none'),
+  busy('busy');
+
+  const SignInStatus(this.wire);
+  @override
+  final String wire;
+}
+
+/// Its own login in your folder on the office's machine, a pasted token, or the machine's own (admins).
+enum SignInHow implements WireEnum {
+  login('login'),
+  token('token'),
+  office('office');
+
+  const SignInHow(this.wire);
+  @override
+  final String wire;
+}
+
+/// A sign-in under way: the page to open, GitHub's one-time code to type there, and whether Claude's code was sent back.
+class SignInPending implements JsonObject {
+  const SignInPending({this.url, this.code, this.sent});
+
+  factory SignInPending.fromJson(Map<String, dynamic> j) =>
+      SignInPending(url: asStringOrNull(j['url']), code: asStringOrNull(j['code']), sent: asBoolOrNull(j['sent']));
+
+  final String? url;
+  final String? code;
+  final bool? sent;
+
+  @override
+  Map<String, dynamic> toJson() => {'url': ?url, 'code': ?code, 'sent': ?sent};
+}
+
+/// One of your sign-ins, as the office sees it (see the server's signins).
+class SignInState implements JsonObject {
+  const SignInState({required this.status, required this.how, this.who, this.pending, this.error});
+
+  factory SignInState.fromJson(Map<String, dynamic> j) => SignInState(
+    status: parseWire(SignInStatus.values, j['status'], SignInStatus.none),
+    how: parseWire(SignInHow.values, j['how'], SignInHow.login),
+    who: asStringOrNull(j['who']),
+    pending: _obj(j['pending'], SignInPending.fromJson),
+    error: asStringOrNull(j['error']),
+  );
+
+  final SignInStatus status;
+  final SignInHow how;
+
+  /// Who it signs in as: an email and plan for Claude, @login for GitHub.
+  final String? who;
+  final SignInPending? pending;
+  final String? error;
+
+  @override
+  Map<String, dynamic> toJson() => {
+    'status': status.wire,
+    'how': how.wire,
+    'who': ?who,
+    'pending': ?pending?.toJson(),
+    'error': ?error,
+  };
+}
+
+/// Your own Claude and GitHub sign-ins, which your workers run with and the office acts on GitHub
+/// with for you. Only accounts have them: on the shared password, the office's own are used.
+class SignInsState implements JsonObject {
+  const SignInsState({required this.claude, required this.github, required this.office});
+
+  factory SignInsState.fromJson(Map<String, dynamic> j) => SignInsState(
+    claude: SignInState.fromJson(asMap(j['claude'])),
+    github: SignInState.fromJson(asMap(j['github'])),
+    office: asBool(j['office']),
+  );
+
+  final SignInState claude;
+  final SignInState github;
+
+  /// You may use the office machine's own sign-ins instead of yours (admins).
+  final bool office;
+
+  @override
+  Map<String, dynamic> toJson() => {'claude': claude.toJson(), 'github': github.toJson(), 'office': office};
 }
 
 class AccountInfo implements JsonObject {
@@ -2659,8 +3044,10 @@ class TeamState implements JsonObject {
     this.error,
     this.ssh,
     required this.port,
+    this.deploy,
     this.fingerprint,
     required this.members,
+    this.tailnet,
   });
 
   factory TeamState.fromJson(Map<String, dynamic> j) => TeamState(
@@ -2668,23 +3055,32 @@ class TeamState implements JsonObject {
     error: asStringOrNull(j['error']),
     ssh: asStringOrNull(j['ssh']),
     port: asInt(j['port']),
+    deploy: asStringOrNull(j['deploy']),
     fingerprint: asStringOrNull(j['fingerprint']),
     members: asList(j['members'], TeamMember.fromJson),
+    tailnet: asStringOrNull(j['tailnet']),
   );
 
   /// Why invites can't be managed from the office, when they can't.
   final String? unavailable;
   final String? error;
 
-  /// user@host teammates tunnel to, e.g. office@203.0.113.7
+  /// Where teammates tunnel to: office@203.0.113.7, or ssh://office@host:port off port 22
   final String? ssh;
 
   /// The office's port on the box (tunnel destination).
   final int port;
 
+  /// How to run the script that deployed the office (deploy/azure.sh, --name and all), for the
+  /// commands the panel suggests. deploy/aws.sh when unknown.
+  final String? deploy;
+
   /// SHA256 fingerprint of the box's ED25519 host key, to check on first connect.
   final String? fingerprint;
   final List<TeamMember> members;
+
+  /// The office's name on its Tailscale network (e.g. agent-office.tail1234.ts.net): everyone there opens https://<it>.
+  final String? tailnet;
 
   @override
   Map<String, dynamic> toJson() => {
@@ -2692,8 +3088,10 @@ class TeamState implements JsonObject {
     'error': ?error,
     'ssh': ?ssh,
     'port': port,
+    'deploy': ?deploy,
     'fingerprint': ?fingerprint,
     'members': _list(members),
+    'tailnet': ?tailnet,
   };
 }
 
@@ -2756,12 +3154,14 @@ class ServiceInfo implements JsonObject {
 }
 
 class ServicesState implements JsonObject {
-  const ServicesState({required this.items, required this.port, this.ssh});
+  const ServicesState({required this.items, required this.port, this.deploy, this.ssh, this.tailnet});
 
   factory ServicesState.fromJson(Map<String, dynamic> j) => ServicesState(
     items: asList(j['items'], ServiceInfo.fromJson),
     port: asInt(j['port']),
+    deploy: asStringOrNull(j['deploy']),
     ssh: asStringOrNull(j['ssh']),
+    tailnet: asStringOrNull(j['tailnet']),
   );
 
   final List<ServiceInfo> items;
@@ -2769,11 +3169,24 @@ class ServicesState implements JsonObject {
   /// The office's port on its machine. Service tunnels end there and the office relays them.
   final int port;
 
-  /// user@host teammates tunnel to (offices deployed with deploy/aws.sh), e.g. office@203.0.113.7
+  /// How to run the script that deployed the office, as in [TeamState].
+  final String? deploy;
+
+  /// Where teammates tunnel to (offices deployed with deploy/aws.sh, deploy/railway.sh, deploy/fly.sh,
+  /// deploy/dokploy.sh or deploy/coolify.sh), as in [TeamState].
   final String? ssh;
 
+  /// The office's name on its Tailscale network: each server is also on https://<it>:<port> there.
+  final String? tailnet;
+
   @override
-  Map<String, dynamic> toJson() => {'items': _list(items), 'port': port, 'ssh': ?ssh};
+  Map<String, dynamic> toJson() => {
+    'items': _list(items),
+    'port': port,
+    'deploy': ?deploy,
+    'ssh': ?ssh,
+    'tailnet': ?tailnet,
+  };
 }
 
 // ---- Changes ------------------------------------------------------------------------------------
@@ -2857,6 +3270,7 @@ String? changedImageType(String filePath) {
 class ChangesState implements JsonObject {
   const ChangesState({
     required this.workerId,
+    this.repo,
     required this.dir,
     this.branch,
     required this.base,
@@ -2873,6 +3287,7 @@ class ChangesState implements JsonObject {
 
   factory ChangesState.fromJson(Map<String, dynamic> j) => ChangesState(
     workerId: asString(j['workerId']),
+    repo: asStringOrNull(j['repo']),
     dir: asString(j['dir']),
     branch: asStringOrNull(j['branch']),
     base: asString(j['base']),
@@ -2888,6 +3303,10 @@ class ChangesState implements JsonObject {
   );
 
   final String workerId;
+
+  /// For a worker across repositories: the floor of the repository this is (see [WorkerInfo.repos]);
+  /// none for its own floor's.
+  final String? repo;
 
   /// The checkout, relative to the office dir ('' is the project folder itself, shared by everyone).
   final String dir;
@@ -2922,6 +3341,7 @@ class ChangesState implements JsonObject {
   @override
   Map<String, dynamic> toJson() => {
     'workerId': workerId,
+    'repo': ?repo,
     'dir': dir,
     'branch': ?branch,
     'base': base,
@@ -3044,6 +3464,7 @@ class SkyState implements JsonObject {
     required this.intensity,
     this.city,
     this.temp,
+    this.realTime,
   });
 
   factory SkyState.fromJson(Map<String, dynamic> j) => SkyState(
@@ -3054,6 +3475,7 @@ class SkyState implements JsonObject {
     intensity: asDouble(j['intensity']),
     city: asStringOrNull(j['city']),
     temp: asDoubleOrNull(j['temp']),
+    realTime: asBoolOrNull(j['realTime']),
   );
 
   /// Where the office is, for the sun: a configured city, or a guess from the host's time zone.
@@ -3073,6 +3495,9 @@ class SkyState implements JsonObject {
   /// °C, from the forecast.
   final double? temp;
 
+  /// The sky keeps the office's real clock (--real-time-sky), instead of a whole day going by every hour.
+  final bool? realTime;
+
   @override
   Map<String, dynamic> toJson() => {
     'lat': lat,
@@ -3082,6 +3507,7 @@ class SkyState implements JsonObject {
     'intensity': intensity,
     'city': ?city,
     'temp': ?temp,
+    'realTime': ?realTime,
   };
 }
 
@@ -3139,6 +3565,35 @@ class ThemeState implements JsonObject {
 
 /// Whether a worker whose pull request merged goes home by itself (⚙️ Settings), for every floor:
 /// once it's at rest and nobody has its terminal open, it leaves and its worktree and branch are deleted.
+/// The building's map: what every floor looks like inside (the office, the castle, or one of your
+/// own), the same for everyone (see maps/). Custom maps come from the office's .agent-office/maps/
+/// folder, each with its whole config, or why it won't load.
+class MapState implements JsonObject {
+  const MapState({this.pick = 'office', this.custom = const [], this.by, this.at});
+
+  factory MapState.fromJson(Map<String, dynamic> j) => MapState(
+    pick: asString(j['pick'], 'office'),
+    custom: asList(j['custom'], CustomMap.fromJson),
+    by: asStringOrNull(j['by']),
+    at: asIntOrNull(j['at']),
+  );
+
+  final String pick;
+  final List<CustomMap> custom;
+
+  /// Who picked it, and when. Unset for the default (the office).
+  final String? by;
+  final int? at;
+
+  @override
+  Map<String, dynamic> toJson() => {
+    'pick': pick,
+    'custom': [for (final m in custom) m.toJson()],
+    'by': ?by,
+    'at': ?at,
+  };
+}
+
 class LeaveOnMergeState implements JsonObject {
   const LeaveOnMergeState({this.on = false, this.by, this.at});
 
@@ -3314,8 +3769,17 @@ ClientMsg _parseClient(Map<String, dynamic> j) {
       golf: asBoolOrNull(j['golf']),
       drink: DrinkId.tryParse(j['drink']),
       drinkSet: j.containsKey('drink'),
+      throwing: BarGame.tryParse(j['throwing']),
+      throwingSet: j.containsKey('throwing'),
     ),
     'golf' => GolfCmd(yaw: asDouble(j['yaw']), loft: asDouble(j['loft']), power: asDouble(j['power'])),
+    'toss' => TossCmd(
+      game: BarGame.tryParse(j['game']) ?? BarGame.darts,
+      u: asDouble(j['u']),
+      v: asDouble(j['v']),
+      stick: asBool(j['stick']),
+      n: asInt(j['n']),
+    ),
     'sit' => SitCmd(seat: so('seat')),
     'carry' => CarryCmd(issue: asIntOrNull(j['issue']), title: so('title')),
     'emote' => EmoteCmd(Emote.tryParse(j['emote']) ?? Emote.wave),
@@ -3329,6 +3793,8 @@ ClientMsg _parseClient(Map<String, dynamic> j) {
       model: so('model'),
       effort: AgentEffort.tryParse(j['effort']),
       issue: asIntOrNull(j['issue']),
+      repos: asStringListOrNull(j['repos']),
+      via: so('via'),
     ),
     'worker.resume' => WorkerResumeCmd(workerId),
     'worker.kill' => WorkerKillCmd(
@@ -3336,6 +3802,7 @@ ClientMsg _parseClient(Map<String, dynamic> j) {
       cleanup: j['cleanup'] == null ? null : WorktreeCleanup.parse(j['cleanup']),
     ),
     'worker.worktree' => WorkerWorktreeCmd(workerId),
+    'worker.rebuild' => WorkerRebuildCmd(workerId, all: asBoolOrNull(j['all'])),
     'worker.attach' => WorkerAttachCmd(workerId),
     'worker.detach' => WorkerDetachCmd(workerId),
     'worker.prompt' => WorkerPromptCmd(workerId, s('prompt'), issue: asIntOrNull(j['issue'])),
@@ -3399,18 +3866,28 @@ ClientMsg _parseClient(Map<String, dynamic> j) {
     'accounts.revoke' => AccountsRevokeCmd(s('accountId')),
     'accounts.role' => AccountsRoleCmd(s('accountId'), AccountRole.parse(j['role'])),
     'accounts.shared' => AccountsSharedCmd(asBool(j['on'])),
-    'changes.watch' => ChangesWatchCmd(workerId),
-    'changes.unwatch' => ChangesUnwatchCmd(workerId),
-    'changes.diff' => ChangesDiffCmd(workerId, s('path')),
-    'changes.commit' => ChangesCommitCmd(workerId, s('message')),
-    'changes.discard' => ChangesDiscardCmd(workerId, path: so('path')),
-    'changes.pr' => ChangesPrCmd(workerId, title: s('title'), body: s('body')),
+    'signins.get' => const SignInsGetCmd(),
+    'signins.start' => SignInsStartCmd(SignInKind.tryParse(j['which']) ?? SignInKind.claude),
+    'signins.code' => SignInsCodeCmd(s('code')),
+    'signins.cancel' => SignInsCancelCmd(SignInKind.tryParse(j['which']) ?? SignInKind.claude),
+    'signins.token' => SignInsTokenCmd(SignInKind.tryParse(j['which']) ?? SignInKind.claude, s('token')),
+    'signins.office' => SignInsOfficeCmd(SignInKind.tryParse(j['which']) ?? SignInKind.claude),
+    'signins.signout' => SignInsSignoutCmd(SignInKind.tryParse(j['which']) ?? SignInKind.claude),
+    'changes.watch' => ChangesWatchCmd(workerId, repo: so('repo')),
+    'changes.unwatch' => ChangesUnwatchCmd(workerId, repo: so('repo')),
+    'changes.diff' => ChangesDiffCmd(workerId, s('path'), repo: so('repo')),
+    'changes.commit' => ChangesCommitCmd(workerId, s('message'), repo: so('repo')),
+    'changes.discard' => ChangesDiscardCmd(workerId, path: so('path'), repo: so('repo')),
+    'changes.pr' => ChangesPrCmd(workerId, title: s('title'), body: s('body'), repo: so('repo')),
     'upgrade.check' => const UpgradeCheckCmd(),
     'upgrade.start' => const UpgradeStartCmd(),
     'limits.refresh' => const LimitsRefreshCmd(),
     'decor.add' => DecorAddCmd(DecorPlacement.fromJson(asMap(j['decor']))),
     'decor.update' => DecorUpdateCmd(s('id'), DecorPatch.fromJson(asMap(j['decor']))),
     'decor.remove' => DecorRemoveCmd(s('id')),
+    'desk.label' => DeskLabelCmd(s('deskId'), s('text'), color: so('color')),
+    'floor.expand' => const FloorExpandCmd(),
+    'floor.shrink' => const FloorShrinkCmd(),
     'jukebox.play' => JukeboxPlayCmd(track: so('track'), url: so('url')),
     'jukebox.skip' => const JukeboxSkipCmd(),
     'jukebox.stop' => const JukeboxStopCmd(),
@@ -3434,8 +3911,11 @@ ClientMsg _parseClient(Map<String, dynamic> j) {
     ),
     'floor.repos' => FloorReposCmd(refresh: asBoolOrNull(j['refresh'])),
     'floor.add' => FloorAddCmd(s('repo')),
+    'floor.cancel' => FloorCancelCmd(s('floor')),
     'floor.remove' => FloorRemoveCmd(s('floor')),
     'theme.set' => ThemeSetCmd(ThemePick.parse(j['pick'])),
+    'sky.clock' => SkyClockCmd(asBool(j['real'])),
+    'map.set' => MapSetCmd(so('map')),
     'leaveOnMerge.set' => LeaveOnMergeSetCmd(asBool(j['on'])),
     'floor.projectsDir' => FloorProjectsDirCmd(s('dir')),
     'prompts.set' => PromptsSetCmd(s('id'), so('text')),
@@ -3449,8 +3929,21 @@ ClientMsg _parseClient(Map<String, dynamic> j) {
       vy: asDouble(j['vy']),
       vz: asDouble(j['vz']),
     ),
+    'car.enter' => CarEnterCmd(asInt(j['car']), CarSeat.tryParse(j['seat']) ?? CarSeat.driver),
+    'car.leave' => const CarLeaveCmd(),
+    'car.drive' => CarDriveCmd(
+      car: asInt(j['car']),
+      x: asDouble(j['x']),
+      z: asDouble(j['z']),
+      rotY: asDouble(j['rotY']),
+      speed: asDouble(j['speed']),
+      steer: asDouble(j['steer']),
+    ),
+    'car.honk' => const CarHonkCmd(),
     'dog.pet' => const DogPetCmd(),
     'dog.name' => DogNameCmd(s('name')),
+    'dog.breed' => DogBreedCmd(s('breed')),
+    'dog.coat' => DogCoatCmd(asInt(j['coat'])),
     'ping' => PingCmd(asDouble(j['at'])),
     _ => UnknownCmd(j),
   };
@@ -3483,17 +3976,45 @@ class MoveCmd extends ClientMsg {
 /// the tee (or put it back); with `drink`, you took a drink from the rooftop bar (or finished it:
 /// [drinkSet] with no [drink] sends `drink: null`).
 class ActCmd extends ClientMsg {
-  const ActCmd({this.smoke, this.golf, this.drink, bool? drinkSet}) : drinkSet = drinkSet ?? drink != null;
+  const ActCmd({this.smoke, this.golf, this.drink, bool? drinkSet, this.throwing, bool? throwingSet})
+    : drinkSet = drinkSet ?? drink != null,
+      throwingSet = throwingSet ?? throwing != null;
   final bool? smoke;
   final bool? golf;
   final DrinkId? drink;
 
   /// Whether `drink` is on the wire at all; with [drink] null, it's sent as null (finished it).
   final bool drinkSet;
+
+  /// You stepped up to the dart board or the axe lane on the roof (or back, null).
+  final BarGame? throwing;
+
+  /// Whether `throwing` is on the wire at all; with [throwing] null, it's sent as null (stepped back).
+  final bool throwingSet;
   @override
   String get t => 'act';
   @override
-  Map<String, dynamic> get fields => {'smoke': ?smoke, 'golf': ?golf, if (drinkSet) 'drink': drink?.wire};
+  Map<String, dynamic> get fields => {
+    'smoke': ?smoke,
+    'golf': ?golf,
+    if (drinkSet) 'drink': drink?.wire,
+    if (throwingSet) 'throwing': throwing?.wire,
+  };
+}
+
+/// You threw a dart or an axe at the rooftop bar: where it lands on the target (u right, v up, in
+/// meters from its middle), whether an axe sticks, and which throw of the round it is (from 1).
+class TossCmd extends ClientMsg {
+  const TossCmd({required this.game, required this.u, required this.v, required this.stick, required this.n});
+  final BarGame game;
+  final double u;
+  final double v;
+  final bool stick;
+  final int n;
+  @override
+  String get t => 'toss';
+  @override
+  Map<String, dynamic> get fields => {'game': game.wire, 'u': u, 'v': v, 'stick': stick, 'n': n};
 }
 
 /// You hit a golf ball off the tee: its heading (0 is south, toward +x from there), loft (radians)
@@ -3561,6 +4082,8 @@ class WorkerSpawnCmd extends ClientMsg {
     this.model,
     this.effort,
     this.issue,
+    this.repos,
+    this.via,
   });
   final String deskId;
   final String? prompt;
@@ -3569,7 +4092,17 @@ class WorkerSpawnCmd extends ClientMsg {
   final AgentProvider? provider;
   final String? model;
   final AgentEffort? effort;
+
+  /// The worker is there for that GitHub issue: it moves to In progress at once, is assigned on
+  /// GitHub (which keeps it there) and taken off the queue.
   final int? issue;
+
+  /// Other floors' ids: the worker works in their repositories too, each in a worktree of its own
+  /// (see [WorkerInfo.repos]).
+  final List<String>? repos;
+
+  /// 'herald': sent out by a map's herald.
+  final String? via;
   @override
   String get t => 'worker.spawn';
   @override
@@ -3582,6 +4115,8 @@ class WorkerSpawnCmd extends ClientMsg {
     'model': ?model,
     'effort': ?effort?.wire,
     'issue': ?issue,
+    'repos': ?repos,
+    'via': ?via,
   };
 }
 
@@ -3614,6 +4149,18 @@ class WorkerWorktreeCmd extends _WorkerCmd {
   const WorkerWorktreeCmd(super.workerId);
   @override
   String get t => 'worker.worktree';
+}
+
+/// Puts a lost worker's worktree back and starts it again (see [WorkerInfo.lost]); `all`: every lost
+/// worker on the floor.
+class WorkerRebuildCmd extends ClientMsg {
+  const WorkerRebuildCmd(this.workerId, {this.all});
+  final String workerId;
+  final bool? all;
+  @override
+  String get t => 'worker.rebuild';
+  @override
+  Map<String, dynamic> get fields => {'workerId': workerId, 'all': ?all};
 }
 
 class WorkerAttachCmd extends _WorkerCmd {
@@ -4014,58 +4561,133 @@ class AccountsSharedCmd extends ClientMsg {
 }
 
 /// Follow what a worker changed (the office polls its checkout while anyone watches).
-class ChangesWatchCmd extends _WorkerCmd {
-  const ChangesWatchCmd(super.workerId);
+/// Your own sign-ins (accounts only): look at them again.
+class SignInsGetCmd extends ClientMsg {
+  const SignInsGetCmd();
   @override
-  String get t => 'changes.watch';
+  String get t => 'signins.get';
 }
 
-class ChangesUnwatchCmd extends _WorkerCmd {
-  const ChangesUnwatchCmd(super.workerId);
+abstract class _SignInCmd extends ClientMsg {
+  const _SignInCmd(this.which);
+  final SignInKind which;
+  @override
+  Map<String, dynamic> get fields => {'which': which.wire};
+}
+
+/// Sign in from the office: it runs the login and hands back the page to open.
+class SignInsStartCmd extends _SignInCmd {
+  const SignInsStartCmd(super.which);
+  @override
+  String get t => 'signins.start';
+}
+
+/// The code Claude's sign-in page gave you.
+class SignInsCodeCmd extends ClientMsg {
+  const SignInsCodeCmd(this.code);
+  final String code;
+  @override
+  String get t => 'signins.code';
+  @override
+  Map<String, dynamic> get fields => {'code': code};
+}
+
+class SignInsCancelCmd extends _SignInCmd {
+  const SignInsCancelCmd(super.which);
+  @override
+  String get t => 'signins.cancel';
+}
+
+/// A token instead: from `claude setup-token` (or an Anthropic API key), or a GitHub token.
+class SignInsTokenCmd extends ClientMsg {
+  const SignInsTokenCmd(this.which, this.token);
+  final SignInKind which;
+  final String token;
+  @override
+  String get t => 'signins.token';
+  @override
+  Map<String, dynamic> get fields => {'which': which.wire, 'token': token};
+}
+
+/// Use the office machine's own sign-in (admins only).
+class SignInsOfficeCmd extends _SignInCmd {
+  const SignInsOfficeCmd(super.which);
+  @override
+  String get t => 'signins.office';
+}
+
+class SignInsSignoutCmd extends _SignInCmd {
+  const SignInsSignoutCmd(super.which);
+  @override
+  String get t => 'signins.signout';
+}
+
+/// Follow what a worker changed (the office polls its checkout while anyone watches). [repo] picks
+/// one of the other floors' repositories a worker across repositories works in (see [WorkerInfo.repos]).
+class ChangesWatchCmd extends ClientMsg {
+  const ChangesWatchCmd(this.workerId, {this.repo});
+  final String workerId;
+  final String? repo;
+  @override
+  String get t => 'changes.watch';
+  @override
+  Map<String, dynamic> get fields => {'workerId': workerId, 'repo': ?repo};
+}
+
+class ChangesUnwatchCmd extends ClientMsg {
+  const ChangesUnwatchCmd(this.workerId, {this.repo});
+  final String workerId;
+  final String? repo;
   @override
   String get t => 'changes.unwatch';
+  @override
+  Map<String, dynamic> get fields => {'workerId': workerId, 'repo': ?repo};
 }
 
 class ChangesDiffCmd extends ClientMsg {
-  const ChangesDiffCmd(this.workerId, this.path);
+  const ChangesDiffCmd(this.workerId, this.path, {this.repo});
   final String workerId;
   final String path;
+  final String? repo;
   @override
   String get t => 'changes.diff';
   @override
-  Map<String, dynamic> get fields => {'workerId': workerId, 'path': path};
+  Map<String, dynamic> get fields => {'workerId': workerId, 'path': path, 'repo': ?repo};
 }
 
 class ChangesCommitCmd extends ClientMsg {
-  const ChangesCommitCmd(this.workerId, this.message);
+  const ChangesCommitCmd(this.workerId, this.message, {this.repo});
   final String workerId;
   final String message;
+  final String? repo;
   @override
   String get t => 'changes.commit';
   @override
-  Map<String, dynamic> get fields => {'workerId': workerId, 'message': message};
+  Map<String, dynamic> get fields => {'workerId': workerId, 'message': message, 'repo': ?repo};
 }
 
 /// Without a path, throws away every uncommitted change in that checkout.
 class ChangesDiscardCmd extends ClientMsg {
-  const ChangesDiscardCmd(this.workerId, {this.path});
+  const ChangesDiscardCmd(this.workerId, {this.path, this.repo});
   final String workerId;
   final String? path;
+  final String? repo;
   @override
   String get t => 'changes.discard';
   @override
-  Map<String, dynamic> get fields => {'workerId': workerId, 'path': ?path};
+  Map<String, dynamic> get fields => {'workerId': workerId, 'path': ?path, 'repo': ?repo};
 }
 
 class ChangesPrCmd extends ClientMsg {
-  const ChangesPrCmd(this.workerId, {required this.title, required this.body});
+  const ChangesPrCmd(this.workerId, {required this.title, required this.body, this.repo});
   final String workerId;
   final String title;
   final String body;
+  final String? repo;
   @override
   String get t => 'changes.pr';
   @override
-  Map<String, dynamic> get fields => {'workerId': workerId, 'title': title, 'body': body};
+  Map<String, dynamic> get fields => {'workerId': workerId, 'title': title, 'body': body, 'repo': ?repo};
 }
 
 class UpgradeCheckCmd extends ClientMsg {
@@ -4118,6 +4740,32 @@ class DecorRemoveCmd extends ClientMsg {
 }
 
 /// Put a tune on the jukebox (a jukeboxTunes id), or a stream; with neither, turn it back on.
+/// Hang a sign over a desk on your floor (a signColors color), or take it down with no text.
+class DeskLabelCmd extends ClientMsg {
+  const DeskLabelCmd(this.deskId, this.text, {this.color});
+  final String deskId;
+  final String text;
+  final String? color;
+  @override
+  String get t => 'desk.label';
+  @override
+  Map<String, dynamic> get fields => {'deskId': deskId, 'text': text, 'color': ?color};
+}
+
+/// Knock the back office out another row, with two more desks.
+class FloorExpandCmd extends ClientMsg {
+  const FloorExpandCmd();
+  @override
+  String get t => 'floor.expand';
+}
+
+/// Wall the back office's last row back up.
+class FloorShrinkCmd extends ClientMsg {
+  const FloorShrinkCmd();
+  @override
+  String get t => 'floor.shrink';
+}
+
 class JukeboxPlayCmd extends ClientMsg {
   const JukeboxPlayCmd({this.track, this.url});
   final String? track;
@@ -4243,6 +4891,17 @@ class FloorAddCmd extends ClientMsg {
 }
 
 /// Take a floor off the building (admins only). Its checkout stays on disk; everyone on it rides to another floor.
+/// Stop a floor's clone before it's there (admins, or whoever added it); the one who added it hears
+/// `floor.added` with why.
+class FloorCancelCmd extends ClientMsg {
+  const FloorCancelCmd(this.floor);
+  final String floor;
+  @override
+  String get t => 'floor.cancel';
+  @override
+  Map<String, dynamic> get fields => {'floor': floor};
+}
+
 class FloorRemoveCmd extends ClientMsg {
   const FloorRemoveCmd(this.floor);
   final String floor;
@@ -4263,6 +4922,26 @@ class ThemeSetCmd extends ClientMsg {
 }
 
 /// Workers whose pull request merged go home by themselves (true), or wait to be sent home.
+/// The sky on the real clock (true), or a whole day and night every hour (false), for everyone.
+class SkyClockCmd extends ClientMsg {
+  const SkyClockCmd(this.real);
+  final bool real;
+  @override
+  String get t => 'sky.clock';
+  @override
+  Map<String, dynamic> get fields => {'real': real};
+}
+
+/// Change the building's map (see [MapState]), or with no map, read the custom maps' folder again.
+class MapSetCmd extends ClientMsg {
+  const MapSetCmd([this.map]);
+  final String? map;
+  @override
+  String get t => 'map.set';
+  @override
+  Map<String, dynamic> get fields => {'map': ?map};
+}
+
 class LeaveOnMergeSetCmd extends ClientMsg {
   const LeaveOnMergeSetCmd(this.on);
   final bool on;
@@ -4336,6 +5015,53 @@ class BallThrowCmd extends ClientMsg {
 }
 
 /// Give the dog on your floor a pat; it has to be within reach.
+/// Get into a seat of one of the floor's cars (by its place in [cars]): yours if nobody's in it.
+class CarEnterCmd extends ClientMsg {
+  const CarEnterCmd(this.car, this.seat);
+  final int car;
+  final CarSeat seat;
+  @override
+  String get t => 'car.enter';
+  @override
+  Map<String, dynamic> get fields => {'car': car, 'seat': seat.wire};
+}
+
+/// Get out of the car you're in; driving, it stays parked where you left it.
+class CarLeaveCmd extends ClientMsg {
+  const CarLeaveCmd();
+  @override
+  String get t => 'car.leave';
+}
+
+/// Where the car you're driving has got to, and how it's going; everyone else on the floor sees it there.
+class CarDriveCmd extends ClientMsg {
+  const CarDriveCmd({
+    required this.car,
+    required this.x,
+    required this.z,
+    required this.rotY,
+    required this.speed,
+    required this.steer,
+  });
+  final int car;
+  final double x;
+  final double z;
+  final double rotY;
+  final double speed;
+  final double steer;
+  @override
+  String get t => 'car.drive';
+  @override
+  Map<String, dynamic> get fields => {'car': car, 'x': x, 'z': z, 'rotY': rotY, 'speed': speed, 'steer': steer};
+}
+
+/// Honk the horn of the car you're in.
+class CarHonkCmd extends ClientMsg {
+  const CarHonkCmd();
+  @override
+  String get t => 'car.honk';
+}
+
 class DogPetCmd extends ClientMsg {
   const DogPetCmd();
   @override
@@ -4350,6 +5076,26 @@ class DogNameCmd extends ClientMsg {
   String get t => 'dog.name';
   @override
   Map<String, dynamic> get fields => {'name': name};
+}
+
+/// Make the dog on your floor another breed (one of [dogBreeds]).
+class DogBreedCmd extends ClientMsg {
+  const DogBreedCmd(this.breed);
+  final String breed;
+  @override
+  String get t => 'dog.breed';
+  @override
+  Map<String, dynamic> get fields => {'breed': breed};
+}
+
+/// Give the dog on your floor another coat (an index into [dogCoats]).
+class DogCoatCmd extends ClientMsg {
+  const DogCoatCmd(this.coat);
+  final int coat;
+  @override
+  String get t => 'dog.coat';
+  @override
+  Map<String, dynamic> get fields => {'coat': coat};
 }
 
 class PingCmd extends ClientMsg {
@@ -4410,11 +5156,22 @@ sealed class ServerMsg {
         golf: asBoolOrNull(j['golf']),
         drink: DrinkId.tryParse(j['drink']),
         drinkSet: j.containsKey('drink'),
+        throwing: BarGame.tryParse(j['throwing']),
+        throwingSet: j.containsKey('throwing'),
       ),
       'golf' => GolfMsg(id: s('id'), yaw: asDouble(j['yaw']), loft: asDouble(j['loft']), power: asDouble(j['power'])),
+      'toss' => TossMsg(
+        id: s('id'),
+        game: BarGame.tryParse(j['game']) ?? BarGame.darts,
+        u: asDouble(j['u']),
+        v: asDouble(j['v']),
+        stick: asBool(j['stick']),
+        n: asInt(j['n']),
+      ),
+      'sit.refused' => SitRefusedMsg(s('seat'), s('by')),
       'peer.emote' => PeerEmoteMsg(s('id'), Emote.tryParse(j['emote']) ?? Emote.wave),
       'worker.update' => WorkerUpdateMsg(WorkerInfo.fromJson(asMap(j['worker']))),
-      'worker.remove' => WorkerRemoveMsg(s('workerId')),
+      'worker.remove' => WorkerRemoveMsg(s('workerId'), jail: _obj(j['jail'], JailState.fromJson)),
       'worker.worktree' => WorkerWorktreeMsg(s('workerId'), WorktreeState.fromJson(asMap(j['state']))),
       'screen' => ScreenMsg.fromJson(j),
       'term.snapshot' => TermSnapshotMsg(
@@ -4454,8 +5211,19 @@ sealed class ServerMsg {
       'upgrade' => UpgradeMsg(UpgradeState.fromJson(asMap(j['state']))),
       'services' => ServicesMsg(ServicesState.fromJson(asMap(j['state']))),
       'decor' => DecorMsg(asList(j['items'], Decoration.fromJson)),
+      'plan' => PlanMsg(FloorPlan.fromJson(asMap(j['plan']))),
       'dog' => DogMsg(DogState.fromJson(asMap(j['dog']))),
       'ball' => BallMsg(BallState.fromJson(asMap(j['ball']))),
+      'cars' => CarsMsg(asList(j['cars'], CarState.fromJson), answer: asBoolOrNull(j['answer'])),
+      'car.move' => CarMoveMsg(
+        car: asInt(j['car']),
+        x: asDouble(j['x']),
+        z: asDouble(j['z']),
+        rotY: asDouble(j['rotY']),
+        speed: asDouble(j['speed']),
+        steer: asDouble(j['steer']),
+      ),
+      'car.honk' => CarHonkMsg(asInt(j['car'])),
       'jukebox' => JukeboxMsg(JukeboxState.fromJson(asMap(j['state']))),
       'cabinet' => CabinetMsg(CabinetState.fromJson(asMap(j['state']))),
       'cabinet.frame' => CabinetFrameMsg(CabinetFrame.fromJson(asMap(j['frame']))),
@@ -4470,11 +5238,13 @@ sealed class ServerMsg {
       'machine' => MachineMsg(MachineState.fromJson(asMap(j['state']))),
       'sky' => SkyMsg(SkyState.fromJson(asMap(j['state']))),
       'theme' => ThemeMsg(ThemeState.fromJson(asMap(j['state']))),
+      'map' => MapMsg(MapState.fromJson(asMap(j['state']))),
       'prompts' => PromptsMsg(PromptsState.fromJson(asMap(j['state']))),
       'leaveOnMerge' => LeaveOnMergeMsg(LeaveOnMergeState.fromJson(asMap(j['state']))),
       'changes' => ChangesMsg(ChangesState.fromJson(asMap(j['state']))),
       'changes.diff' => ChangesDiffMsg(
         workerId: s('workerId'),
+        repo: asStringOrNull(j['repo']),
         path: s('path'),
         diff: s('diff'),
         truncated: asBool(j['truncated']),
@@ -4492,6 +5262,8 @@ sealed class ServerMsg {
         error: asStringOrNull(j['error']),
       ),
       'me' => MeMsg(Me.fromJson(asMap(j['me']))),
+      'signins' => SignInsMsg(SignInsState.fromJson(asMap(j['state']))),
+      'signins.needed' => SignInsNeededMsg(SignInKind.tryParse(j['which']) ?? SignInKind.claude, s('why')),
       'pong' => PongMsg(at: asDouble(j['at']), now: asDouble(j['now'])),
       _ => UnknownMsg(j),
     };
@@ -4529,6 +5301,7 @@ class WelcomeMsg extends ServerMsg {
     this.machine = MachineState.empty,
     required this.sky,
     this.theme = const ThemeState(),
+    this.map = const MapState(),
     this.prompts = const PromptsState(),
     this.leaveOnMerge = const LeaveOnMergeState(),
     required this.view,
@@ -4553,6 +5326,7 @@ class WelcomeMsg extends ServerMsg {
     machine: MachineState.fromJson(asMap(j['machine'])),
     sky: SkyState.fromJson(asMap(j['sky'])),
     theme: ThemeState.fromJson(asMap(j['theme'])),
+    map: MapState.fromJson(asMap(j['map'])),
     prompts: PromptsState.fromJson(asMap(j['prompts'])),
     leaveOnMerge: LeaveOnMergeState.fromJson(asMap(j['leaveOnMerge'])),
     view: FloorView.fromJson(j),
@@ -4589,6 +5363,9 @@ class WelcomeMsg extends ServerMsg {
   /// Halloween or Christmas decorations, all over the building, or none.
   final ThemeState theme;
 
+  /// What the building looks like inside.
+  final MapState map;
+
   /// The office's prompts and the worker everyone starts on.
   final PromptsState prompts;
   final LeaveOnMergeState leaveOnMerge;
@@ -4616,6 +5393,7 @@ class WelcomeMsg extends ServerMsg {
     'machine': machine.toJson(),
     'sky': sky.toJson(),
     'theme': theme.toJson(),
+    'map': map.toJson(),
     'prompts': prompts.toJson(),
     'leaveOnMerge': leaveOnMerge.toJson(),
     ...view.toJson(),
@@ -4722,16 +5500,59 @@ class PeerLeaveMsg extends ServerMsg {
 
 /// See [ActCmd]: [drinkSet] with no [drink] is `drink: null` on the wire (they finished it).
 class PeerActMsg extends ServerMsg {
-  const PeerActMsg(this.id, {this.smoke, this.golf, this.drink, bool? drinkSet}) : drinkSet = drinkSet ?? drink != null;
+  const PeerActMsg(this.id, {this.smoke, this.golf, this.drink, bool? drinkSet, this.throwing, bool? throwingSet})
+    : drinkSet = drinkSet ?? drink != null,
+      throwingSet = throwingSet ?? throwing != null;
   final String id;
   final bool? smoke;
   final bool? golf;
   final DrinkId? drink;
   final bool drinkSet;
+  final BarGame? throwing;
+  final bool throwingSet;
   @override
   String get t => 'peer.act';
   @override
-  Map<String, dynamic> get fields => {'id': id, 'smoke': ?smoke, 'golf': ?golf, if (drinkSet) 'drink': drink?.wire};
+  Map<String, dynamic> get fields => {
+    'id': id,
+    'smoke': ?smoke,
+    'golf': ?golf,
+    if (drinkSet) 'drink': drink?.wire,
+    if (throwingSet) 'throwing': throwing?.wire,
+  };
+}
+
+/// Someone up on the roof threw a dart or an axe (see [TossCmd]).
+class TossMsg extends ServerMsg {
+  const TossMsg({
+    required this.id,
+    required this.game,
+    required this.u,
+    required this.v,
+    required this.stick,
+    required this.n,
+  });
+  final String id;
+  final BarGame game;
+  final double u;
+  final double v;
+  final bool stick;
+  final int n;
+  @override
+  String get t => 'toss';
+  @override
+  Map<String, dynamic> get fields => {'id': id, 'game': game.wire, 'u': u, 'v': v, 'stick': stick, 'n': n};
+}
+
+/// Sent to whoever tried to sit where someone on the floor already is.
+class SitRefusedMsg extends ServerMsg {
+  const SitRefusedMsg(this.seat, this.by);
+  final String seat;
+  final String by;
+  @override
+  String get t => 'sit.refused';
+  @override
+  Map<String, dynamic> get fields => {'seat': seat, 'by': by};
 }
 
 /// Someone on your floor hit a golf ball off the tee (see [GolfCmd]).
@@ -4764,13 +5585,16 @@ class WorkerUpdateMsg extends ServerMsg {
   Map<String, dynamic> get fields => {'worker': worker.toJson()};
 }
 
+/// A worker's gone; [jail], when it was sent home on a map that locks workers up (the map's
+/// sendHome), with it in there now.
 class WorkerRemoveMsg extends ServerMsg {
-  const WorkerRemoveMsg(this.workerId);
+  const WorkerRemoveMsg(this.workerId, {this.jail});
   final String workerId;
+  final JailState? jail;
   @override
   String get t => 'worker.remove';
   @override
-  Map<String, dynamic> get fields => {'workerId': workerId};
+  Map<String, dynamic> get fields => {'workerId': workerId, 'jail': ?jail?.toJson()};
 }
 
 class WorkerWorktreeMsg extends ServerMsg {
@@ -5031,6 +5855,15 @@ class ThemeMsg extends ServerMsg {
   Map<String, dynamic> get fields => {'state': state.toJson()};
 }
 
+class MapMsg extends ServerMsg {
+  const MapMsg(this.state);
+  final MapState state;
+  @override
+  String get t => 'map';
+  @override
+  Map<String, dynamic> get fields => {'state': state.toJson()};
+}
+
 class PromptsMsg extends ServerMsg {
   const PromptsMsg(this.state);
   final PromptsState state;
@@ -5120,6 +5953,63 @@ class DecorMsg extends ServerMsg {
 }
 
 /// What the dog on your floor is up to now: sent at the start of each leg of its day.
+/// Your floor's signs changed, or its back office was built out or walled up.
+class PlanMsg extends ServerMsg {
+  const PlanMsg(this.plan);
+  final FloorPlan plan;
+  @override
+  String get t => 'plan';
+  @override
+  Map<String, dynamic> get fields => {'plan': plan.toJson()};
+}
+
+/// Someone got into one of your floor's cars, or out of one; [answer] to each car.enter and
+/// car.leave of yours, whether you got in or not.
+class CarsMsg extends ServerMsg {
+  const CarsMsg(this.cars, {this.answer});
+  final List<CarState> cars;
+  final bool? answer;
+  @override
+  String get t => 'cars';
+  @override
+  Map<String, dynamic> get fields => {
+    'cars': [for (final c in cars) c.toJson()],
+    'answer': ?answer,
+  };
+}
+
+/// A car on your floor is being driven (see [CarDriveCmd]).
+class CarMoveMsg extends ServerMsg {
+  const CarMoveMsg({
+    required this.car,
+    required this.x,
+    required this.z,
+    required this.rotY,
+    required this.speed,
+    required this.steer,
+  });
+  final int car;
+  final double x;
+  final double z;
+  final double rotY;
+  final double speed;
+  final double steer;
+  @override
+  String get t => 'car.move';
+  @override
+  Map<String, dynamic> get fields => {'car': car, 'x': x, 'z': z, 'rotY': rotY, 'speed': speed, 'steer': steer};
+}
+
+/// Someone in a car on your floor honked its horn.
+class CarHonkMsg extends ServerMsg {
+  const CarHonkMsg(this.car);
+  final int car;
+  @override
+  String get t => 'car.honk';
+  @override
+  Map<String, dynamic> get fields => {'car': car};
+}
+
 class DogMsg extends ServerMsg {
   const DogMsg(this.dog);
   final DogState dog;
@@ -5230,12 +6120,14 @@ class ChangesMsg extends ServerMsg {
 class ChangesDiffMsg extends ServerMsg {
   const ChangesDiffMsg({
     required this.workerId,
+    this.repo,
     required this.path,
     required this.diff,
     required this.truncated,
     this.error,
   });
   final String workerId;
+  final String? repo;
   final String path;
   final String diff;
   final bool truncated;
@@ -5245,6 +6137,7 @@ class ChangesDiffMsg extends ServerMsg {
   @override
   Map<String, dynamic> get fields => {
     'workerId': workerId,
+    'repo': ?repo,
     'path': path,
     'diff': diff,
     'truncated': truncated,
@@ -5297,6 +6190,27 @@ class MeMsg extends ServerMsg {
 }
 
 /// `now` is the office's clock as it answered, which the jukebox keeps time by.
+/// Your own sign-ins, whenever they change (accounts only).
+class SignInsMsg extends ServerMsg {
+  const SignInsMsg(this.state);
+  final SignInsState state;
+  @override
+  String get t => 'signins';
+  @override
+  Map<String, dynamic> get fields => {'state': state.toJson()};
+}
+
+/// What you tried needs a sign-in of your own first.
+class SignInsNeededMsg extends ServerMsg {
+  const SignInsNeededMsg(this.which, this.why);
+  final SignInKind which;
+  final String why;
+  @override
+  String get t => 'signins.needed';
+  @override
+  Map<String, dynamic> get fields => {'which': which.wire, 'why': why};
+}
+
 class PongMsg extends ServerMsg {
   const PongMsg({required this.at, required this.now});
   final double at;

@@ -27,6 +27,7 @@ class DeskDef {
     this.beanbag = false,
     this.station,
     this.room = false,
+    this.wing,
   });
 
   final String id;
@@ -45,6 +46,9 @@ class DeskDef {
 
   /// A chair at the meeting room's table (see [meetingSeats]): only a meeting seats a worker here.
   final bool room;
+
+  /// A desk in the back office (see [Wing]): there once the floor is built out this many rows.
+  final int? wing;
 
   @override
   String toString() => 'DeskDef($id)';
@@ -80,6 +84,53 @@ List<DeskDef> _buildDesks() {
 
 final List<DeskDef> desks = _buildDesks();
 
+/// The back office: a bay knocked through the north wall between the gong and the east wall, for a
+/// floor that needs more desks than the room has. Each time someone expands the floor (see
+/// floorplan.dart), its back wall goes another [row] meters north, with two more desks back to back in
+/// the middle, up to [rows] times: any further and it would stand in the street behind the building.
+/// It runs from [minX] (the gong keeps its bit of wall) to the east wall, and from the old north wall
+/// back to [wingMinZ].
+abstract final class Wing {
+  static const double minX = 13.4;
+  static const double maxX = Floor.maxX;
+  static const double row = 4.6;
+  static const int rows = 2;
+}
+
+/// A floor built out [level] rows, as a whole number from 0 (just the room) to [Wing.rows].
+int wingLevel(Object? level) => level is num && level.isFinite ? math.max(0, math.min(Wing.rows, level.floor())) : 0;
+
+/// How far north the back office's back wall is, built out [level] rows: the north wall with none.
+double wingMinZ(num level) => Floor.minZ - wingLevel(level) * Wing.row;
+
+/// Whether (x, z) is in the back office, built out [level] rows.
+bool inWing(double x, double z, num level) =>
+    level > 0 && x > Wing.minX && x < Wing.maxX && z <= Floor.minZ && z > wingMinZ(level);
+
+/// The middle of the back office's row [row] (1 is the first, through the old north wall).
+double wingRowZ(int row) => Floor.minZ - (row - 0.5) * Wing.row;
+
+/// The back office's desks: a back-to-back pair down the middle of each row, like half a pod, with
+/// room to walk round either side. The far one's worker faces the room; the near one's faces the back.
+final List<DeskDef> wingDesks = List.unmodifiable([
+  for (var i = 0; i < Wing.rows; i++)
+    ...() {
+      final z = wingRowZ(i + 1);
+      const x = (Wing.minX + Wing.maxX) / 2;
+      final n = desks.length + 2 * i + 1;
+      return [
+        DeskDef(id: 'desk-$n', x: x, z: z - _deskDepth / 2, rotY: math.pi, label: 'Desk $n', wing: i + 1),
+        DeskDef(id: 'desk-${n + 1}', x: x, z: z + _deskDepth / 2, rotY: 0, label: 'Desk ${n + 1}', wing: i + 1),
+      ];
+    }(),
+]);
+
+/// Whether [desk] is there on a floor built out [level] rows: every desk in the room is.
+bool deskBuilt(DeskDef desk, int level) => desk.wing == null || desk.wing == 0 || desk.wing! <= level;
+
+/// Every desk on a floor built out [level] rows: the room's, then the back office's.
+List<DeskDef> builtDesks(int level) => [...desks, ...wingDesks.where((d) => deskBuilt(d, level))];
+
 /// Overflow seats: once every desk is taken, bean bags come out around the room, one at a time in
 /// this order. Each faces a window or a wall, with open floor behind it to walk up to.
 final List<DeskDef> beanbags = List.unmodifiable([
@@ -103,8 +154,9 @@ final List<DeskDef> beanbags = List.unmodifiable([
     DeskDef(id: 'beanbag-${i + 1}', x: x, z: z, rotY: rotY, label: 'Bean bag ${i + 1}', beanbag: true),
 ]);
 
-/// Everywhere a worker can sit: the desks, then the bean bags.
-final List<DeskDef> seats = List.unmodifiable([...desks, ...beanbags]);
+/// Everywhere a worker can sit: the desks, the back office's once it's built out (see [deskBuilt]),
+/// then the bean bags.
+final List<DeskDef> seats = List.unmodifiable([...desks, ...wingDesks, ...beanbags]);
 
 /// The boards with an agent standing by: the Issues board, the PR board and the task queue.
 enum StationKind implements WireEnum {
@@ -175,22 +227,31 @@ abstract final class MeetingRoom {
 
 abstract final class MeetingTable {
   static const double x = 13.7;
-  static const double z = 10.55;
-  static const double width = 3.6;
-  static const double depth = 1.2;
+  static const double z = 10.5;
+  static const double width = 4.2;
+  static const double depth = 1.7;
   static const double height = 0.76;
 }
 
+/// A laptop at the meeting table: its size next to the model's, and how far toward its chair it lies
+/// from the place (x, z) it's at. With the place this far in from the table's edge, two open laptops
+/// facing each other across the table have room between the backs of their lids.
+abstract final class MeetingLaptop {
+  static const double scale = 1;
+  static const double z = 0.07;
+  static const double inset = 0.45; // TS `in`
+}
+
 /// The chairs round the meeting table, in the order a meeting fills them: the head of the table at its
-/// west end (whoever leads or writes the meeting up), then two down each side. (x, z) is where the
-/// laptop sits on the table; the chair is out from it the way a desk's is ([deskSeat]).
+/// west end (whoever leads or writes the meeting up), then two down each side. (x, z) is its place at
+/// the table, where its laptop goes ([MeetingLaptop]); the chair is out from it the way a desk's is ([deskSeat]).
 final List<DeskDef> meetingSeats = List.unmodifiable([
   for (final (i, (x, z, rotY)) in const [
-    (MeetingTable.x - MeetingTable.width / 2 + 0.35, MeetingTable.z, -math.pi / 2),
-    (MeetingTable.x - 0.6, MeetingTable.z - MeetingTable.depth / 2 + 0.35, math.pi),
-    (MeetingTable.x - 0.6, MeetingTable.z + MeetingTable.depth / 2 - 0.35, 0.0),
-    (MeetingTable.x + 1.1, MeetingTable.z - MeetingTable.depth / 2 + 0.35, math.pi),
-    (MeetingTable.x + 1.1, MeetingTable.z + MeetingTable.depth / 2 - 0.35, 0.0),
+    (MeetingTable.x - MeetingTable.width / 2 + MeetingLaptop.inset, MeetingTable.z, -math.pi / 2),
+    (MeetingTable.x - 0.65, MeetingTable.z - MeetingTable.depth / 2 + MeetingLaptop.inset, math.pi),
+    (MeetingTable.x - 0.65, MeetingTable.z + MeetingTable.depth / 2 - MeetingLaptop.inset, 0.0),
+    (MeetingTable.x + 1.15, MeetingTable.z - MeetingTable.depth / 2 + MeetingLaptop.inset, math.pi),
+    (MeetingTable.x + 1.15, MeetingTable.z + MeetingTable.depth / 2 - MeetingLaptop.inset, 0.0),
   ].indexed)
     DeskDef(
       id: 'meeting-${i + 1}',
@@ -211,27 +272,29 @@ abstract final class MeetingBoard {
   static const double height = 1.2;
 }
 
-/// Any place a worker can be by id: the seats, the board agents' kiosks and the meeting room's chairs.
+/// Any place a worker can be by id: the seats (the back office's included), the board agents' kiosks
+/// and the meeting room's chairs.
 final Map<String, DeskDef> deskById = Map.unmodifiable({
   for (final d in [...seats, ...stations, ...meetingSeats]) d.id: d,
 });
 
-/// The seat a new worker takes when nobody picks one: the first free desk, else the first free bean bag.
-DeskDef? nextFreeSeat(bool Function(String id) taken) {
+/// The seat a new worker takes when nobody picks one: the first free desk (in the back office too, as
+/// far as the floor is built out: [wing] rows), else the first free bean bag.
+DeskDef? nextFreeSeat(bool Function(String id) taken, [int wing = 0]) {
   for (final d in seats) {
-    if (!taken(d.id)) return d;
+    if (!taken(d.id) && deskBuilt(d, wing)) return d;
   }
   return null;
 }
 
-/// The bean bags that are out: every one in use, and while every desk is taken, the next free one
-/// too, so there's always somewhere to hire the next worker.
-Set<String> beanbagsOut(bool Function(String id) taken) {
+/// The bean bags that are out: every one in use, and while every desk is taken (the back office's
+/// too, built out [wing] rows), the next free one too, so there's always somewhere to hire the next worker.
+Set<String> beanbagsOut(bool Function(String id) taken, [int wing = 0]) {
   final out = {
     for (final b in beanbags)
       if (taken(b.id)) b.id,
   };
-  if (desks.every((d) => taken(d.id))) {
+  if (builtDesks(wing).every((d) => taken(d.id))) {
     for (final b in beanbags) {
       if (!taken(b.id)) {
         out.add(b.id);
@@ -408,6 +471,17 @@ const List<(double x, double z, double scale)> plants = [
   (3.5, 0, 0.9),
   (8.5, 5, 1.1),
 ];
+
+/// A plant by the north wall east of the gong, in the way into the back office: put away once it's built.
+bool plantByWing((double, double, double) plant) => plant.$1 > Wing.minX && plant.$2 < Floor.minZ + 1.5;
+
+/// The plants standing on a floor built out [level] rows (see [Wing]).
+List<(double x, double z, double scale)> plantsAt(int level) => level > 0
+    ? [
+        for (final p in plants)
+          if (!plantByWing(p)) p,
+      ]
+    : plants;
 
 /// The whiteboard on wheels everyone draws on together, out on the open floor between the desks and
 /// the lounge, facing into the room (+z). `width` and `height` are its writing surface, whose bottom

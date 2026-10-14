@@ -21,11 +21,12 @@ enum WorkerPrState { open, merged }
 typedef WorkerPr = ({WorkerPrState state, int number});
 
 /// Where its work stands on GitHub: a pull request from its desk, its worktree branch or its queue
-/// task is open (one still open wins, e.g. a follow-up on the same branch), or merged, so it can be
+/// task, or one it opened itself, is open (one still open wins, e.g. a follow-up on the same branch), or merged, so it can be
 /// sent home. Null when it has none, or only closed ones.
 WorkerPr? workerPr(WorkerInfo w, List<GhPull> pulls, List<QueueTask> tasks) {
   final mine = <int>{};
   if (w.pr != null) mine.add(w.pr!.number);
+  mine.addAll(w.pastPrs);
   for (final t in tasks) {
     if (t.workerId == w.id && t.pr != null) mine.add(t.pr!.number);
   }

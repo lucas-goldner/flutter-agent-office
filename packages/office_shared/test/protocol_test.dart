@@ -123,9 +123,16 @@ Map<String, dynamic> floorView() => {
       'at': 5,
     },
   ],
+  'plan': {
+    'wing': 1,
+    'labels': {
+      'desk-1': {'text': 'Frontend', 'color': '#ef476f', 'by': 'lucas', 'at': 6},
+    },
+  },
   'services': {'items': [], 'port': 4000},
   'dog': {
     'name': 'Biscuit',
+    'breed': 'corgi',
     'coat': 1,
     'path': [
       [0.5, 1.0],
@@ -184,6 +191,16 @@ Map<String, dynamic> floorView() => {
     'past': [meetingRecord],
   },
   'ball': {'holder': 'p1'},
+  'cars': [
+    {'x': -14.4, 'z': -10, 'rotY': 3.14, 'speed': 0, 'steer': 0},
+    {'x': 1, 'z': 2, 'rotY': 0.5, 'speed': 4.5, 'steer': -0.1, 'driver': 'p1', 'passenger': 'p2'},
+  ],
+  'jail': {
+    'prisoners': [
+      {'id': 'w9', 'name': 'Bob', 'color': '#aabbcc', 'at': 1700000000000, 'workedMs': 600000},
+    ],
+    'bones': 2,
+  },
 };
 
 final meeting = <String, dynamic>{
@@ -217,7 +234,6 @@ final meeting = <String, dynamic>{
     },
     {'seat': 1, 'doing': 'reviewing', 'file': '.meeting/r1-security.md', 'state': 'waiting'},
   ],
-  'budget': 2000000,
   'tokens': 1200,
   'cost': 0.25,
   'costKnown': true,
@@ -289,6 +305,9 @@ void main() {
           'busy': 1,
           'waiting': 1,
           'people': 1,
+          'wing': 2,
+          'branch': 'main',
+          'clone': {'step': 'Downloading', 'percent': 64, 'detail': '231.4 MiB · 1.5 MiB/s'},
         },
       ],
       'projectsDir': {'dir': '~/agent-office/projects', 'custom': true, 'by': 'lucas', 'at': 2},
@@ -338,6 +357,18 @@ void main() {
         'temp': 21.5,
       },
       'theme': {'pick': 'auto', 'active': 'halloween'},
+      'map': {
+        'pick': 'castle',
+        'custom': [
+          {'file': 'broken.json', 'error': 'it needs an id'},
+          {
+            'file': 'mine.json',
+            'config': {'id': 'mine', 'extends': 'castle', 'name': 'Mine'},
+          },
+        ],
+        'by': 'lucas',
+        'at': 7,
+      },
       'prompts': promptsState,
       'leaveOnMerge': {'on': true, 'by': 'lucas', 'at': 3},
       ...floorView(),

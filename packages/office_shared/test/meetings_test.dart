@@ -25,7 +25,6 @@ Meeting meeting({
   turns: const [
     MeetingTurn(seat: 0, doing: 'proposing', file: '.meeting/r1-chair.md', state: MeetingTurnState.done, sentAt: 1),
   ],
-  budget: 3000000,
   tokens: 1234567,
   cost: 2.4,
   costKnown: costKnown,
@@ -122,5 +121,27 @@ void main() {
     expect(r.finishedAt, 42);
     expect(r.branch, 'meeting/pick-a-cache');
     expect(r.summary, meetingSummary(meeting(worktree: wt)));
+  });
+
+  test('a pattern with a set number of rounds says so, and names them; a range is left to pick from', () {
+    expect(fixedRounds(meetingPatterns[MeetingPattern.lead]!), (
+      line: '3 rounds · fixed by the Lead & team workflow',
+      stages: 'Planning → Execution → Merge',
+      why:
+          'Lead & team always runs 3 rounds: Planning → Execution → Merge. Each one is a step of the pattern, so there’s none to add or take away.',
+    ));
+    for (final id in meetingPatternIds) {
+      final p = meetingPatterns[id]!;
+      if (p.rounds.min == p.rounds.max) {
+        expect(p.stages?.length, p.rounds.max, reason: '$id names each of its rounds');
+      } else {
+        expect(fixedRounds(p), isNull, reason: '$id');
+        expect(p.roundsNote, isNotNull, reason: '$id says what a round is');
+      }
+    }
+  });
+
+  test("what's on the table in a line", () {
+    expect(meetingStage(meeting()), 'Round 2 of 3');
   });
 }

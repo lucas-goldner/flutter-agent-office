@@ -18,7 +18,11 @@ void main() {
         'Lucas Goldner': [4, 5, 1],
       };
       expected.forEach((seed, v) {
-        expect(lookFromSeed(seed), Look(skin: v[0], hair: v[1], style: v[2]), reason: seed);
+        expect(
+          lookFromSeed(seed),
+          Look(skin: v[0], hair: v[1], style: v[2]),
+          reason: seed,
+        );
       });
       expect(lookFromSeed('x' * 100), const Look(skin: 5, hair: 4, style: 6));
     });
@@ -99,7 +103,15 @@ void main() {
   });
 
   group('dog', () {
-    const s = DogState(name: 'Rex', coat: 0, path: [(0, 0), (3, 4), (3, 10)], speed: 2, elapsed: 0, act: DogAct.sit, face: 1.5);
+    const s = DogState(
+      name: 'Rex',
+      coat: 0,
+      path: [(0, 0), (3, 4), (3, 10)],
+      speed: 2,
+      elapsed: 0,
+      act: DogAct.sit,
+      face: 1.5,
+    );
 
     test('dogAt walks the path like the TS', () {
       final want = [
@@ -121,9 +133,10 @@ void main() {
     });
 
     test('dogDefaults and cleanDogName', () {
-      expect(dogDefaults('floor-1'), (name: 'Cookie', coat: 2));
-      expect(dogDefaults('main'), (name: 'Pancake', coat: 5));
-      expect(dogDefaults('ƒloor🐶'), (name: 'Pancake', coat: 0));
+      // From running src/shared/dog.ts (upstream/main).
+      expect(dogDefaults('floor-1'), (name: 'Cookie', coat: 2, breed: DogBreed.dachshund));
+      expect(dogDefaults('main'), (name: 'Pancake', coat: 5, breed: DogBreed.pup));
+      expect(dogDefaults('ƒloor🐶'), (name: 'Pancake', coat: 0, breed: DogBreed.dachshund));
       expect(cleanDogName('  Re\u0001x  '), 'Rex');
       expect(cleanDogName('x' * 40).length, dogNameMax);
     });
@@ -131,10 +144,31 @@ void main() {
 
   group('decor, sun, search, whiteboard', () {
     test('sanitizePlacement matches the TS', () {
-      final r = sanitizePlacement({'url': 'https://example.com/a.png', 'wall': 'east', 'u': 12, 'y': 6, 'w': 2, 'h': 1, 'frame': 3, 'title': ' Hi\u0001there '});
+      final r = sanitizePlacement({
+        'url': 'https://example.com/a.png',
+        'wall': 'east',
+        'u': 12,
+        'y': 6,
+        'w': 2,
+        'h': 1,
+        'frame': 3,
+        'title': ' Hi\u0001there ',
+      });
       expect(r.error, isNull);
-      expect(r.placement!.toJson(), {'url': 'https://example.com/a.png', 'title': 'Hi there', 'wall': 'east', 'u': 11.78, 'y': 5.18, 'w': 2, 'h': 1, 'frame': 3});
-      expect(sanitizePlacement({'url': 'ftp://x/y', 'wall': 'east'}).error, 'Only http and https links can hang on the wall');
+      expect(r.placement!.toJson(), {
+        'url': 'https://example.com/a.png',
+        'title': 'Hi there',
+        'wall': 'east',
+        'u': 11.78,
+        'y': 5.18,
+        'w': 2,
+        'h': 1,
+        'frame': 3,
+      });
+      expect(
+        sanitizePlacement({'url': 'ftp://x/y', 'wall': 'east'}).error,
+        'Only http and https links can hang on the wall',
+      );
       expect(sanitizePlacement({'url': 'https://x/y', 'wall': 'up'}).error, 'Pick a wall to hang it on');
       expect(wallTop(Side.south, 12), closeTo(Loft.y + Loft.height, 1e-12));
     });
@@ -154,8 +188,14 @@ void main() {
     });
 
     test('whiteboard merge rules', () {
-      WbElement el(String id, int v, num nonce, [String? index]) =>
-          WbElement({'id': id, 'type': 'rectangle', 'version': v, 'versionNonce': nonce, 'index': ?index, 'strokeColor': '#000'});
+      WbElement el(String id, int v, num nonce, [String? index]) => WbElement({
+        'id': id,
+        'type': 'rectangle',
+        'version': v,
+        'versionNonce': nonce,
+        'index': ?index,
+        'strokeColor': '#000',
+      });
       expect(newer(el('a', 2, 5), el('a', 1, 1)), isTrue);
       expect(newer(el('a', 1, 1), el('a', 1, 5)), isTrue);
       expect(newer(el('a', 1, 5), el('a', 1, 1)), isFalse);
@@ -163,10 +203,32 @@ void main() {
       expect(checkElement({'id': 'a', 'type': 'selection', 'version': 1, 'versionNonce': 1}), isNull);
       expect(checkElement({'id': 'a b', 'type': 'line', 'version': 1, 'versionNonce': 1}), isNull);
       expect(checkElement({'id': 'a', 'type': 'line', 'version': 1.5, 'versionNonce': 1}), isNull);
-      final ok = checkElement({'id': 'a', 'type': 'line', 'version': 3, 'versionNonce': 9, 'points': [[0, 0]]})!;
-      expect(ok.raw['points'], [[0, 0]]);
+      final ok = checkElement({
+        'id': 'a',
+        'type': 'line',
+        'version': 3,
+        'versionNonce': 9,
+        'points': [
+          [0, 0],
+        ],
+      })!;
+      expect(ok.raw['points'], [
+        [0, 0],
+      ]);
       final sorted = [el('c', 1, 1), el('b', 1, 1, 'a1'), el('a', 1, 1, 'a0')]..sort(byIndex);
       expect(sorted.map((e) => e.id), ['a', 'b', 'c']);
     });
+  });
+
+  test('a made-up name is an adjective and an animal', () {
+    expect(randomName(), matches(RegExp(r'^[A-Z][a-z]+ [A-Z][a-z]+$')));
+  });
+
+  test("what the office's machine says, for the hire dialogs", () {
+    const s = MachineState(cpu: 0, cores: 4, memUsed: 0, memTotal: 1, workers: 3, limit: 3, pressure: 'memory');
+    expect(officeFull(s), isTrue);
+    expect(officeFull(MachineState.empty), isFalse);
+    expect(pressureNote(s), contains('under pressure: memory'));
+    expect(pressureNote(MachineState.empty), isNull);
   });
 }

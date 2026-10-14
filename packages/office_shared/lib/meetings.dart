@@ -18,7 +18,8 @@ class PatternDef {
     required this.roles,
     required this.seats,
     required this.rounds,
-    required this.roundsNote,
+    this.roundsNote,
+    this.stages,
     required this.output,
     this.needs,
   });
@@ -38,8 +39,11 @@ class PatternDef {
   /// The round limit: the fewest, the most, and the default. Fixed when min equals max.
   final MeetingRange rounds;
 
-  /// What a round is, for the dialog.
-  final String roundsNote;
+  /// What a round is, for the dialog, when the limit is a range to pick from.
+  final String? roundsNote;
+
+  /// The rounds by name, in order, when the pattern always runs the same ones.
+  final List<String>? stages;
 
   /// Where the output goes when whoever calls the meeting doesn't say (`slug` is the meeting's title as a file name).
   final String Function(String slug, int? pr) output;
@@ -68,7 +72,7 @@ final Map<MeetingPattern, PatternDef> meetingPatterns = Map.unmodifiable({
     roles: const ['Lead', 'Engineer', 'Engineer', 'Engineer', 'Engineer'],
     seats: (min: 2, max: 5, defaultValue: 3),
     rounds: (min: 3, max: 3, defaultValue: 3),
-    roundsNote: 'Plan, work, merge.',
+    stages: const ['Planning', 'Execution', 'Merge'],
     output: (slug, _) => 'docs/meetings/$slug.md',
   ),
   MeetingPattern.mapreduce: PatternDef(
@@ -79,7 +83,7 @@ final Map<MeetingPattern, PatternDef> meetingPatterns = Map.unmodifiable({
     roles: const ['Reducer', 'Mapper', 'Mapper', 'Mapper', 'Mapper'],
     seats: (min: 2, max: 5, defaultValue: 3),
     rounds: (min: 2, max: 2, defaultValue: 2),
-    roundsNote: 'Map, then reduce.',
+    stages: const ['Map', 'Reduce'],
     output: (slug, _) => 'docs/meetings/$slug.md',
     needs: PatternNeeds.parts,
   ),
@@ -101,7 +105,7 @@ final Map<MeetingPattern, PatternDef> meetingPatterns = Map.unmodifiable({
     roles: const ['Correctness', 'Security', 'Performance & simplicity', 'Tests', 'API design'],
     seats: (min: 2, max: 5, defaultValue: 3),
     rounds: (min: 2, max: 2, defaultValue: 2),
-    roundsNote: 'Reviews, then the combined review.',
+    stages: const ['Reviews', 'Combined review'],
     output: (_, pr) => 'reviews/pr-${pr ?? 'n'}.md',
     needs: PatternNeeds.pr,
   ),
@@ -112,12 +116,6 @@ const List<MeetingPattern> meetingPatternIds = MeetingPattern.values;
 
 /// Whether [v] is a pattern's id on the wire (only the real ones, not what every object inherits).
 bool isMeetingPattern(Object? v) => MeetingPattern.tryParse(v) != null;
-
-/// Tokens a meeting may use by default: a million per worker at the table.
-const int tokensPerSeat = 1000000;
-
-/// The most a meeting may be given, however many workers sit down.
-const int maxMeetingBudget = 50000000;
 
 /// The round notes' folder at the top of a meeting's worktree. It's left out of the meeting's commit and
 /// cleared away with the room (a copy stays in the floor's .agent-office/meetings/). Not under
@@ -180,9 +178,33 @@ String? outputProblem(String p) {
 /// "3 rounds" / "round 2 of 3".
 String _rounds(int n) => '$n round${n == 1 ? '' : 's'}';
 
+/// For a pattern that always runs the same rounds, what the dialog shows in place of a limit to set:
+/// the line ("3 rounds · fixed by the Lead & team workflow"), its rounds by name, and why, for the
+/// tooltip. Null when the limit is a range to pick from.
+({String line, String stages, String why})? fixedRounds(PatternDef p) {
+  if (p.rounds.min != p.rounds.max) return null;
+  final n = _rounds(p.rounds.max);
+  final stages = (p.stages ?? const <String>[]).join(' → ');
+  return (
+    line: '$n · fixed by the ${p.label} workflow',
+    stages: stages,
+    why:
+        '${p.label} always runs $n${stages.isNotEmpty ? ': $stages' : ''}. Each one is a step of the pattern, so there’s none to add or take away.',
+  );
+}
+
 /// The spend, e.g. "1.2M tokens · $2.40" (or without the cost when a provider doesn't report it).
 String meetingSpend({required int tokens, required double cost, required bool costKnown}) =>
     '${fmtTokens(tokens)} tokens${costKnown ? ' · ${fmtCost(cost)}' : (cost > 0 ? ' · ${fmtCost(cost)}+' : '')}';
+
+/// What's on the table in a line: "Round 2 of 3 · critiquing".
+String meetingStage(Meeting m) {
+  final doing = {
+    for (final t in m.turns)
+      if (t.state != MeetingTurnState.done) t.doing,
+  }.join(', ');
+  return 'Round ${m.round} of ${m.rounds}${doing.isNotEmpty ? ' · $doing' : ''}';
+}
 
 /// The line on the room's door once a meeting is over: pattern, rounds, tokens, cost, and the output
 /// file it wrote (and where), or why it stopped.
