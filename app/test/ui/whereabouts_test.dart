@@ -2,6 +2,7 @@ import 'package:agent_office/ui/whereabouts.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:office_shared/avatar.dart';
 import 'package:office_shared/layout.dart';
+import 'package:office_shared/maps/maps.dart' show planOf;
 import 'package:office_shared/protocol.dart';
 import 'package:office_shared/rooftop.dart' show roof;
 
@@ -60,5 +61,19 @@ void main() {
     expect(cut.endsWith('…'), isTrue);
     expect(cut.length, lessThanOrEqualTo(61));
     expect(cut.contains('\uD83D…'), isFalse);
+  });
+
+  test("on a map of its own, its own seats, and none of the office's rooms", () {
+    final castle = planOf('castle');
+    final throne = castle.throne!;
+    final said = whereabouts(peer(throne.x, throne.z, floor: 'agent-office', seat: '${throne.id}:0'), castle);
+    final words = throne.label.split(' ');
+    expect(said, '${words.first} on the ${words.skip(1).join(' ').toLowerCase()}');
+    // Where the office's meeting room would be is just the hall.
+    expect(whereabouts(peer(MeetingRoom.minX + 1, MeetingRoom.minZ + 1, floor: 'agent-office'), castle), isNull);
+    expect(
+      whereabouts(peer(MeetingRoom.minX + 1, MeetingRoom.minZ + 1, floor: 'agent-office')),
+      '🤝 in the meeting room',
+    );
   });
 }

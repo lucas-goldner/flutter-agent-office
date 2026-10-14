@@ -622,7 +622,7 @@ class _PersonRow extends StatelessWidget {
       if (p.floor == roof) where = '🍸 $roofName';
     }
     final color = speaking ? Swatch.good : Swatch.ink;
-    final sub = you ? null : whereabouts(p);
+    final sub = you ? null : whereabouts(p, store.plan());
     Widget row = Container(
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
       child: Row(

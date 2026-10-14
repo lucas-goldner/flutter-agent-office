@@ -8,7 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_scene/scene.dart' show PerspectiveCamera;
 import 'package:office_shared/cabinet.dart';
-import 'package:office_shared/layout.dart' show deskById;
+import 'package:office_shared/maps/maps.dart' show MapPlan;
 import 'package:office_shared/protocol.dart';
 
 import '../state/store.dart';
@@ -355,7 +355,7 @@ class ArcadeCabinet {
         player: store.profile.name,
         scores: c.scores,
         mine: g.id,
-        note: w != null ? '${w.name} needs you${_deskOf(w)}' : 'P to carry on',
+        note: w != null ? '${w.name} needs you${_deskOf(w, store.plan())}' : 'P to carry on',
         prompt: rank > 0 ? '🏆 #$rank on the table! Enter: again' : 'Enter to play again',
         t: t,
       );
@@ -394,8 +394,8 @@ class ArcadeCabinet {
 }
 
 /// " at Desk 3", or nothing when it's not at a desk here.
-String _deskOf(WorkerInfo w) {
-  final d = deskById[w.deskId];
+String _deskOf(WorkerInfo w, MapPlan plan) {
+  final d = plan.byId[w.deskId];
   return d == null ? '' : ' at ${d.station != null ? 'the ${d.label}' : d.label}';
 }
 
@@ -459,7 +459,7 @@ class _CallBar extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Flexible(child: Text('🙋 ${w.name} needs input${_deskOf(w)}', style: heavy(13))),
+            Flexible(child: Text('🙋 ${w.name} needs input${_deskOf(w, cabinet.store.plan())}', style: heavy(13))),
             const SizedBox(width: 10),
             OfficeButton(
               label: '💬 Open its terminal',

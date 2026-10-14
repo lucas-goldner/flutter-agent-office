@@ -109,7 +109,7 @@ import '../world/jail.dart';
 import '../world/adrift.dart';
 import '../world/world.dart' show DeskView, OfficeWorld, World, WorldDevice, streetOf;
 
-import 'package:office_shared/maps/maps.dart' show MapPlan, levelRoute, officeMap, seatHereOn;
+import 'package:office_shared/maps/maps.dart' show MapPlan, PlanStyle, levelRoute, officeMap, seatHereOn;
 import 'package:office_shared/nav.dart' show Pt;
 
 import '../world/office/city.dart' show buildCity;
@@ -1085,7 +1085,12 @@ class OfficeController implements OfficeActions {
     if (store.floor == null) return showElevator();
     toggleFloorMenu(
       store,
-      FloorMenuOptions(go: switchFloor, indoors: indoors, elevator: showElevator, roof: () => ride(roof)),
+      FloorMenuOptions(
+        go: switchFloor,
+        indoors: indoors,
+        elevator: showElevator,
+        roof: plan.style == PlanStyle.office ? () => ride(roof) : null,
+      ),
       anchor: anchor,
     );
   }
@@ -2001,7 +2006,7 @@ class OfficeController implements OfficeActions {
     _sendDoing();
     for (final e in _remotes.entries) {
       final p = store.peers[e.key];
-      if (p != null) e.value.person.setDoing(whereabouts(p));
+      if (p != null) e.value.person.setDoing(whereabouts(p, plan));
     }
   }
 
@@ -2034,7 +2039,7 @@ class OfficeController implements OfficeActions {
       r.person.setSmoking(peer.smoking ?? false);
       r.person.holdDrink(roofHub.drinkOf(peer));
       r.person.sit(peer.seat != null ? _seatAt(peer.seat!)?.hips : null);
-      r.person.setDoing(whereabouts(peer));
+      r.person.setDoing(whereabouts(peer, plan));
       r.person.carry(peer.carrying);
     }
     _cork.off = _offBoard();

@@ -11,7 +11,6 @@ import 'package:flutter/material.dart';
 import '../interop/portable.dart';
 import '../office_scope.dart';
 
-import 'package:office_shared/layout.dart' show deskById;
 import 'package:office_shared/protocol.dart';
 
 import '../state/store.dart';
@@ -259,7 +258,7 @@ class _BoardWindowState extends State<_BoardWindow> {
       if (w != null) {
         return DeskChip(
           w,
-          tooltip: '${w.name} is working on this at ${deskById[w.deskId]?.label ?? 'a desk'}$provider',
+          tooltip: '${w.name} is working on this at ${store.plan().byId[w.deskId]?.label ?? 'a desk'}$provider',
         );
       }
       return _QChip('🤖 ${t.workerName ?? 'a worker'}$provider', const Color(0xFFD8F5E3));
@@ -321,7 +320,10 @@ class DeskChip extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 5),
-          Text('🪑 ${w.name} · ${deskById[w.deskId]?.label ?? 'a desk'}', style: heavy(11)),
+          Text(
+            '🪑 ${w.name} · ${OfficeScope.of(context).store.plan().byId[w.deskId]?.label ?? 'a desk'}',
+            style: heavy(11),
+          ),
         ],
       ),
     ),
