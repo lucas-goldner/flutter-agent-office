@@ -333,10 +333,8 @@ class MeetingRoom {
     if (provider == AgentProvider.custom && _workers.defaultProvider != AgentProvider.custom) {
       return 'Unknown agent provider';
     }
-    final model = (provider == AgentProvider.claude || provider == AgentProvider.opencode) && (picked.model ?? '') != ''
-        ? picked.model
-        : null;
-    final effort = provider == AgentProvider.claude ? picked.effort : null;
+    final model = takesModel(provider) && (picked.model ?? '') != '' ? picked.model : null;
+    final effort = takesEffort(provider) ? picked.effort : null;
     final bad =
         validateWorkerModel(WorkerKind.agent, provider, model) ??
         validateWorkerEffort(WorkerKind.agent, provider, effort);
@@ -765,7 +763,8 @@ class MeetingRoom {
       final usage = w?.usage;
       if (w != null && usage != null) {
         s.tokens = tokensOf(usage);
-        s.cost = usage.costKnown == false || (w.provider == AgentProvider.codex && usage.costKnown != true)
+        s.cost =
+            usage.costKnown == false || ((providerMeta(w.provider)?.usage.noCost ?? false) && usage.costKnown != true)
             ? null
             : usage.cost;
       }

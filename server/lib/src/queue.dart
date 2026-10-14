@@ -216,8 +216,8 @@ class TaskQueue {
     final task = _Task(
       id: _randomHex(6),
       provider: provider,
-      model: provider == AgentProvider.opencode || provider == AgentProvider.claude ? model : null,
-      effort: provider == AgentProvider.claude ? effort : null,
+      model: takesModel(provider) ? model : null,
+      effort: takesEffort(provider) ? effort : null,
       issue: issue,
       title: heading.length > 120 ? heading.substring(0, 120) : heading,
       prompt: clean,
@@ -568,12 +568,8 @@ class TaskQueue {
         final t = _Task(
           id: id,
           provider: provider,
-          model:
-              (provider == AgentProvider.opencode && isValidOpenCodeModel(s['model'])) ||
-                  (provider == AgentProvider.claude && isClaudeModel(s['model']))
-              ? s['model'] as String
-              : null,
-          effort: provider == AgentProvider.claude ? AgentEffort.tryParse(s['effort']) : null,
+          model: savedModel(provider, s['model']),
+          effort: savedEffort(provider, s['effort']),
           issue: s['issue'] is num ? (s['issue'] as num).toInt() : null,
           title: title,
           prompt: prompt,

@@ -70,8 +70,8 @@ void main() {
       contains('Invalid Claude model'),
     );
     expect(
-      book.setAgent(const AgentChoice(provider: AgentProvider.codex, effort: AgentEffort.high), 'Ada'),
-      contains('only be selected for Claude'),
+      book.setAgent(const AgentChoice(provider: AgentProvider.codex, model: 'gpt 5.5'), 'Ada'),
+      contains('Invalid Codex model'),
     );
     expect(
       book.setAgent(const AgentChoice(provider: AgentProvider.opencode, model: 'no slash'), 'Ada'),

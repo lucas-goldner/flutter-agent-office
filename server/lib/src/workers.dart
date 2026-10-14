@@ -267,7 +267,7 @@ class WorkerManager implements QueueWorkers {
     _trees = Worktrees(_dir);
     _statePath = p.join(_dataDir, 'workers.json');
     _office = officeCommand();
-    final floor = ProviderFloor(dataDir: _dataDir, office: _office);
+    final floor = ProviderFloor(dataDir: _dataDir, office: _office, env: _env);
     for (final a in providerAdapters.values) {
       _setups[a.id] = a.prepare(floor);
     }
@@ -484,8 +484,8 @@ class WorkerManager implements QueueWorkers {
       id: id,
       kind: kind,
       provider: selectedProvider,
-      model: selectedProvider == AgentProvider.opencode || selectedProvider == AgentProvider.claude ? model : null,
-      effort: selectedProvider == AgentProvider.claude ? effort : null,
+      model: takesModel(selectedProvider) ? model : null,
+      effort: takesEffort(selectedProvider) ? effort : null,
       deskId: deskId,
       name: kind == WorkerKind.shell ? '$name 🐚' : name,
       color: kind == WorkerKind.shell ? '#8d99ae' : agent?.color ?? _colors[_random.nextInt(_colors.length)],
@@ -1162,7 +1162,7 @@ class WorkerManager implements QueueWorkers {
   /// What a worker's terminal runs: the shell, the configured agent command, or another provider's CLI.
   String _command(LiveInfo info) {
     if (info.kind == WorkerKind.shell) return _env['SHELL'] ?? '/bin/bash';
-    return info.provider == defaultProvider ? _agentCmd : info.provider?.wire ?? _agentCmd;
+    return providerCommand(info.provider ?? defaultProvider, _agentCmd);
   }
 
   String _cwd(LiveInfo info) => info.worktree != null ? p.join(_dir, info.worktree!.path) : _dir;
@@ -1403,12 +1403,8 @@ class WorkerManager implements QueueWorkers {
           id: id,
           kind: shell ? WorkerKind.shell : WorkerKind.agent,
           provider: provider,
-          model:
-              (provider == AgentProvider.opencode && isValidOpenCodeModel(s['model'])) ||
-                  (provider == AgentProvider.claude && isClaudeModel(s['model']))
-              ? s['model'] as String
-              : null,
-          effort: provider == AgentProvider.claude ? AgentEffort.tryParse(s['effort']) : null,
+          model: savedModel(provider, s['model']),
+          effort: savedEffort(provider, s['effort']),
           deskId: deskId,
           name: _str(s['name']) ?? 'Worker',
           color: _str(s['color']) ?? _colors[0],

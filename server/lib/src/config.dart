@@ -44,6 +44,7 @@ class Config {
     required void Function(Config) markClaimed,
     required this.agentCmd,
     required this.agentArgs,
+    this.dshProfile = 'acp',
     this.tls,
     required this.trustProxy,
     required this.iceServers,
@@ -92,6 +93,9 @@ class Config {
   void markClaimed() => _markClaimed(this);
   final String agentCmd;
   final List<String> agentArgs;
+
+  /// The DSH profile a DeepSeek Harness worker boots (`--dsh-profile`, default "acp").
+  final String dshProfile;
   TlsFiles? tls;
   final bool trustProxy;
   final List<IceServer> iceServers;
@@ -118,7 +122,8 @@ class Config {
   final Weather? weather;
 }
 
-const help = '''agent-office — a 3D office for your team and its Claude Code / OpenCode / Codex workers
+const help =
+    '''agent-office — a 3D office for your team and its Claude Code / OpenCode / Codex / Grok / Muse / DeepSeek Harness / Pi / Cursor workers
 
 Usage:
   agent-office [options]
@@ -175,7 +180,10 @@ Options:
                           (env AGENT_OFFICE_NO_OPEN=1)
       --agent <cmd>       Default agent command (default "claude", env AGENT_OFFICE_AGENT)
       --agent-args <str>  Extra args for the configured agent, e.g. "--model opus"
-                          Workers can also select Claude Code, OpenCode or Codex in the UI
+                          Workers can also select Claude Code, OpenCode, Codex, Grok,
+                          Muse, DeepSeek Harness, Pi or Cursor in the UI
+      --dsh-profile <n>   DeepSeek Harness profile for its workers, over the ACP
+                          server (default "acp", env AGENT_OFFICE_DSH_PROFILE)
       --tls-cert <file>   Serve HTTPS with this certificate (PEM)
       --tls-key <file>    ...and this private key (PEM)
       --self-signed       Serve HTTPS with a generated self-signed certificate
@@ -184,7 +192,7 @@ Options:
                           turn:user:pass@turn.example.com:3478
       --budget <usd>      Daily budget for tracked Claude Code spend (env
                           AGENT_OFFICE_BUDGET). Everyone is warned when the
-                          day's spend passes it. OpenCode/Codex spend is excluded
+                          day's spend passes it. OpenCode/Codex/Grok/Muse spend is excluded
       --budget-pause      ...and no new workers can be hired until the next
                           day (env AGENT_OFFICE_BUDGET_PAUSE=1)
       --max-workers <n>   Run at most this many workers at once, across every
@@ -263,8 +271,9 @@ String? _env(String name) {
 /// Where the office lives when it isn't started in a project: ~/agent-office, or $AGENT_OFFICE_HOME.
 String officeHome() => _resolve(_env('AGENT_OFFICE_HOME') ?? p.join(homeDir(), 'agent-office'));
 
-/// Keep the office's own data out of git without touching the project's .gitignore.
-void excludeFromGit(String dir) {
+/// Keep the office's own data (or another [entry] it writes into the project) out of git without
+/// touching the project's .gitignore.
+void excludeFromGit(String dir, [String entry = '.agent-office/']) {
   try {
     final r = Process.runSync('git', ['rev-parse', '--git-common-dir'], workingDirectory: dir);
     if (r.exitCode != 0) return; // not a git repo; nothing to exclude
@@ -272,12 +281,10 @@ void excludeFromGit(String dir) {
     final exclude = _resolve(p.join(dir, gitDir, 'info', 'exclude'));
     final f = File(exclude);
     final cur = f.existsSync() ? f.readAsStringSync() : '';
-    if (!cur.split('\n').any((l) => l.trim() == '.agent-office/' || l.trim() == '.agent-office')) {
+    final bare = entry.replaceFirst(RegExp(r'/$'), '');
+    if (!cur.split('\n').any((l) => l.trim() == entry || l.trim() == bare)) {
       Directory(p.dirname(exclude)).createSync(recursive: true);
-      f.writeAsStringSync(
-        '${cur.isNotEmpty && !cur.endsWith('\n') ? '\n' : ''}.agent-office/\n',
-        mode: FileMode.append,
-      );
+      f.writeAsStringSync('${cur.isNotEmpty && !cur.endsWith('\n') ? '\n' : ''}$entry\n', mode: FileMode.append);
     }
   } catch (_) {
     // not a git repo (or no git); nothing to exclude
@@ -300,6 +307,7 @@ Config loadConfig(List<String> argv) {
   var password = _env('AGENT_OFFICE_PASSWORD') ?? '';
   var agentCmd = _env('AGENT_OFFICE_AGENT') ?? 'claude';
   var agentArgs = splitArgs(_env('AGENT_OFFICE_AGENT_ARGS') ?? '');
+  var dshProfile = _env('AGENT_OFFICE_DSH_PROFILE') ?? 'acp';
   var tlsCert = '';
   var tlsKey = '';
   var selfSigned = false;
@@ -341,6 +349,8 @@ Config loadConfig(List<String> argv) {
         // Its value is flags itself ("--model opus"), so a leading -- doesn't mean the value is missing.
         if (i + 1 >= argv.length) _takeValue(argv, i, a);
         agentArgs = splitArgs(argv[++i]);
+      case '--dsh-profile':
+        dshProfile = _takeValue(argv, i++, a);
       case '--tls-cert':
         tlsCert = _takeValue(argv, i++, a);
       case '--tls-key':
@@ -498,6 +508,7 @@ Config loadConfig(List<String> argv) {
     },
     agentCmd: agentCmd,
     agentArgs: agentArgs,
+    dshProfile: dshProfile.trim().isEmpty ? 'acp' : dshProfile.trim(),
     tls: tls,
     trustProxy: trustProxy,
     iceServers: iceServers,

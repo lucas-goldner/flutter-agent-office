@@ -153,7 +153,9 @@ class CodexAdapter extends ProviderAdapter {
   @override
   LaunchPlan launch(LaunchInput input) {
     final setup = input.setup as CodexSetup;
-    final args = input.args..addAll([...codexHookArgs(setup.office), '--no-alt-screen']);
+    // Resumed too: Codex resumes on whatever its config says now, not on the model the session ran on.
+    final args = codexModelArgs(input.args, input.h.info.model, input.h.info.effort)
+      ..addAll([...codexHookArgs(setup.office), '--no-alt-screen']);
     if (input.resumeSessionId != null) args.addAll(['resume', input.resumeSessionId!]);
     final prompt = input.prompt;
     if (prompt != null && prompt.isNotEmpty) args.addAll(['--', prompt]);

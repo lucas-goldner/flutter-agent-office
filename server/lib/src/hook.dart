@@ -1,10 +1,11 @@
-// The hook helper: `agent-office hook claude <event>` and `agent-office hook codex <event>`.
+// The hook helper: `agent-office hook <claude|codex|grok|muse|cursor> <event>`.
 //
-// Claude Code and Codex run a command for each lifecycle hook, with the hook's JSON on stdin; the
-// office wants it POSTed to its bridge. Claude's hook command tries curl first (see
-// claudeHookCommand) and falls back to this. Codex's always runs this, since it filters the payload
-// before it leaves the machine. The office's own executable is always there, unlike curl on
-// minimal VPS images.
+// The agents run a command for each lifecycle hook, with the hook's JSON on stdin; the office wants
+// it POSTed to its bridge. Claude's hook command tries curl first (see claudeHookCommand) and falls
+// back to this. Codex, Grok, Muse and Cursor always run this, since it filters the payload before it
+// leaves the machine (bounded stdin, child sessions dropped, only bounded fields kept): upstream
+// wrote a Node helper for each, but the office's own executable is always there, unlike Node or curl
+// on minimal VPS images.
 
 import 'dart:async';
 import 'dart:convert';
@@ -15,6 +16,10 @@ import 'dart:isolate';
 import 'package:path/path.dart' as p;
 
 import 'codex.dart';
+import 'cursor.dart';
+import 'grok.dart';
+import 'lifecycle.dart';
+import 'muse.dart';
 
 /// Attempts at reaching the office from a Claude hook: it may be restarting.
 const hookTries = 6;
@@ -47,7 +52,7 @@ String claudeHookCommand(String event, {List<String>? office}) {
       'else $fallback >/dev/null 2>&1; fi; true';
 }
 
-/// `agent-office hook <claude|codex> <event>` ([args] are what follows `hook`). Reads the hook
+/// `agent-office hook <claude|codex|grok|muse> <event>` or `agent-office hook cursor <event> <worker>` ([args] are what follows `hook`). Reads the hook
 /// payload from stdin and forwards it to the office named by AGENT_OFFICE_HOOK_URL. Always exits 0:
 /// a hook that fails must not get in the agent's way.
 Future<int> runHook(
@@ -64,6 +69,18 @@ Future<int> runHook(
       await _claudeHook(event, input ?? stdin, env);
     } else if (kind == 'codex') {
       if (await _codexHook(event, input ?? stdin, env)) (output ?? stdout).write('{}');
+    } else if (kind == 'grok') {
+      if (await _lifecycleHook('grok', normalizeGrokHook(event, await _readJson(input ?? stdin)), env)) {
+        (output ?? stdout).write('{}');
+      }
+    } else if (kind == 'cursor') {
+      // It always answers `{}`: no decision of its own, so Cursor's permission prompts are as they'd be without it.
+      await _cursorHook(event, args.length > 2 ? args[2] : '', input ?? stdin, env);
+      (output ?? stdout).write('{}');
+    } else if (kind == 'muse') {
+      if (await _lifecycleHook('muse', normalizeMuseHook(event, await _readJson(input ?? stdin)), env)) {
+        (output ?? stdout).write('{}');
+      }
     }
     await (output ?? stdout).flush();
   } catch (_) {
@@ -144,6 +161,62 @@ Future<bool> _codexHook(String event, Stream<List<int>> input, Map<String, Strin
     return status >= 200 && status < 300;
   } catch (_) {
     return false;
+  }
+}
+
+/// The JSON hook payload on [input] (at most 64 KiB), or null.
+Future<Object?> _readJson(Stream<List<int>> input) async {
+  final raw = await _readAll(input, _codexStdinMax);
+  if (raw == null) return null;
+  try {
+    return jsonDecode(utf8.decode(raw, allowMalformed: true));
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Posts a compacted lifecycle event (see lifecycle.dart) to `/hooks/<route>`: only its bounded
+/// fields leave the machine. Says whether the office took it.
+Future<bool> _lifecycleHook(String route, LifecycleReport? report, Map<String, String> env) async {
+  if (report == null) return false;
+  final base = env['AGENT_OFFICE_HOOK_URL'];
+  final token = env['AGENT_OFFICE_HOOK_TOKEN'];
+  final worker = env['AGENT_OFFICE_WORKER_ID'];
+  if (base == null || base.isEmpty || token == null || token.isEmpty || worker == null || worker.isEmpty) {
+    return false;
+  }
+  try {
+    final url = Uri.parse(
+      base,
+    ).resolve('/hooks/$route').replace(queryParameters: {'worker': worker, 'event': report.event});
+    final status = await _post(url, token, utf8.encode(jsonEncode(report.hookBody())), const Duration(seconds: 2));
+    return status >= 200 && status < 300;
+  } catch (_) {
+    return false;
+  }
+}
+
+/// Cursor's hooks carry whole tool outputs: up to 16 MiB is read, and only the bounded fields leave.
+const _cursorStdinMax = 16 * 1024 * 1024;
+
+Future<void> _cursorHook(String event, String worker, Stream<List<int>> input, Map<String, String> env) async {
+  final raw = await _readAll(input, _cursorStdinMax);
+  final base = env['AGENT_OFFICE_HOOK_URL'];
+  final token = env['AGENT_OFFICE_HOOK_TOKEN'];
+  if (raw == null || base == null || base.isEmpty || token == null || token.isEmpty || worker.isEmpty) return;
+  Object? payload;
+  try {
+    payload = jsonDecode(utf8.decode(raw, allowMalformed: true));
+  } catch (_) {
+    return;
+  }
+  final body = cursorHookBody(event, payload, env, worker);
+  if (body == null) return;
+  try {
+    final url = Uri.parse(base).resolve('/hooks/cursor').replace(queryParameters: {'worker': worker, 'event': event});
+    await _post(url, token, utf8.encode(jsonEncode(body)), const Duration(seconds: 2));
+  } catch (_) {
+    // the office isn't there: Cursor carries on
   }
 }
 

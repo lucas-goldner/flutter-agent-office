@@ -131,6 +131,9 @@ class UsageTracker {
   /// Latest transcript timestamp seen (ms since epoch).
   int? at;
 
+  /// The model the session's own latest message ran on (not a subagent's).
+  String? model;
+
   /// The shape the office saves in workers.json (and [restoreTracker] reads).
   Map<String, dynamic> toJson() => {
     'transcript': ?transcript,
@@ -138,6 +141,7 @@ class UsageTracker {
     if (base case final b?) 'base': {..._usageJson(b), 'at': baseAt},
     'since': _usageJson(since),
     'at': ?at,
+    'model': ?model,
   };
 }
 
@@ -145,9 +149,22 @@ UsageTracker newTracker() => UsageTracker();
 
 Usage trackerUsage(UsageTracker t) {
   final base = t.base;
-  if (base == null) return t.since;
-  return addUsage(base, t.since);
+  final sum = base == null ? t.since : addUsage(base, t.since);
+  final model = t.model;
+  if (model == null) return sum;
+  return Usage(
+    input: sum.input,
+    output: sum.output,
+    cacheWrite: sum.cacheWrite,
+    cacheRead: sum.cacheRead,
+    cost: sum.cost,
+    calls: sum.calls,
+    model: model,
+  );
 }
+
+/// A model id as a session logs it: Claude Code's own placeholder messages (`<synthetic>`) aren't one.
+bool _isModelId(Object? v) => v is String && RegExp(r'^[\w.:/@[\]-]{1,120}$').hasMatch(v);
 
 Usage? _asUsage(Object? v) {
   if (v is List) return Usage.zero;
@@ -185,6 +202,7 @@ UsageTracker restoreTracker(Object? saved) {
   }
   t.since = _asUsage(saved['since']) ?? Usage.zero;
   if (_num(saved['at']) != 0) t.at = _int(saved['at']);
+  if (_isModelId(saved['model'])) t.model = saved['model'] as String;
   return t;
 }
 
@@ -221,13 +239,14 @@ bool scanTracker(UsageTracker t) {
       } catch (_) {
         continue;
       }
-      if (_applyLine(t, cur, obj)) changed = true;
+      if (_applyLine(t, cur, obj, file == transcript)) changed = true;
     }
   }
   return changed;
 }
 
-bool _applyLine(UsageTracker t, FileCursor cur, Object? line) {
+/// One transcript line; [main] when it's from the session's own transcript rather than a subagent's.
+bool _applyLine(UsageTracker t, FileCursor cur, Object? line, bool main) {
   if (line is! Map) return false;
   final ts = line['timestamp'];
   final at = ts is String ? DateTime.tryParse(ts)?.millisecondsSinceEpoch : null;
@@ -235,6 +254,7 @@ bool _applyLine(UsageTracker t, FileCursor cur, Object? line) {
   if (line['type'] == 'assistant') {
     final msg = line['message'];
     if (msg is! Map || msg['id'] is! String || msg['usage'] == null || msg['usage'] == false) return false;
+    if (main && line['isSidechain'] != true && _isModelId(msg['model'])) t.model = msg['model'] as String;
     // Already inside Claude Code's own tally.
     if (t.base != null && at != null && at <= t.baseAt) return false;
     final model = msg['model'];

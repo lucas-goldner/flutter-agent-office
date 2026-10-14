@@ -129,8 +129,9 @@ Future<List<String>> fetchOpenCodeModels() {
       final models = res.body['models'];
       final valid = models is List
           ? [
+              // Each model is {id, name?, efforts?} (an older office sent bare ids).
               for (final m in models)
-                if (m is String && validModel(m)) m,
+                if ((m is Map ? m['id'] : m) case final String id when validModel(id)) id,
             ]
           : <String>[];
       _modelList = valid.toSet().toList();

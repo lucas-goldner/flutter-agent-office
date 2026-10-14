@@ -464,7 +464,7 @@ void main() {
     },
   );
 
-  test('workers reject models for non-OpenCode/Claude providers and malformed model ids', () async {
+  test('workers reject models their provider does not take, and malformed model ids', () async {
     final f = Fixture();
     addTearDown(f.close);
     final workers = manager(f, f.claude, [], {...Platform.environment, 'FAKE_AGENT_LOG': f.log});
@@ -739,16 +739,16 @@ void main() {
 
   // --- #79 #88: a Claude model and effort per worker -------------------------------------------
 
-  test('workers reject reasoning effort for non-Claude providers', () async {
+  test('workers reject reasoning effort for a provider that takes none', () async {
     final f = Fixture();
     addTearDown(f.close);
     final workers = manager(f, f.claude, [], {...Platform.environment, 'FAKE_AGENT_LOG': f.log});
     addTearDown(workers.shutdown);
     expect(
       workers
-          .spawn('desk-2', 'test', 'bad', false, WorkerKind.agent, AgentProvider.opencode, null, AgentEffort.high)
+          .spawn('desk-2', 'test', 'bad', false, WorkerKind.agent, AgentProvider.cursor, null, AgentEffort.high)
           .error,
-      matches(RegExp('effort|Claude', caseSensitive: false)),
+      matches(RegExp('effort', caseSensitive: false)),
     );
     expect(
       workers.spawn('desk-3', 'test', 'bad', false, WorkerKind.shell, null, null, AgentEffort.high).error,

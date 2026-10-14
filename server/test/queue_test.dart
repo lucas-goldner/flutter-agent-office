@@ -231,12 +231,13 @@ void main() {
     expect(f.emptied, 0);
   });
 
-  test('queue rejects reasoning effort unless the task is Claude and the level is known', () {
+  test('queue rejects a reasoning effort its provider takes none of, or nobody knows', () {
     final f = fixture();
     final q = f.open();
+    // Cursor's effort is part of its model id: it takes none of its own.
     expect(
-      q.add('Task', 'Tester', null, null, AgentProvider.opencode, null, AgentEffort.high) ?? '',
-      matches(RegExp('effort|Claude', caseSensitive: false)),
+      q.add('Task', 'Tester', null, null, AgentProvider.cursor, null, AgentEffort.high) ?? '',
+      matches(RegExp('effort', caseSensitive: false)),
     );
     // An unknown level ('overdrive') can't be an AgentEffort in Dart; the validator still says so.
     expect(validateEffortText('overdrive'), matches(RegExp('effort', caseSensitive: false)));

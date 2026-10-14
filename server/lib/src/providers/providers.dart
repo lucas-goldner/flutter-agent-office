@@ -8,16 +8,32 @@ import 'package:office_shared/shared.dart';
 
 import 'claude.dart';
 import 'codex.dart';
+import 'cursor.dart';
 import 'custom.dart';
+import 'grok.dart';
+import 'muse.dart';
 import 'opencode.dart';
+import 'pi.dart';
 import 'provider.dart';
 
+export 'claude.dart';
+export 'codex.dart';
+export 'cursor.dart';
+export 'custom.dart';
+export 'grok.dart';
+export 'muse.dart';
+export 'opencode.dart';
+export 'pi.dart';
 export 'provider.dart';
 
 const Map<AgentProvider, ProviderAdapter> providerAdapters = {
   AgentProvider.claude: ClaudeAdapter(),
   AgentProvider.opencode: OpenCodeAdapter(),
   AgentProvider.codex: CodexAdapter(),
+  AgentProvider.grok: GrokAdapter(),
+  AgentProvider.muse: MuseAdapter(),
+  AgentProvider.pi: PiAdapter(),
+  AgentProvider.cursor: CursorAdapter(),
   AgentProvider.custom: CustomAdapter(),
 };
 

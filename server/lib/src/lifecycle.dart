@@ -30,6 +30,7 @@ class LifecycleReport {
     this.tool,
     this.toolUseId,
     this.notificationType,
+    this.reason,
   });
 
   final String sessionId;
@@ -39,6 +40,51 @@ class LifecycleReport {
   final String? tool;
   final String? toolUseId;
   final String? notificationType;
+
+  /// Why a turn stopped, when it says.
+  final String? reason;
+
+  Map<String, Object> toJson() => {
+    'sessionId': sessionId,
+    'event': event,
+    'source': ?source,
+    'prompt': ?prompt,
+    'tool': ?tool,
+    'toolUseId': ?toolUseId,
+    'notificationType': ?notificationType,
+    'reason': ?reason,
+  };
+
+  /// What a hook helper posts to the office for it: the bounded fields only, as the agent's hooks
+  /// name them (see hook.dart).
+  Map<String, Object> hookBody() => {
+    'session_id': sessionId,
+    'hook_event_name': event,
+    'source': ?source,
+    'prompt': ?prompt,
+    'tool_name': ?tool,
+    'tool_use_id': ?toolUseId,
+    'notification_type': ?notificationType,
+    'reason': ?reason,
+  };
+}
+
+/// [value] trimmed, when it's a string of 1 to [max] characters.
+String? boundedText(Object? value, int max) {
+  if (value is! String) return null;
+  final text = value.trim();
+  return text.isNotEmpty && text.length <= max ? text : null;
+}
+
+/// [value] is a string with something in it.
+bool hasText(Object? value) => value is String && value.trim().isNotEmpty;
+
+/// The first of [keys] that [payload] has (camelCase or snake_case spellings of one field).
+Object? pickField(Map payload, List<String> keys) {
+  for (final key in keys) {
+    if (payload.containsKey(key)) return payload[key];
+  }
+  return null;
 }
 
 /// Tool calls followed one by one, for a provider whose hooks never say a question was answered

@@ -404,11 +404,11 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
 
   /// What the office is called where it has no project of its own to go by (webhooks, invites).
   final officeName = cfg.project != null ? p.basename(cfg.project!) : 'the office';
-  final modelCommand = configuredProvider(cfg.agentCmd) == AgentProvider.opencode ? cfg.agentCmd : 'opencode';
-  final openCodeModels = createOpenCodeModelCatalogue(
-    modelCommand.contains('/') ? p.absolute(modelCommand) : modelCommand,
-    cfg.dir,
-  );
+  // The models each provider's CLI lists, for the hire dialog (see models.dart).
+  final models = createModelCatalogues((provider) {
+    final command = providerCommand(provider, cfg.agentCmd);
+    return command.contains('/') ? p.absolute(command) : command;
+  }, cfg.dir);
 
   void sendRaw(_Client c, String json) {
     if (!c.open) return;
@@ -1095,11 +1095,18 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     final session = auth.fromRequest(req.headers);
     if (session == null) return _send(401, {'error': 'Not logged in'});
     if (path == '/api/whoami') return _send(200, {'ok': true, 'me': meOf(session.account?.id).toJson()});
-    if (path == '/api/agents/opencode/models' && method == Method.get) {
+    if (path.startsWith('/api/agents/') && method == Method.get) {
+      // GET /api/agents/<provider>/models: the models the hire dialog offers, for the providers whose CLI lists them.
+      final parts = path.substring('/api/agents/'.length).split('/');
+      final provider = AgentProvider.tryParse(parts[0]);
+      final catalogue = provider != null && parts.length == 2 && parts[1] == 'models' ? models[provider] : null;
+      if (catalogue == null) return _send(404, {'error': 'Not found'});
       try {
-        return _send(200, {'models': await openCodeModels.get()});
+        return _send(200, {
+          'models': [for (final m in await catalogue.get()) m.toJson()],
+        });
       } catch (_) {
-        return _send(502, {'error': 'Could not load OpenCode models'});
+        return _send(502, {'error': 'Could not load ${providerMetaTable[provider]!.name} models'});
       }
     }
     if (path == '/api/image' && method == Method.get) {

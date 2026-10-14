@@ -154,6 +154,10 @@ class OpenCodeAdapter extends ProviderAdapter {
       rotateToken: true,
       finishEnv: (env) {
         env['AGENT_OFFICE_SESSION_ID'] = resume ?? '';
+        // Its effort, which OpenCode's TUI has no flag for: the plugin puts its first message on it
+        // (see ../opencode.dart). Like its model, it's for a fresh session: a resumed one carries on with its own.
+        env['AGENT_OFFICE_EFFORT'] = resume == null ? info.effort?.wire ?? '' : '';
+        env['AGENT_OFFICE_MODEL'] = resume == null ? info.model ?? '' : '';
         env['OPENCODE_CONFIG_CONTENT'] = mergeOpenCodeConfigContent(
           env['OPENCODE_CONFIG_CONTENT'],
           openCodePluginSpecifier(setup.plugin),

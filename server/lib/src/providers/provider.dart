@@ -4,6 +4,7 @@
 // upstream's src/server/providers/types.ts.
 
 import 'dart:io';
+import 'dart:math';
 
 import 'package:office_pty/office_pty.dart' show chmodSync;
 import 'package:office_shared/shared.dart';
@@ -14,7 +15,7 @@ export '../worker_handle.dart';
 
 /// What a provider is set up with on one floor (see [ProviderAdapter.prepare]).
 class ProviderFloor {
-  const ProviderFloor({required this.dataDir, required this.office, this.dshProfile = 'acp'});
+  const ProviderFloor({required this.dataDir, required this.office, this.dshProfile = 'acp', this.env = const {}});
 
   /// The floor's data dir, where hook settings, homes and plugins go.
   final String dataDir;
@@ -24,6 +25,9 @@ class ProviderFloor {
 
   /// The DSH profile a DeepSeek Harness worker boots (`--dsh-profile`).
   final String dshProfile;
+
+  /// The office's own environment (tests stand one in), to find the person's own sign-ins in.
+  final Map<String, String> env;
 }
 
 /// One run of a worker, for its adapter to turn into a command line.
@@ -196,3 +200,16 @@ void writePrivate(String file, String data) {
   chmodSync(tmp, 0x180); // 0600
   File(tmp).renameSync(file);
 }
+
+/// A random version 4 UUID, for a session id the office picks itself.
+String randomUuid() {
+  final r = Random.secure();
+  final b = [for (var i = 0; i < 16; i++) r.nextInt(256)];
+  b[6] = (b[6] & 0x0f) | 0x40;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  final h = [for (final x in b) x.toRadixString(16).padLeft(2, '0')].join();
+  return '${h.substring(0, 8)}-${h.substring(8, 12)}-${h.substring(12, 16)}-${h.substring(16, 20)}-${h.substring(20)}';
+}
+
+/// The person's home folder, as [env] says.
+String homeOf(Map<String, String> env) => env['HOME'] ?? Platform.environment['HOME'] ?? '';
