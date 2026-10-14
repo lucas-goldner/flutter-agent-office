@@ -1776,7 +1776,9 @@ class OfficeController implements OfficeActions {
       }
       final again = w.kind == WorkerKind.shell ? 'restart' : 'resume';
       v.laptop.setPlaceholder(
-        w.status == WorkerStatus.offline
+        w.lost != null
+            ? "🌿 ${w.name}'s worktree was deleted — press E to fix it"
+            : w.status == WorkerStatus.offline
             ? '💤 ${w.name} is asleep — press R to $again'
             : w.status == WorkerStatus.exited
             ? '${w.name} exited'
@@ -1895,6 +1897,8 @@ class OfficeController implements OfficeActions {
               hire(deskId, prompt: text, worktree: o.worktree, provider: o.provider, model: o.model, effort: o.effort),
         ),
       );
+    } else if (w.lost != null) {
+      _fixLostWorktree(w);
     } else if (isAsleep(w.status)) {
       toast('${w.name} is asleep — press R to resume first', ToastKind.warn);
     } else if (w.kind == WorkerKind.shell) {
@@ -1980,14 +1984,41 @@ class OfficeController implements OfficeActions {
 
   @override
   void resumeWorker(WorkerInfo w) {
+    if (w.lost != null) return _fixLostWorktree(w);
     if (w.sessionId == null && w.kind != WorkerKind.shell) {
       toast('${w.name} has no saved Claude session — starting a fresh one', ToastKind.warn);
     }
     net.send(WorkerResumeCmd(w.id));
   }
 
-  /// Whether a worker's branch can become a PR: it has its own worktree and isn't mid-turn.
-  bool _prReady(WorkerInfo w) => w.worktree != null && !isBusy(w.status);
+  /// Anything done with a worker whose worktree was deleted outside agent-office (see WorkerInfo.lost): it
+  /// can't work there, so this says so and offers to put the folder back, everyone's at once when more are
+  /// lost, or to send it home.
+  void _fixLostWorktree(WorkerInfo w) {
+    final lost = w.lost, wt = w.worktree;
+    if (lost == null || wt == null) return;
+    final others = store.workers.values.where((o) => o.lost != null && o.id != w.id).toList();
+    lostWorktreeDialog(
+      LostWorktreeOptions(
+        name: w.name,
+        worktree: (path: wt.path, branch: wt.branch),
+        lost: lost,
+        workspace: (w.repos?.isNotEmpty ?? false) ? wt.path.replaceFirst(RegExp(r'[\\/][^\\/]*$'), '') : null,
+        others: [for (final o in others) o.name],
+        openTerminal: isAsleep(w.status)
+            ? null
+            : () => openTerminal(scope, w.id, onChanges: () => openWorkerChanges(w.id)),
+        rebuild: (all) {
+          toast(all ? 'Rebuilding ${others.length + 1} worktrees…' : "Rebuilding ${w.name}'s worktree…");
+          net.send(WorkerRebuildCmd(w.id, all: all));
+        },
+        sendHome: () => killWorker(w.id),
+      ),
+    );
+  }
+
+  /// Whether a worker's branch can become a PR: it has its own worktree, still there, and isn't mid-turn.
+  bool _prReady(WorkerInfo w) => w.worktree != null && w.lost == null && !isBusy(w.status);
 
   /// O at a desk: see the worker's pull request, or push its branch and open one.
   void _pullRequestFor(WorkerInfo w) {
@@ -2007,6 +2038,7 @@ class OfficeController implements OfficeActions {
         ToastKind.warn,
       );
     }
+    if (w.lost != null) return _fixLostWorktree(w);
     if (w.prOpening == true) return;
     if (!_prReady(w)) {
       return toast("${w.name} is still ${statusLabel(w.status)} — wait until it's done", ToastKind.warn);
@@ -2127,13 +2159,16 @@ class OfficeController implements OfficeActions {
   void openWorkerTerminal(String workerId, {({int row, String needle})? find}) {
     final w = store.workers[workerId];
     if (w == null) return;
+    if (w.lost != null) return _fixLostWorktree(w);
     if (isAsleep(w.status)) resumeWorker(w);
     openTerminal(scope, workerId, onChanges: () => openWorkerChanges(workerId), find: find);
   }
 
   @override
   void openWorkerChanges(String workerId) {
-    if (!store.workers.containsKey(workerId)) return;
+    final w = store.workers[workerId];
+    if (w == null) return;
+    if (w.lost != null) return _fixLostWorktree(w);
     openChanges(scope, workerId, onTerminal: () => openWorkerTerminal(workerId));
   }
 
@@ -2846,6 +2881,17 @@ class OfficeController implements OfficeActions {
             const HintKey('P', 'Hire with a task'),
           ],
           const HintKey('B', 'Shell'),
+        ],
+      );
+    }
+    if (w.lost != null && w.worktree != null) {
+      return (
+        'lost|${w.id}|${w.lost!.wire}',
+        [
+          HintTitle('${w.name} · 🌿 worktree deleted'),
+          const HintAside('deleted outside agent-office'),
+          const HintKey('E', 'Fix it'),
+          const HintKey('X', 'Send home'),
         ],
       );
     }

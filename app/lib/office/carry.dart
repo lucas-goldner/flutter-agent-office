@@ -9,6 +9,7 @@ import '../ui/gh_logic.dart' show issuePrompt;
 /// Why the worker at a desk can't be handed an issue card right now, or '' when it can.
 String cantTakeCard(WorkerInfo w) {
   if (w.kind == WorkerKind.shell) return '${w.name} is a shell, not an agent';
+  if (w.lost != null) return "${w.name}'s worktree was deleted — press E at its desk to fix it";
   if (isAsleep(w.status)) return '${w.name} is asleep — press R to resume first';
   if (w.status == WorkerStatus.needsInput) return '${w.name} is waiting on an answer — open the terminal first';
   return '';

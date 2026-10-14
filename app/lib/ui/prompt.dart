@@ -16,6 +16,7 @@ import 'modal.dart';
 import 'prompt_logic.dart';
 import 'provider.dart';
 import 'theme.dart';
+import 'window_parts.dart' show StatusBox, StatusKind;
 
 /// What came with the text: the worktree box and the provider picker, when they were offered.
 typedef PromptChoice = ({bool worktree, AgentProvider? provider, String? model, AgentEffort? effort});
@@ -467,4 +468,104 @@ class _WtStatus extends StatelessWidget {
           : text,
     );
   }
+}
+
+class LostWorktreeOptions {
+  const LostWorktreeOptions({
+    required this.name,
+    required this.worktree,
+    required this.lost,
+    this.workspace,
+    this.others = const [],
+    this.openTerminal,
+    required this.rebuild,
+    required this.sendHome,
+  });
+
+  final String name;
+  final ({String path, String branch}) worktree;
+  final LostBranch lost;
+
+  /// A worker across repositories: its workspace folder, deleted with every worktree in it.
+  final String? workspace;
+
+  /// The other workers on the floor whose worktrees were deleted too.
+  final List<String> others;
+
+  /// Its process is still running, in the deleted folder: its terminal is there to look at.
+  final VoidCallback? openTerminal;
+
+  /// Puts the folder back, for `all` the others' too.
+  final void Function(bool all) rebuild;
+  final VoidCallback sendHome;
+}
+
+/// What the lost-worktree dialog says has happened to the branch (see [WorkerInfo.lost]).
+String lostWorktreeWhat(String name, String branch, LostBranch lost) => switch (lost) {
+  LostBranch.here =>
+    'Its branch 🌿 $branch is still here. Rebuilding checks it out again in the same place, and $name carries on its conversation; only uncommitted changes went with the folder.',
+  LostBranch.origin =>
+    "Its branch 🌿 $branch was deleted too, but it had been pushed: rebuilding checks origin's copy out again in the same place, and $name carries on its conversation.",
+  LostBranch.gone =>
+    'Its branch 🌿 $branch was deleted too and was never pushed, so the work on it is gone. Rebuilding makes the branch again from where it started, and $name carries on its conversation.',
+};
+
+/// A worker whose worktree was deleted outside agent-office (see WorkerInfo.lost): says what happened and
+/// what's left, and puts it back (every lost worker's at once, when there are more), or sends it home.
+ModalHandle lostWorktreeDialog(LostWorktreeOptions opts) {
+  final others = opts.others;
+  final folder = opts.workspace ?? opts.worktree.path;
+  late final ModalHandle modal;
+  void then(VoidCallback fn) {
+    modal.close();
+    fn();
+  }
+
+  modal = ModalStack.instance.show(
+    (m) => ModalWindow(
+      modal: m,
+      width: 640,
+      title: Text("🌿 ${opts.name}'s worktree was deleted"),
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            '$folder was deleted outside agent-office, so ${opts.name} '
+            "${opts.openTerminal != null ? 'is running in a folder that no longer exists' : "can't start there"}.",
+            style: heavy(14, weight: FontWeight.w700),
+          ),
+          const SizedBox(height: 10),
+          StatusBox(lostWorktreeWhat(opts.name, opts.worktree.branch, opts.lost)),
+          if (others.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            StatusBox(
+              '${others.length} other worker${others.length == 1 ? '' : 's'} on this floor lost '
+              '${others.length == 1 ? 'its worktree' : 'their worktrees'} too: ${others.join(', ')}.',
+              kind: StatusKind.error,
+            ),
+          ],
+        ],
+      ),
+      footer: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        alignment: WrapAlignment.end,
+        children: [
+          OfficeButton(label: 'Send home…', kind: BtnKind.danger, onPressed: () => then(opts.sendHome)),
+          if (opts.openTerminal != null)
+            OfficeButton(label: 'Open terminal', onPressed: () => then(opts.openTerminal!)),
+          if (others.isNotEmpty)
+            OfficeButton(label: 'Rebuild all ${others.length + 1}', onPressed: () => then(() => opts.rebuild(true))),
+          OfficeButton(
+            key: const ValueKey('rebuild-one'),
+            label: 'Rebuild worktree',
+            kind: BtnKind.primary,
+            onPressed: () => then(() => opts.rebuild(false)),
+          ),
+        ],
+      ),
+    ),
+  );
+  return modal;
 }
