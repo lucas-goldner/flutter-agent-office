@@ -88,6 +88,8 @@ class _CodexTools implements ToolTracker {
       s.tools.remove(toolUseId);
       s.pending.remove(toolUseId);
     }
+    // A permission prompt no call id matched ends with the last call in flight.
+    if (s.tools.isEmpty) s.permissionUnknown = false;
   }
 
   @override

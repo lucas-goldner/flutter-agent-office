@@ -66,6 +66,24 @@ void main() {
     expect(plain.any((a) => a.startsWith('model_reasoning_effort')), isFalse);
   });
 
+  test('a Codex board agent stops needing input when the permission tool finishes without a matching prompt id', () {
+    final h = handleFor(AgentProvider.codex);
+    final handle = const CodexAdapter().hook!.handle;
+    bool hook(String event, [Map<String, Object> extra = const {}]) =>
+        handle(h, event, {'session_id': 'queue-codex', ...extra});
+    expect(hook('SessionStart', {'source': 'startup'}), isTrue);
+    expect(h.info.status, WorkerStatus.idle);
+    expect(hook('UserPromptSubmit', {'prompt': 'Queue the maintenance issues'}), isTrue);
+    expect(h.info.status, WorkerStatus.working);
+    expect(hook('PreToolUse', {'tool_name': 'exec_command', 'tool_use_id': 'call-shell'}), isTrue);
+    expect(hook('PermissionRequest', {'tool_name': 'shell'}), isTrue);
+    expect(h.info.status, WorkerStatus.needsInput);
+    expect(hook('PostToolUse', {'tool_name': 'exec_command', 'tool_use_id': 'call-shell'}), isTrue);
+    expect(h.info.status, WorkerStatus.working);
+    expect(hook('Stop'), isTrue);
+    expect(h.info.status, WorkerStatus.done);
+  });
+
   test('an OpenCode worker is told its effort and model for a fresh session, and neither for a resumed one', () {
     const opencode = OpenCodeAdapter();
     ({List<String> args, String? effort, String? model, Map config}) launch(
