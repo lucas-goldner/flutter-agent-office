@@ -30,7 +30,7 @@ import 'samples.dart';
 import 'sound_model.dart';
 import 'web_audio.dart';
 
-export 'sound_model.dart' show Ding, DogSounds, JukeboxPlay, SoundListener, StepKind, TossSound;
+export 'sound_model.dart' show Ding, DogSounds, Engine, JukeboxPlay, SoundListener, StepKind, TossSound;
 
 final math.Random _rng = math.Random();
 double _rand(double a, double b) => a + _rng.nextDouble() * (b - a);
@@ -1344,6 +1344,113 @@ class OfficeSound implements DogSounds {
     o.stop(when + len + 0.02);
   }
 
+  // ---- The cars in the garage (features/cars/sound.ts) ------------------------------------------
+
+  /// The engines of the cars being driven, by car.
+  final Map<int, _Motor> _motors = {};
+
+  /// The engines running: one for each car somebody's driving, where it is, how fast it's going and how
+  /// hard it's pushed. One that's dropped off the list dies away.
+  void setEngines(List<Engine> running) {
+    final ctx = _ctx;
+    if (ctx == null) return;
+    final now = ctx.currentTime;
+    final on = <int>{};
+    for (final e in running) {
+      on.add(e.car);
+      final m = _motors[e.car] ??= _startMotor(Pos(e.x, e.y, e.z));
+      place(m.pan, e.x, e.y, e.z);
+      // Still catching, with its rev.
+      if (now - m.born < 0.7) continue;
+      final n = engineNote(e.speed, e.gas);
+      m.saw.frequency.setTargetAtTime(n.f, now, 0.06);
+      m.sub.frequency.setTargetAtTime(n.f / 2, now, 0.06);
+      m.tone.frequency.setTargetAtTime(n.tone, now, 0.08);
+      m.gain.gain.setTargetAtTime(n.gain, now, 0.1);
+    }
+    for (final car in [..._motors.keys]) {
+      if (on.contains(car)) continue;
+      final m = _motors.remove(car)!;
+      m.gain.gain.cancelScheduledValues(now);
+      m.gain.gain.setTargetAtTime(0, now, 0.12);
+      m.saw.stop(now + 0.8);
+      m.sub.stop(now + 0.8);
+    }
+  }
+
+  /// An engine turning over: it catches with a rev and settles to a burble.
+  _Motor _startMotor(Pos at) {
+    final ctx = _ctx!;
+    _count('engine');
+    final now = ctx.currentTime;
+    final pan = _panner(at, 3, 1)..connect(_ambience);
+    final gain = ctx.createGain();
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(0.11, now + 0.12);
+    gain.gain.setTargetAtTime(0.035, now + 0.45, 0.15);
+    final tone = biquad(ctx, 'lowpass', 900, 2);
+    final saw = ctx.createOscillator()..type = 'sawtooth';
+    final sub = ctx.createOscillator()..type = 'square';
+    for (final (o, k) in [(saw, 1.0), (sub, 0.5)]) {
+      o.frequency.setValueAtTime(30 * k, now);
+      o.frequency.linearRampToValueAtTime(115 * k, now + 0.3);
+      o.frequency.setTargetAtTime(44 * k, now + 0.35, 0.12);
+    }
+    final low = ctx.createGain();
+    low.gain.value = 0.5;
+    saw.connect(tone);
+    sub.to(low).to(tone);
+    tone.to(gain).to(pan);
+    saw.start(now);
+    sub.start(now);
+    return _Motor(saw, sub, tone, gain, pan, now);
+  }
+
+  /// A car's horn at [x], [y], [z]: two notes a third apart, a Lambo's ([high]) higher than a Ferrari's.
+  void honk(double x, double y, double z, bool high) {
+    final ctx = _ctx;
+    if (ctx == null) return;
+    _count('honk');
+    final out = _panner(Pos(x, y, z), 4, 0.9)..connect(_ambience);
+    final t0 = ctx.currentTime + 0.005;
+    final g = ctx.createGain();
+    envelope(g.gain, t0, const [(0.02, 0.09), (0.42, 0.08), (0.5, 0)]);
+    final tone = biquad(ctx, 'lowpass', 2200, 0.7);
+    tone.to(g).to(out);
+    for (final f in high ? const [440.0, 554.0] : const [392.0, 494.0]) {
+      final o = ctx.createOscillator()..type = 'square';
+      o.frequency.value = f;
+      o.connect(tone);
+      o.start(t0);
+      o.stop(t0 + 0.55);
+    }
+  }
+
+  /// A car door shutting behind someone getting in or out.
+  void carDoor(double x, double y, double z) {
+    final ctx = _ctx;
+    if (ctx == null) return;
+    _count('car-door');
+    final out = _panner(Pos(x, y, z), 2, 1.1)..connect(_ambience);
+    _play(_pick(_buf.steps), gain: 0.6, rate: 0.55, dest: out);
+    _blip(out, ctx.currentTime + 0.005, 120, 0.6, 0.09, 0.12);
+  }
+
+  /// A car running into something at [speed] m/s: a thump, and the panels clanging.
+  void crash(double x, double y, double z, double speed) {
+    final ctx = _ctx;
+    if (ctx == null) return;
+    _count('crash');
+    final loud = math.min(1.0, speed / 12);
+    final out = _panner(Pos(x, y, z), 3, 1)..connect(_ambience);
+    final t0 = ctx.currentTime + 0.005;
+    _play(_pick(_buf.steps), gain: 0.4 + 0.8 * loud, rate: 0.4, dest: out);
+    _blip(out, t0, 90, 0.5, 0.3, 0.1 + 0.25 * loud);
+    for (final (f, amp) in const [(520.0, 0.05), (1270.0, 0.03)]) {
+      _tone(out, t0, f * _rand(0.9, 1.1), 0.98, 0.25, amp * loud, 'triangle');
+    }
+  }
+
   // ---- Darts and axes at the rooftop bar (features/bargames/sound.ts) ----------------------------
 
   /// Throwing at the rooftop bar, heard from [x], [y], [z] (see [TossSound]).
@@ -1528,4 +1635,17 @@ class _Buffers {
 
   /// A slow, lumpy 0–1 signal for wobbling other sounds' volume.
   final web.AudioBuffer gurgle;
+}
+
+/// A car's engine note: a sawtooth and a square an octave under it, through a filter that opens as it revs.
+class _Motor {
+  _Motor(this.saw, this.sub, this.tone, this.gain, this.pan, this.born);
+  final web.OscillatorNode saw;
+  final web.OscillatorNode sub;
+  final web.BiquadFilterNode tone;
+  final web.GainNode gain;
+  final web.PannerNode pan;
+
+  /// When it started (the AudioContext's clock).
+  final double born;
 }

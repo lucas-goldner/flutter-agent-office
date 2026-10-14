@@ -1,6 +1,7 @@
 import 'package:agent_office/ui/whereabouts.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:office_shared/avatar.dart';
+import 'package:office_shared/garage.dart' show CarSeat;
 import 'package:office_shared/layout.dart';
 import 'package:office_shared/maps/maps.dart' show planOf;
 import 'package:office_shared/protocol.dart';
@@ -75,5 +76,12 @@ void main() {
       whereabouts(peer(MeetingRoom.minX + 1, MeetingRoom.minZ + 1, floor: 'agent-office')),
       '🤝 in the meeting room',
     );
+  });
+
+  test('in a car: driving it, or riding in it (#181)', () {
+    final p = peer(0, 18, y: streetY);
+    expect(whereabouts(p, null, (car: 1, seat: CarSeat.driver)), '🏎️ driving the Orange Lambo');
+    expect(whereabouts(p, null, (car: 8, seat: CarSeat.passenger)), '🏎️ riding in the Blue Lambo');
+    expect(whereabouts(p), '🚶 outside');
   });
 }

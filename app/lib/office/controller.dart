@@ -29,6 +29,7 @@ import 'package:office_shared/floors.dart';
 import 'package:office_shared/jukebox.dart';
 import 'package:office_shared/layout.dart' hide Elevator, Gong, Jukebox, Whiteboard;
 import 'package:office_shared/layout.dart' as lay show Elevator;
+import 'package:office_shared/garage.dart' show seatHips;
 import 'package:office_shared/palette.dart' show isPaletteKey;
 import 'package:office_shared/protocol.dart';
 import 'package:office_shared/rooftop.dart' show roof, roofName;
@@ -148,6 +149,7 @@ const Map<InteractKind, double> _reach = {
   InteractKind.telescope: 3.5,
   InteractKind.darts: 4,
   InteractKind.axe: 5.5,
+  InteractKind.car: 4,
 };
 
 final Map<PhysicalKeyboardKey, DeskKey> _deskKeys = {
@@ -337,6 +339,9 @@ class OfficeController implements OfficeActions {
 
   /// Stops a walk over to someone, if you're on one.
   void stopWalkingThere() => _stopWalking();
+
+  /// The issue card you're carrying, if you are.
+  CarriedIssue? get carrying => _carrying;
 
   /// The rooftop bar: up there and back, drinks and the DJ (roof.dart).
   late final RoofHub roofHub;
@@ -842,6 +847,8 @@ class OfficeController implements OfficeActions {
 
   /// On your feet at [at], facing its rotY and looking straight ahead.
   void _placeAt(({double x, double y, double z, double rotY}) at) {
+    // Out of a car, wherever you are (something else is moving you).
+    places.cars.dropCar();
     if (player.seat != null) standUp();
     player.pos.setValues(at.x, at.y, at.z);
     player.vy = 0;
@@ -866,7 +873,10 @@ class OfficeController implements OfficeActions {
     final floor = store.floor;
     if (floor == null || _riding != null || _climbing != null || climber.active) return null;
     // Sitting, it's where you'd get up to.
-    final at = player.standingSpot() ?? (x: player.pos.x, y: player.pos.y, z: player.pos.z);
+    // Sitting, it's where you'd get up to; in a car, where you'd get out.
+    final at =
+        (places.cars.active ? places.cars.driver.wayOut() : player.standingSpot()) ??
+        (x: player.pos.x, y: player.pos.y, z: player.pos.z);
     final name = floor == roof ? roofName : (store.floors.where((f) => f.id == floor).firstOrNull?.name ?? '');
     return SavedSpot(
       floor: floor,
@@ -1139,6 +1149,7 @@ class OfficeController implements OfficeActions {
     if (!indoors()) return ride(floorId);
     ModalStack.instance.closeAll();
     hanger.cancel();
+    places.stopAll();
     if (player.seat != null) standUp();
     _riding = (floor: floorId, timer: Timer(const Duration(seconds: 10), _rideFailed), garage: false);
     player.enabled = false;
@@ -1853,6 +1864,8 @@ class OfficeController implements OfficeActions {
     final p = store.peers[id];
     if (p == null || id == store.you) return;
     if (!store.onMyFloor(p) && p.floor == null) return;
+    // Out of the car first (and not at all, with no room at the door).
+    if (!places.cars.getOut()) return;
     if (player.seat != null) standUp();
     _errand = null;
     _walkingTo = (id: id, replanAt: 0);
@@ -1994,6 +2007,8 @@ class OfficeController implements OfficeActions {
 
   /// Where they are, sitting or standing.
   WalkSpot _whereIs(PeerInfo p) {
+    final ride = places.cars.rideOf(p.id);
+    if (ride != null) return (x: ride.x, y: ride.y, z: ride.z);
     final s = p.seat != null ? _seatAt(p.seat!) : null;
     return s != null ? (x: s.x, y: s.y, z: s.z) : (x: p.x, y: p.y, z: p.z);
   }
@@ -2011,7 +2026,7 @@ class OfficeController implements OfficeActions {
   /// Each frame: keep heading for them, looking again every so often in case they've moved on.
   void _walkTick(double now) {
     final w = _walkingTo;
-    if (w == null || _riding != null) return;
+    if (w == null || _riding != null || places.cars.active) return;
     // Opening something on the way over to someone is stopping there.
     if (ModalStack.instance.open) return _stopWalking();
     if (!player.enabled) return;
@@ -2073,7 +2088,7 @@ class OfficeController implements OfficeActions {
     _sendDoing();
     for (final e in _remotes.entries) {
       final p = store.peers[e.key];
-      if (p != null) e.value.person.setDoing(whereabouts(p, plan));
+      if (p != null) e.value.person.setDoing(whereabouts(p, plan, store.cars.carOf(e.key)));
     }
   }
 
@@ -2105,8 +2120,10 @@ class OfficeController implements OfficeActions {
       }
       r.person.setSmoking(peer.smoking ?? false);
       r.person.holdDrink(roofHub.drinkOf(peer));
-      r.person.sit(peer.seat != null ? _seatAt(peer.seat!)?.hips : null);
-      r.person.setDoing(whereabouts(peer, plan));
+      r.person.sit(
+        store.cars.carOf(peer.id) != null ? seatHips : (peer.seat != null ? _seatAt(peer.seat!)?.hips : null),
+      );
+      r.person.setDoing(whereabouts(peer, plan, store.cars.carOf(peer.id)));
       r.person.carry(peer.carrying);
     }
     _cork.off = _offBoard();
@@ -2633,6 +2650,7 @@ class OfficeController implements OfficeActions {
 
   /// Behind the worker, looking over their shoulder at the laptop. From a seat or mid-picture it gets you up first.
   void _standAt(DeskDef desk) {
+    places.cars.dropCar();
     if (player.seat != null) standUp();
     if (hanger.active) hanger.cancel();
     _stopWalking();
@@ -3469,7 +3487,8 @@ class OfficeController implements OfficeActions {
           InteractKind.bookshelf ||
           InteractKind.telescope ||
           InteractKind.darts ||
-          InteractKind.axe:
+          InteractKind.axe ||
+          InteractKind.car:
         return ('', []);
     }
   }
@@ -3720,10 +3739,12 @@ class OfficeController implements OfficeActions {
         climber.slide(hole);
       }
     }
+    // The cars first, so whoever's riding in one sits in it where it's got to.
+    places.cars.tickCars(dt, player.camPos);
     player.update(dt);
     me.root.position = vm.Vector3(player.pos.x, player.pos.y + player.stepOffset, player.pos.z);
     me.root.rotation = vm.Quaternion.axisAngle(vm.Vector3(0, 1, 0), player.facing);
-    me.update(dt, t, player.moving && player.grounded, !player.grounded, player.speedBoost);
+    me.update(dt, t, player.moving && player.grounded, !player.grounded && !places.cars.active, player.speedBoost);
     final firstPerson = player.view == ViewMode.first;
     // In first person you are the camera; in third, hide yourself when it's zoomed in right behind your head.
     me.root.visible =
@@ -3794,17 +3815,28 @@ class OfficeController implements OfficeActions {
       final pose = store.poses[e.key];
       if (peer == null || pose == null) continue;
       final r = e.value;
-      // Sitting, they're wherever their seat puts them.
-      final sat = peer.seat != null ? _seatAt(peer.seat!) : null;
+      // Sitting, they're wherever their seat puts them; in a car, right in it as it goes.
+      final ride = places.cars.rideOf(e.key);
+      final seat = ride == null && peer.seat != null ? _seatAt(peer.seat!) : null;
+      final sat = ride != null
+          ? (x: ride.x, y: ride.y, z: ride.z, rotY: ride.rotY)
+          : seat != null
+          ? (x: seat.x, y: seat.y, z: seat.z, rotY: seat.rotY)
+          : null;
       final target = sat != null ? vm.Vector3(sat.x, sat.y, sat.z) : vm.Vector3(pose.x, pose.y, pose.z);
       final rotY = sat?.rotY ?? pose.rotY;
       final pos = r.person.root.position;
       final k = math.min(1.0, dt * 12);
-      r.person.root.position = pos + (target - pos) * k;
-      final cur = _yawOf(r.person.root.rotation);
-      var diff = rotY - cur;
-      diff = math.atan2(math.sin(diff), math.cos(diff));
-      r.person.root.rotation = vm.Quaternion.axisAngle(vm.Vector3(0, 1, 0), cur + diff * k);
+      if (ride != null) {
+        r.person.root.position = target;
+        r.person.root.rotation = vm.Quaternion.axisAngle(vm.Vector3(0, 1, 0), ride.rotY);
+      } else {
+        r.person.root.position = pos + (target - pos) * k;
+        final cur = _yawOf(r.person.root.rotation);
+        var diff = rotY - cur;
+        diff = math.atan2(math.sin(diff), math.cos(diff));
+        r.person.root.rotation = vm.Quaternion.axisAngle(vm.Vector3(0, 1, 0), cur + diff * k);
+      }
       // On their feet if they're standing on something: the floor, a desk, a stair, the loft.
       final airborne = sat == null && pose.y > groundAt(player.colliders, pose.x, pose.z, pose.y) + 0.05;
       final walking = sat == null && pose.moving && !airborne;

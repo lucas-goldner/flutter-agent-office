@@ -29,7 +29,7 @@ import 'office_render.dart';
 import 'sound_model.dart';
 import 'synth.dart';
 
-export 'sound_model.dart' show Ding, DogSounds, JukeboxPlay, SoundListener, StepKind, TossSound;
+export 'sound_model.dart' show Ding, DogSounds, Engine, JukeboxPlay, SoundListener, StepKind, TossSound;
 
 final math.Random _rng = math.Random();
 double _rand(double a, double b) => a + _rng.nextDouble() * (b - a);
@@ -763,6 +763,70 @@ class OfficeSound implements DogSounds {
     if (!_ready) return;
     _count('airlock.$what');
     _play('airlock.$what', at: Pos(x, y, z), ref: 3, rolloff: 1);
+  }
+
+  // ---- The cars in the garage (features/cars/sound.ts) ------------------------------------------
+
+  /// The engines of the cars being driven, by car: the burble, looped, played faster for the revs.
+  /// The web's filter opening as it revs isn't here: the burble keeps its tone.
+  final Map<int, ({_Voice voice, double born})> _motors = {};
+
+  void setEngines(List<Engine> running) {
+    if (!_ready) return;
+    final on = <int>{};
+    for (final e in running) {
+      on.add(e.car);
+      final at = Pos(e.x, e.y, e.z);
+      var m = _motors[e.car];
+      if (m == null) {
+        _count('engine');
+        _play('engine.start', at: at, ref: 3, rolloff: 1);
+        final v = _play('engine', at: at, gain: 0, ref: 3, rolloff: 1, loop: true, seek: _rand(0, 0.5));
+        if (v == null) continue;
+        m = _motors[e.car] = (voice: v, born: _t);
+      }
+      final v = m.voice..at = at;
+      // Still catching, with its rev.
+      if (_t - m.born < 0.7) {
+        v.gain = (_t - m.born) / 0.7;
+        continue;
+      }
+      final n = engineNote(e.speed, e.gas);
+      v.gain = n.gain / 0.035;
+      _engine?.setSpeed(v.id, n.f / OfficeRender.engineBase);
+    }
+    for (final car in [..._motors.keys]) {
+      if (on.contains(car)) continue;
+      final v = _motors.remove(car)!.voice;
+      _engine?.fadeOut(v.id, 0.4);
+      _voices.remove(v);
+    }
+  }
+
+  /// A car's horn at [x], [y], [z]: a Lambo's ([high]) higher than a Ferrari's.
+  void honk(double x, double y, double z, bool high) {
+    if (!_ready) return;
+    _count('honk');
+    _play(high ? 'honk.high' : 'honk.low', at: Pos(x, y, z), ref: 4, rolloff: 0.9);
+  }
+
+  /// A car door shutting behind someone getting in or out.
+  void carDoor(double x, double y, double z) {
+    if (!_ready) return;
+    _count('car-door');
+    _play('carDoor', at: Pos(x, y, z), ref: 2, rolloff: 1.1);
+  }
+
+  /// A car running into something at [speed] m/s.
+  void crash(double x, double y, double z, double speed) {
+    if (!_ready) return;
+    _count('crash');
+    final loud = math.min(1.0, speed / 12);
+    var best = 0;
+    for (var i = 1; i < crashLevels.length; i++) {
+      if ((crashLevels[i] - loud).abs() < (crashLevels[best] - loud).abs()) best = i;
+    }
+    _play('crash.$best', at: Pos(x, y, z), gain: loud / crashLevels[best], ref: 3, rolloff: 1);
   }
 
   /// Throwing at the rooftop bar, heard from [x], [y], [z] (see [TossSound]).

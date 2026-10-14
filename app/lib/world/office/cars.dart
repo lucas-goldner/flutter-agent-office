@@ -1,4 +1,6 @@
-// Cartoon supercars for the garage (a port of cars.ts): side profiles extruded across the car.
+// Cartoon supercars for the garage (a port of features/cars/world.ts's supercar): side profiles
+// extruded across the car, in parts that change while it's driven: the roof comes off while anyone's in
+// it, and the front wheels turn to steer.
 
 import 'dart:math' as math;
 
@@ -7,10 +9,10 @@ import 'package:vector_math/vector_math.dart' as vm;
 
 import '../toon.dart';
 import 'geo.dart';
-import 'office_colliders.dart';
-import 'parts.dart';
 
-export 'office_colliders.dart' show CarKind, CarSize;
+import 'package:office_shared/garage.dart' show Car, CarKind, carSeats, CarSeat;
+
+import 'parts.dart';
 
 const double _width = 1.9;
 const double _wheelR = 0.36;
@@ -30,8 +32,9 @@ void _sill(Shape2 s, double rearX, double frontX, List<double> axles, [double bo
   s.lineTo(frontX, bottom);
 }
 
-/// Side profiles (x runs rear to front along the car, y up): the painted body and the glass cabin on top.
-({Shape2 body, Shape2 cabin, double axle}) _profiles(CarKind kind) {
+/// Side profiles (x runs rear to front along the car, y up): the painted body and the glass cabin on
+/// top, and the windshield that's left of the cabin with the roof off (its foot, and how far up).
+({Shape2 body, Shape2 cabin, double axle, (double, double, double, double) screen}) _profiles(CarKind kind) {
   final body = Shape2(10);
   final cabin = Shape2(10);
   if (kind == CarKind.lambo) {
@@ -51,7 +54,7 @@ void _sill(Shape2 s, double rearX, double frontX, List<double> axles, [double bo
       ..lineTo(-0.85, 1.1)
       ..lineTo(-2.05, 0.8)
       ..lineTo(-2.05, 0.66);
-    return (body: body, cabin: cabin, axle: axle);
+    return (body: body, cabin: cabin, axle: axle, screen: (1.05, 0.66, 0.34, 0.95));
   }
   // Curves: a rounded nose, a long hood and big rear haunches.
   const axle = 1.36;
@@ -67,7 +70,7 @@ void _sill(Shape2 s, double rearX, double frontX, List<double> axles, [double bo
     ..quadraticCurveTo(0.05, 1.16, -0.55, 1.13)
     ..quadraticCurveTo(-1.35, 1.1, -1.85, 0.78)
     ..lineTo(-1.85, 0.68);
-  return (body: body, cabin: cabin, axle: axle);
+  return (body: body, cabin: cabin, axle: axle, screen: (0.68, 0.68, 0.22, 0.98));
 }
 
 /// Extrudes a side profile [width] across, centred, and turns it so the front points to +z.
@@ -77,10 +80,25 @@ Geometry _extrude(Shape2 shape, double width, double bevel) {
   return transformed(geo, vm.Matrix4.rotationY(-math.pi / 2)..translateByVector3(vm.Vector3(0, 0, -depth / 2)));
 }
 
+/// A car's model, in parts that change while it's driven.
+class CarModel {
+  CarModel(this.root, this.top, this.open, this.wheels);
+  final Node root;
+
+  /// The painted roof and the glass round the cabin: off while anyone's in it, so their heads fit.
+  final Node top;
+
+  /// With the roof off: the windshield, the two seats and the steering wheel.
+  final Node open;
+
+  /// The front wheels, which turn to steer.
+  final List<Node> wheels;
+}
+
 /// A cartoon supercar, nose toward +z, wheels on y = 0. A Lambo is a lime, orange or yellow wedge
-/// with a wing; a Ferrari is curvy, round taillights and a yellow badge. Merged by material.
-Node supercar(CarKind kind, String color) {
-  final g = Node(name: 'car');
+/// with a wing; a Ferrari is curvy, round taillights and a yellow badge.
+CarModel supercar(CarKind kind, String color) {
+  final g = Node(name: 'car-body');
   final paint = tc(color);
   final glass = tc('#233347');
   final tire = tc('#1f1f26');
@@ -91,22 +109,24 @@ Node supercar(CarKind kind, String color) {
   final lambo = kind == CarKind.lambo;
   final p = _profiles(kind);
   g.add(mesh(_extrude(p.body, _width, 0.05), paint));
-  g.add(mesh(_extrude(p.cabin, 1.42, 0.03), glass));
-  // A painted roof over the glass.
-  g.add(mesh(box(1.3, 0.05, lambo ? 0.8 : 0.7), paint, 0, lambo ? 1.11 : 1.13, lambo ? -0.45 : -0.3));
   final tireGeo = transformed(cyl(_wheelR, _wheelR, 0.28, 18), rotZ(math.pi / 2));
   final rimGeo = transformed(cyl(_wheelR * 0.6, _wheelR * 0.6, 0.3, 10), rotZ(math.pi / 2));
-  for (final z in [-p.axle, p.axle]) {
-    for (final sx in [-1, 1]) {
-      final x = sx * (_width / 2 - 0.16);
-      g.add(mesh(tireGeo, tire, x, _wheelY, z));
-      g.add(mesh(rimGeo, rim, x, _wheelY, z));
-    }
+  Node wheel(double x, double z) => Node(name: 'wheel')
+    ..position = vm.Vector3(x, _wheelY, z)
+    ..add(mesh(tireGeo, tire))
+    ..add(mesh(rimGeo, rim));
+  final wheels = <Node>[];
+  for (final sx in [-1, 1]) {
+    final x = sx * (_width / 2 - 0.16);
+    g.add(wheel(x, -p.axle));
+    wheels.add(wheel(x, p.axle));
   }
-  const l = CarSize.length / 2;
+  const l = Car.length / 2;
   if (lambo) {
     for (final sx in [-1, 1]) {
-      g.add(place(mesh(box(0.5, 0.06, 0.26), lamp), x: sx * 0.62, y: 0.46, z: l - 0.14, rot: euler(-0.25, sx * 0.25, 0)));
+      g.add(
+        place(mesh(box(0.5, 0.06, 0.26), lamp), x: sx * 0.62, y: 0.46, z: l - 0.14, rot: euler(-0.25, sx * 0.25, 0)),
+      );
       // Air intakes behind the doors.
       g.add(mesh(box(0.03, 0.26, 0.7), dark, sx * (_width / 2 + 0.03), 0.56, -1.0));
       g.add(mesh(box(0.06, 0.26, 0.06), dark, sx * 0.7, 0.98, -2.0));
@@ -127,5 +147,39 @@ Node supercar(CarKind kind, String color) {
     g.add(mesh(box(0.1, 0.12, 0.03), tc('#ffd400'), 0, 0.46, l - 0.04));
     g.add(mesh(box(0.9, 0.1, 0.05), dark, 0, 0.3, l - 0.06));
   }
-  return mergeByMaterial(g);
+
+  // The cabin: glass all round under a painted roof.
+  final closed = Node(name: 'car-top')
+    ..add(mesh(_extrude(p.cabin, 1.42, 0.03), glass))
+    ..add(mesh(box(1.3, 0.05, lambo ? 0.8 : 0.7), paint, 0, lambo ? 1.11 : 1.13, lambo ? -0.45 : -0.3));
+
+  // Roof off: a windshield up from the hood, bucket seats, and a wheel in front of the driver.
+  final open = Node(name: 'car-open');
+  final (z0, y0, z1, y1) = p.screen;
+  final paneLen = math.sqrt(math.pow(z1 - z0, 2) + math.pow(y1 - y0, 2));
+  open.add(
+    place(
+      mesh(box(1.36, 0.04, paneLen), glass),
+      y: (y0 + y1) / 2,
+      z: (z0 + z1) / 2,
+      rot: euler(math.atan2(y1 - y0, z0 - z1)),
+    ),
+  );
+  for (final s in carSeats.values) {
+    open.add(place(mesh(box(0.5, 0.6, 0.1), dark), x: s.x, y: 0.95, z: s.z - 0.34, rot: euler(-0.18)));
+  }
+  final driver = carSeats[CarSeat.driver]!;
+  open.add(place(mesh(torusXY(0.16, 0.028, 6, 18), dark), x: driver.x, y: 0.98, z: driver.z + 0.5, rot: euler(-0.45)));
+
+  final root = Node(name: 'car');
+  final top = mergeByMaterial(closed);
+  final inside = mergeByMaterial(open)..visible = false;
+  root
+    ..add(mergeByMaterial(g))
+    ..add(top)
+    ..add(inside);
+  for (final w in wheels) {
+    root.add(w);
+  }
+  return CarModel(root, top, inside, wheels);
 }

@@ -12,7 +12,6 @@ import 'package:office_shared/layout.dart' as lay show Elevator;
 
 import '../text.dart';
 import '../toon.dart';
-import 'cars.dart';
 import 'geo.dart';
 import 'office_colliders.dart';
 import 'parts.dart';
@@ -199,7 +198,7 @@ Future<Texture2D> _garageFloorTexture() {
 
 /// Downstairs: the open garage under the office's floor slab (see stack.dart): concrete
 /// walls at the back and on the west side, columns along the open front and east side, strip
-/// lights, and a row of Lambos and a row of Ferraris. Its colliders are [garageColliders].
+/// lights. Its cars are fleet.dart's. Its colliders are [garageColliders].
 void buildGarage(Node group) {
   const w = Bldg.maxX - Bldg.minX;
   const d = Bldg.maxZ - Bldg.minZ;
@@ -236,12 +235,6 @@ void buildGarage(Node group) {
     }
   }
   group.add(mergeByMaterial(parts));
-
-  final lot = _node('lot');
-  for (final car in parkedCars) {
-    lot.add(place(supercar(car.kind, car.color), x: car.x, y: _g, z: car.z, rot: yaw(car.rotY)));
-  }
-  group.add(mergeByMaterial(lot));
 }
 
 Node _node([String name = '']) => Node(name: name);

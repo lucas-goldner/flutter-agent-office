@@ -14,10 +14,11 @@ class Collider {
     this.fence = false,
   });
 
-  final double minX;
-  final double maxX;
-  final double minZ;
-  final double maxZ;
+  /// Mutable for what moves: the garage's cars (world/office/fleet.dart).
+  double minX;
+  double maxX;
+  double minZ;
+  double maxZ;
 
   /// Mutable for the elevator's doors, which stop blocking you once they're open.
   double top;
@@ -67,6 +68,8 @@ enum InteractKind {
   axe,
   // The boss loft's telescope (office/telescope.dart).
   telescope,
+  // One of the garage's cars (office/driving.dart).
+  car,
   // A map's herald, who sends out new workers (the castle's Hand of the King).
   herald,
 }
@@ -83,6 +86,7 @@ class Interactable {
     this.decorId,
     this.seatId,
     this.pole,
+    this.car,
     this.off = false,
     this.label,
   });
@@ -100,6 +104,9 @@ class Interactable {
 
   /// Which of the fire poles (layout's `poles`), for a pole.
   int? pole;
+
+  /// Which of the garage's cars (shared garage's `cars`), for a car.
+  int? car;
 
   /// Put away for now (a bean bag nobody needs yet): can't be used.
   bool off;

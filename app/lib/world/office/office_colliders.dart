@@ -230,71 +230,6 @@ abstract final class Bldg {
   static const double maxZ = Floor.maxZ + wallT;
 }
 
-/// A car's footprint, and how high its body and its roof come up (CAR in cars.ts).
-abstract final class CarSize {
-  static const double length = 4.6;
-  static const double width = 2;
-  static const double body = 0.82;
-  static const double roof = 1.12;
-}
-
-enum CarKind { lambo, ferrari }
-
-/// A parked car: which, its paint, where, and its turn (a multiple of 90°).
-typedef ParkedCar = ({CarKind kind, String color, double x, double z, double rotY});
-
-/// The cars: Lambos nose-in along the back wall, Ferraris backed in facing the street, and one
-/// left out front, for everyone upstairs to look at.
-final List<ParkedCar> parkedCars = [
-  for (final (kind, color, x, face) in const [
-    (CarKind.lambo, '#8ac926', -14.4, -1),
-    (CarKind.lambo, '#ff7b00', -8.0, -1),
-    (CarKind.lambo, '#ffd000', 1.6, -1),
-    (CarKind.lambo, '#7b2cbf', 11.2, -1),
-    (CarKind.ferrari, '#d90429', -14.4, 1),
-    (CarKind.ferrari, '#d90429', -4.8, 1),
-    (CarKind.ferrari, '#ffc300', 4.8, 1),
-    (CarKind.ferrari, '#e5383b', 14.4, 1),
-  ])
-    (
-      kind: kind,
-      color: color,
-      x: x,
-      z: face < 0 ? Bldg.minZ + wallT + 0.4 + CarSize.length / 2 : Bldg.maxZ - 0.5 - CarSize.length / 2,
-      rotY: face < 0 ? math.pi : 0.0,
-    ),
-  (kind: CarKind.lambo, color: '#00b4d8', x: 9.0, z: 18.2, rotY: math.pi / 2),
-];
-
-/// A car's colliders, which you can hop up on: its body, and its roof (park() in outside.ts).
-List<Collider> carColliders(ParkedCar car) {
-  final c = math.cos(car.rotY).round();
-  final sn = math.sin(car.rotY).round();
-  Collider rect(double x0, double x1, double z0, double z1, double top) {
-    final xs = [x0 * c + z0 * sn, x1 * c + z1 * sn];
-    final zs = [-x0 * sn + z0 * c, -x1 * sn + z1 * c];
-    return Collider(
-      minX: car.x + math.min(xs[0], xs[1]),
-      maxX: car.x + math.max(xs[0], xs[1]),
-      minZ: car.z + math.min(zs[0], zs[1]),
-      maxZ: car.z + math.max(zs[0], zs[1]),
-      bottom: streetY,
-      top: streetY + top,
-    );
-  }
-
-  return [
-    rect(
-      -CarSize.width / 2 + 0.08,
-      CarSize.width / 2 - 0.08,
-      -CarSize.length / 2 + 0.08,
-      CarSize.length / 2 - 0.08,
-      CarSize.body,
-    ),
-    rect(-0.6, 0.6, -1.3, 0.1, CarSize.roof),
-  ];
-}
-
 /// The garage's back and west walls (x0, x1, z0, z1).
 const List<(double, double, double, double)> garageWalls = [
   (Bldg.minX, Bldg.maxX, Bldg.minZ, Bldg.minZ + wallT),
@@ -309,7 +244,7 @@ final List<(double, double)> garageColumns = [
   (Bldg.maxX - 0.25, Bldg.minZ + 0.25),
 ];
 
-/// The garage's walls, columns and cars. The slab over it, which is the office's floor, is
+/// The garage's walls and columns (its cars move: see fleet.dart). The slab over it, which is the office's floor, is
 /// stack_plan.dart's: holes go through it to the floor below.
 List<Collider> garageColliders() {
   const ceiling = -slab;
@@ -319,9 +254,6 @@ List<Collider> garageColliders() {
   }
   for (final (x, z) in garageColumns) {
     out.add(Collider(minX: x - 0.25, maxX: x + 0.25, minZ: z - 0.25, maxZ: z + 0.25, bottom: streetY, top: ceiling));
-  }
-  for (final car in parkedCars) {
-    out.addAll(carColliders(car));
   }
   return out;
 }

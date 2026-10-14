@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'package:office_shared/layout.dart' hide Elevator, Gong, Jukebox, Whiteboard;
 import 'package:agent_office/world/collider.dart';
 import 'package:agent_office/world/office/geo.dart' show triangulate;
+import 'package:agent_office/world/office/fleet.dart';
 import 'package:agent_office/world/office/office_colliders.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vector_math/vector_math.dart' as vm;
@@ -39,7 +40,9 @@ void main() {
   });
 
   test('the loft stairs climb one step at a time to the loft floor', () {
-    final steps = loftColliders().where((c) => c.minZ == Stairs.minZ && c.maxZ == Stairs.maxZ && c.bottom == null && c.top < 99).toList();
+    final steps = loftColliders()
+        .where((c) => c.minZ == Stairs.minZ && c.maxZ == Stairs.maxZ && c.bottom == null && c.top < 99)
+        .toList();
     expect(steps, hasLength(Stairs.steps));
     for (var i = 0; i < steps.length; i++) {
       expect(steps[i].top, closeTo((i + 1) * 0.2, 1e-9));
@@ -73,8 +76,15 @@ void main() {
   test('bean bags and cars are turned the way they face', () {
     final bag = beanbags.firstWhere((b) => b.id == 'beanbag-3');
     expect(beanbagCollider(bag), box(-17.2, -15.46, -9.62, -8.38, 0.62));
-    final front = parkedCars.last;
-    expect(carColliders(front).first, box(6.78, 11.22, 17.28, 19.12, streetY + 0.82, streetY));
+    // The Blue Lambo out front, across the lot: its body's boxes, end to end, are the car turned.
+    final fleet = Fleet([], []);
+    final body = fleet.views.last.colliders.take(3).toList();
+    expect(body.map((c) => c.minX).reduce(math.min), closeTo(6.78, 1e-9));
+    expect(body.map((c) => c.maxX).reduce(math.max), closeTo(11.22, 1e-9));
+    expect(body.first.minZ, closeTo(17.28, 1e-9));
+    expect(body.first.maxZ, closeTo(19.12, 1e-9));
+    expect(body.first.top, closeTo(streetY + 0.82, 1e-9));
+    expect(body.first.bottom, streetY);
   });
 
   test('the elevator doors are the last of its colliders, and open for walking', () {
@@ -87,7 +97,10 @@ void main() {
 
   test('ear clipping fills a square with a round hole, and nothing more', () {
     final outer = [vm.Vector2(0, 0), vm.Vector2(2, 0), vm.Vector2(2, 2), vm.Vector2(0, 2)];
-    final hole = [for (var i = 0; i < 16; i++) vm.Vector2(1 + 0.5 * math.cos(-i / 16 * math.pi * 2), 1 + 0.5 * math.sin(-i / 16 * math.pi * 2))];
+    final hole = [
+      for (var i = 0; i < 16; i++)
+        vm.Vector2(1 + 0.5 * math.cos(-i / 16 * math.pi * 2), 1 + 0.5 * math.sin(-i / 16 * math.pi * 2)),
+    ];
     final tris = triangulate(outer, [hole]);
     final pts = [...outer, ...hole];
     var area = 0.0;

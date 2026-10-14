@@ -126,6 +126,10 @@ class PlayerController {
   /// each frame, with no walking, falling or bumping into things, and the camera follows.
   void Function(double dt)? rig;
 
+  /// Held by a car you're in (office/driving.dart), rather than the ladder or a pole: the camera keeps
+  /// to where you are, as on your feet.
+  bool riding = false;
+
   /// You got up by walking off or jumping (not by [stand]).
   void Function()? onStand;
 
@@ -394,7 +398,7 @@ class PlayerController {
     const m = 0.4;
     final r = room;
     // On the ladder or a pole you can be down in a shaft under the floor, but you're still indoors.
-    final rigged = rig != null;
+    final rigged = rig != null && !riding;
     final under = pos.x > r.minX && pos.x < r.maxX && pos.z > r.minZ && pos.z < r.maxZ;
     final indoors = (rigged || pos.y > -slab - 0.5) && under;
     // Down in a room under the floor (the castle's dungeon): the camera keeps inside that.

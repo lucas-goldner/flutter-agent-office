@@ -13,6 +13,7 @@ import '../ui/hud_parts.dart';
 import '../ui/modal.dart';
 import '../world/collider.dart';
 import 'bar_games_play.dart';
+import 'cars_play.dart';
 import 'controller.dart';
 import 'interaction.dart' show DeskKey;
 import 'telescope.dart';
@@ -46,15 +47,20 @@ class PlacesHub {
 
   Thrower get thrower => bar.thrower;
 
+  /// The cars in the garage.
+  late final CarsPlay cars = CarsPlay(c);
+
   void init() {
     // A window opening takes you away from the eyepiece.
     ModalStack.instance.changes.addListener(_onModals);
     bar.init();
+    cars.init();
   }
 
   void dispose() {
     ModalStack.instance.changes.removeListener(_onModals);
     bar.dispose();
+    cars.dispose();
   }
 
   void _onModals() {
@@ -73,17 +79,27 @@ class PlacesHub {
     _wasUp = up;
   }
 
-  /// Off in the elevator: away from the eyepiece, back from the line.
+  /// Off in the elevator (or straight to another floor, or climbing): away from the eyepiece, back from
+  /// the line, and out of the car.
   void stopAll() {
+    stopOthers();
+    cars.getOut(true);
+  }
+
+  /// Starting something else here (into a car): away from the eyepiece and back from the line.
+  void stopOthers() {
     telescope.exit();
     thrower.stop();
   }
 
   /// A message from the office about one of these places.
-  void onMessage(ServerMsg msg) => bar.onMessage(msg);
+  void onMessage(ServerMsg msg) {
+    cars.onMessage(msg);
+    bar.onMessage(msg);
+  }
 
   /// Whether something here has the camera, so nothing else is aimed at and no hands cover it.
-  bool get busy => telescope.active || thrower.active;
+  bool get busy => telescope.active || thrower.active || cars.active;
 
   /// Something here has the whole screen: the HUD steps aside.
   ValueListenable<bool> get hudHidden => telescope.showing;
@@ -99,7 +115,7 @@ class PlacesHub {
       }
       return true;
     }
-    return bar.key(e);
+    return cars.key(e) || bar.key(e);
   }
 
   /// The captured mouse moved by [dx], [dy] pixels: true when it aims something here.
@@ -146,6 +162,9 @@ class PlacesHub {
       case InteractKind.darts || InteractKind.axe:
         if (key == DeskKey.e) bar.interact(it);
         return true;
+      case InteractKind.car when it.car != null:
+        if (key == DeskKey.e) cars.getIn(it.car!);
+        return true;
       default:
         return false;
     }
@@ -159,6 +178,7 @@ class PlacesHub {
     ),
     InteractKind.darts => bar.hint(BarGame.darts),
     InteractKind.axe => bar.hint(BarGame.axe),
+    InteractKind.car => cars.carHint(it),
     _ => null,
   };
 
@@ -166,13 +186,26 @@ class PlacesHub {
   (String, List<HintPart>)? heldHint() {
     if (telescope.active) return ('telescope', const <HintPart>[]);
     if (thrower.active) return bar.throwHint();
+    if (cars.active) return cars.driveHint();
     return null;
   }
 
   /// Every frame, once you've moved: returns the camera to draw with.
   PerspectiveCamera update(PerspectiveCamera camera, double dt, double t) {
     bar.update(dt);
+    cars.tick(dt);
     camera = thrower.camera(camera, dt);
-    return telescope.update(camera);
+    camera = telescope.update(camera);
+    // Knocked about by a crunch.
+    final jolt = cars.jolt();
+    if (jolt.length2 == 0) return camera;
+    return PerspectiveCamera(
+      fovRadiansY: camera.fovRadiansY,
+      position: camera.position + jolt,
+      target: camera.target + jolt * 0.5,
+      up: camera.up,
+      fovNear: camera.fovNear,
+      fovFar: camera.fovFar,
+    );
   }
 }

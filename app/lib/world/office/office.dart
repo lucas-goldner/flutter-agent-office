@@ -16,7 +16,9 @@ import '../collider.dart';
 import '../labels.dart';
 import '../text.dart';
 import '../toon.dart';
+import 'cars.dart';
 import 'elevator.dart';
+import 'fleet.dart';
 import 'geo.dart';
 import 'gong.dart';
 import 'jukebox.dart';
@@ -83,6 +85,7 @@ class Office {
     required this.bossScreen,
     required this.elevator,
     required this.garageLift,
+    required this.fleet,
     required this.gong,
     required this.jukebox,
     required this.whiteboard,
@@ -114,6 +117,7 @@ class Office {
     if (index == 0 && has) colliders.remove(l.plug.collider);
     l.tower.set(index, count);
     garageLift.setFloor(streetBelow(index));
+    fleet.setStreet(streetBelow(index));
   }
 
   final Node group;
@@ -133,6 +137,9 @@ class Office {
 
   /// The elevator's stop down in the garage, under the building.
   final Elevator garageLift;
+
+  /// The Lambos and Ferraris in the garage, which anyone can drive (see office/driving.dart).
+  final Fleet fleet;
 
   /// The merge gong by the PR board.
   final Gong gong;
@@ -435,6 +442,10 @@ Office buildOffice({required LabelHub labels}) {
   buildBalcony(group, interactables, night);
 
   buildGarage(ground);
+  // The cars move, so their boxes go in with the floor's and follow them (and the street) themselves,
+  // rather than going down with the street's.
+  final fleet = Fleet(colliders, interactables, build: (d) => supercar(d.kind, d.color));
+  ground.add(fleet.group);
   // The clouds stay up in the sky, however far down the street is.
   buildStreet(ground, night, group);
   group.add(ground);
@@ -647,6 +658,7 @@ Office buildOffice({required LabelHub labels}) {
       bossScreen: bossScreen,
       elevator: elevator,
       garageLift: garageLift,
+      fleet: fleet,
       gong: gong,
       jukebox: jukebox,
       whiteboard: whiteboard,

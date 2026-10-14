@@ -48,6 +48,10 @@ final List<(String, String)> helpRows = [
     'The golf tee on the balcony: E steps up, A/D aim, W/S loft, hold Space and let go to swing, E puts the club back',
   ),
   (
+    '🏎️',
+    "The Lambos and Ferraris in the garage: E at one gets you behind the wheel, or beside whoever's driving it. W is the gas, S brakes and reverses, A and D steer, Space brakes, H honks and E gets you out. Everyone on your floor sees you drive by",
+  ),
+  (
     '🎯',
     'Up on the roof, in the corner past the DJ: a dart board and an axe-throwing lane. E at either steps up to the line. The mouse (or the arrow keys) aims, and your hand wanders more after a few drinks. Hold Space (or the mouse button) and let go in the green: three darts a visit, five axes a round, chalked up for everyone up there. E steps back',
   ),

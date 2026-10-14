@@ -16,6 +16,7 @@ import 'package:office_shared/protocol.dart';
 import 'package:office_shared/whiteboard.dart';
 
 import '../world/player.dart' show ViewMode;
+import 'cars.dart';
 import 'rooms.dart';
 import 'screen_state.dart';
 
@@ -329,6 +330,9 @@ class Store {
   /// The games and rooms on your floor: the cabinet, the ball, the meeting room, the machine monitor.
   final Rooms rooms = Rooms();
 
+  /// The cars in the garage, and who's in which (state/cars.dart).
+  final CarsState cars = CarsState();
+
   final Map<Topic, _Topic> _topics = {for (final t in Topic.values) t: _Topic()};
 
   /// Listen to a topic, e.g. with ListenableBuilder.
@@ -430,6 +434,7 @@ class Store {
 
   void apply(ServerMsg msg) {
     rooms.apply(msg);
+    cars.apply(msg);
     switch (msg) {
       case WelcomeMsg m:
         // The map first, so the floor's workers sit down in its seats and not the last one's.

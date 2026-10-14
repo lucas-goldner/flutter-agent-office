@@ -268,3 +268,18 @@ double azimuthOf(SoundListener l, Pos p) {
 /// over end, a dart into the board or the wood round it, an axe biting into the target or bouncing off
 /// it and landing on the mat, and the crowd going up for a 180 or a killshot.
 enum TossSound { dart, axe, board, wall, thunk, clank, drop, cheer }
+
+/// A car somebody's driving (features/cars/sound.ts): which, where it is, how fast it's going and how
+/// hard it's pushed.
+typedef Engine = ({int car, double x, double y, double z, double speed, double gas});
+
+/// An engine's note for how fast the car's going ([speed], m/s) and how hard it's pushed ([gas]):
+/// up through the gears, the revs climb in each one and drop back as it shifts up. Returns the
+/// sawtooth's frequency, the filter's, and the level.
+({double f, double tone, double gain}) engineNote(double speed, double gas) {
+  final v = speed.abs();
+  final push = gas.abs();
+  final gear = (v / 5.5).floor().clamp(0, 3);
+  final f = 44 + gear * 7 + ((v - gear * 5.5) / 5.5).clamp(double.negativeInfinity, 1.5) * 46 + push * 5;
+  return (f: f, tone: 240 + f * 5 + push * 450, gain: 0.035 + 0.04 * push + 0.025 * (v / 20).clamp(0.0, 1.0));
+}

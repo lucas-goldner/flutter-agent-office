@@ -2,6 +2,7 @@
 // ui/whereabouts.ts.
 
 import 'package:office_shared/bargames.dart' show BarGame;
+import 'package:office_shared/garage.dart' show CarSeat, cars;
 import 'package:office_shared/layout.dart';
 import 'package:office_shared/maps/maps.dart' show MapPlan, PlanStyle, seatOn;
 import 'package:office_shared/protocol.dart';
@@ -12,8 +13,13 @@ import '../office/roof_logic.dart' show roofWhereabouts;
 /// Whatever they have open ("💻 in Pixel's terminal", "🔀 reading PR #12"), else somewhere worth
 /// saying they are ("🌇 on the balcony", "🛋️ on the couch"). Nothing while they're just walking
 /// around the office. On a map of its own ([plan]), its own seats, and none of the office's rooms.
-String? whereabouts(PeerInfo p, [MapPlan? plan]) {
+///
+/// In one of the garage's cars ([car], see CarsState.carOf): "🏎️ driving the Orange Lambo".
+String? whereabouts(PeerInfo p, [MapPlan? plan, ({int car, CarSeat seat})? car]) {
   if (p.doing != null && p.doing!.isNotEmpty) return p.doing;
+  if (car != null && car.car >= 0 && car.car < cars.length) {
+    return '🏎️ ${car.seat == CarSeat.driver ? 'driving' : 'riding in'} the ${cars[car.car].name}';
+  }
   if (p.smoking == true) return '🚬 on a smoke break';
   if (p.golfing == true) return '🏌️ teeing off';
   if (p.throwing != null) return p.throwing == BarGame.darts ? '🎯 playing darts' : '🪓 throwing axes';

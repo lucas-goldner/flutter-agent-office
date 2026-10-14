@@ -579,6 +579,87 @@ class OfficeRender {
     return out;
   }
 
+  // ---- The cars in the garage (features/cars/sound.ts) ------------------------------------------
+
+  /// The engine's base note, which the desktop app plays faster or slower for the revs (the web's moves
+  /// the filter too).
+  static const double engineBase = 44;
+
+  /// An engine burbling at [engineBase] Hz: a sawtooth and a square an octave under it, through a lowpass
+  /// set where it is at that note. Loops exactly: whole periods of the square.
+  Float32List engineLoop() {
+    final period = (sr / (engineBase / 2)).round();
+    final n = period * 22;
+    final f = sr / period * 2;
+    final saw = _osc(n, Wave.sawtooth, Param(f));
+    final sub = _osc(n, Wave.square, Param(f / 2));
+    mixInto(saw, sub, k: 0.5);
+    final n0 = engineNote(0, 0);
+    // Twice round, keeping the second: the filter has settled by then, so the ends meet.
+    final twice = Float32List(n * 2)
+      ..setAll(0, saw)
+      ..setAll(n, saw);
+    final toned = biquad(twice, sr, BiquadType.lowpass, n0.tone, 2);
+    final out = Float32List.fromList(toned.sublist(n));
+    for (var i = 0; i < n; i++) {
+      out[i] *= 0.035;
+    }
+    return out;
+  }
+
+  /// An engine turning over: it catches with a rev and settles to a burble.
+  Float32List engineStart() {
+    final out = _buf(0.8);
+    final n = out.length;
+    Param freq(double k) => Param(30 * k)
+      ..setValueAtTime(30 * k, 0)
+      ..linearRampToValueAtTime(115 * k, 0.3)
+      ..setTargetAtTime(44 * k, 0.35, 0.12);
+    final saw = _osc(n, Wave.sawtooth, freq(1));
+    mixInto(saw, _osc(n, Wave.square, freq(0.5)), k: 0.5);
+    final toned = biquad(saw, sr, BiquadType.lowpass, 900, 2);
+    final g = Param(1)
+      ..setValueAtTime(0, 0)
+      ..linearRampToValueAtTime(0.11, 0.12)
+      ..setTargetAtTime(0.035, 0.45, 0.15)
+      // Fades into the burble, which takes over as it ends.
+      ..linearRampToValueAtTime(0, 0.8);
+    mixInto(out, gain(toned, sr, g));
+    return out;
+  }
+
+  /// A car's horn: two notes a third apart, a Lambo's ([high]) higher than a Ferrari's.
+  Float32List honk(bool high) {
+    final out = _buf(0.6);
+    final n = out.length;
+    final both = Float32List(n);
+    for (final f in high ? const [440.0, 554.0] : const [392.0, 494.0]) {
+      mixInto(both, _osc(n, Wave.square, Param(f), stop: 0.55));
+    }
+    final toned = biquad(both, sr, BiquadType.lowpass, 2200, 0.7);
+    mixInto(out, gain(toned, sr, Param(1)..envelope(0, const [(0.02, 0.09), (0.42, 0.08), (0.5, 0)])));
+    return out;
+  }
+
+  /// A car door shutting behind someone getting in or out.
+  Float32List carDoor() {
+    final out = _buf(0.5);
+    mixInto(out, _sample(out.length, _pick(samples.steps), rate: 0.55), k: 0.6);
+    _blip(out, 0, 120, 0.6, 0.09, 0.12);
+    return out;
+  }
+
+  /// A car running into something, [loud] (0–1) hard: a thump, and the panels clanging.
+  Float32List crash(double loud) {
+    final out = _buf(0.8);
+    mixInto(out, _sample(out.length, _pick(samples.steps), rate: 0.4), k: 0.4 + 0.8 * loud);
+    _blip(out, 0, 90, 0.5, 0.3, 0.1 + 0.25 * loud);
+    for (final (f, amp) in const [(520.0, 0.05), (1270.0, 0.03)]) {
+      _blip(out, 0, f * _rand(0.9, 1.1), 0.98, 0.25, amp * loud, Wave.triangle);
+    }
+    return out;
+  }
+
   // ---- Darts and axes at the rooftop bar (features/bargames/sound.ts) ----------------------------
 
   /// Throwing at the rooftop bar (see [TossSound]).
@@ -825,6 +906,14 @@ Map<String, Float32List> renderBank(int sr, Bank bank, [int seed = 0]) {
       for (final what in const ['door', 'alarm', 'blow']) {
         out['airlock.$what'] = r.airlock(what);
       }
+      out['engine'] = r.engineLoop();
+      out['engine.start'] = r.engineStart();
+      out['honk.high'] = r.honk(true);
+      out['honk.low'] = r.honk(false);
+      many('carDoor', 2, r.carDoor);
+      for (final (i, loud) in crashLevels.indexed) {
+        out['crash.$i'] = r.crash(loud);
+      }
       for (final kind in TossSound.values) {
         out['toss.${kind.name}'] = r.toss(kind);
       }
@@ -841,6 +930,9 @@ Map<String, Float32List> renderBank(int sr, Bank bank, [int seed = 0]) {
   }
   return out;
 }
+
+/// How hard a car's crash is rendered: the one nearest a crash's own is played, scaled.
+const List<double> crashLevels = [0.25, 0.5, 0.75, 1];
 
 /// How hard the basketball's sounds are rendered: the one nearest a hit's own is played, scaled.
 const List<double> ballLevels = [0.2, 0.45, 0.7, 1];
