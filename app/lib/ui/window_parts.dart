@@ -8,7 +8,6 @@ import 'package:flutter/services.dart';
 
 import 'theme.dart';
 
-
 /// The .modal label: bold, above what it names.
 class FieldLabel extends StatelessWidget {
   const FieldLabel(this.text, {super.key, this.top = 0});
@@ -189,7 +188,13 @@ class CommandBlock extends StatelessWidget {
             ),
             child: SelectableText(
               command,
-              style: const TextStyle(fontFamily: kMono, fontFamilyFallback: kMonoFallback, fontSize: 13, height: 1.5, color: Color(0xFFE9ECEF)),
+              style: const TextStyle(
+                fontFamily: kMono,
+                fontFamilyFallback: kMonoFallback,
+                fontSize: 13,
+                height: 1.5,
+                color: Color(0xFFE9ECEF),
+              ),
             ),
           ),
         ),
@@ -321,10 +326,14 @@ class BoxInput extends StatelessWidget {
     this.onSubmitted,
     this.onChanged,
     this.tooltip,
+    this.obscure = false,
   });
 
   final TextEditingController controller;
   final FocusNode? focusNode;
+
+  /// A secret (a token): shown as dots.
+  final bool obscure;
   final String? hint;
   final int? maxLength;
   final bool autofocus;
@@ -343,6 +352,7 @@ class BoxInput extends StatelessWidget {
       readOnly: readOnly,
       enabled: enabled,
       maxLength: maxLength,
+      obscureText: obscure,
       autocorrect: false,
       enableSuggestions: false,
       style: heavy(15, weight: FontWeight.w400),

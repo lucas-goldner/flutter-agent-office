@@ -54,6 +54,7 @@ import '../ui/queue.dart';
 import '../ui/search.dart';
 import '../ui/services.dart';
 import '../ui/settings.dart';
+import '../ui/signins.dart';
 import '../ui/team.dart';
 import '../ui/accounts.dart';
 import '../ui/arcade.dart';
@@ -544,6 +545,9 @@ class OfficeController implements OfficeActions {
 
   // ---- Messages ---------------------------------------------------------------------------------
 
+  /// Whether the sign-ins window has had its chance to greet you (once a page).
+  bool _signInsGreeted = false;
+
   void _onMessage(ServerMsg msg) {
     final held = _held;
     if (held != null && msg is! WelcomeMsg) return held.add(msg);
@@ -650,6 +654,13 @@ class OfficeController implements OfficeActions {
         _remotes[m.id]?.person.emote(m.emote);
       case ThemeMsg m:
         _dressUp(m.state.active);
+      // The first word on your sign-ins: still to do, the window says hello.
+      case SignInsMsg _ when !_signInsGreeted:
+        _signInsGreeted = true;
+        if (needsSigningIn(scope)) openSignIns(scope, signInsWelcome);
+      // Something you did needs a sign-in first (hiring a worker before signing in to Claude, say).
+      case SignInsNeededMsg m:
+        openSignIns(scope, m.why);
       default:
         break;
     }
@@ -911,6 +922,18 @@ class OfficeController implements OfficeActions {
         shown: () => store.me.admin,
         title: () => 'Invite people, see who has an account, revoke them',
         run: () => openAccounts(scope),
+      ),
+      HudAction(
+        id: 'signins',
+        icon: '🔐',
+        label: 'Your sign-ins',
+        section: HudSection.together,
+        shown: () => store.me.account != null,
+        tone: () => needsSigningIn(scope) ? HudTone.danger : null,
+        status: () => needsSigningIn(scope),
+        chip: () => 'Sign in to Claude',
+        title: () => 'The Claude plan and GitHub account your workers run on: your own',
+        run: () => openSignIns(scope),
       ),
       HudAction(id: 'settings', icon: '⚙️', label: 'Settings', section: HudSection.office, run: showSettings),
       HudAction(id: 'help', icon: '❓', label: 'Controls', section: HudSection.office, key: 'H', run: openHelp),

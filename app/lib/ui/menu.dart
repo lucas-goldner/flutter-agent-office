@@ -199,6 +199,7 @@ class Dock extends StatelessWidget {
           Topic.me,
           Topic.floors,
           Topic.floor,
+          Topic.signins,
         ]),
       ]),
       builder: (context, _) {

@@ -55,6 +55,8 @@ enum Topic {
   prompts,
   leaveOnMerge,
   machine,
+  // Your own Claude and GitHub sign-ins (🔐 Your sign-ins).
+  signins,
 }
 
 /// Where someone is right now. peer.move updates it in place; the frame loop eases toward it.
@@ -259,6 +261,9 @@ class Store {
   List<IceServer> ice = [];
   final List<ChatLine> chat = [];
   bool invites = false;
+
+  /// Your own Claude and GitHub sign-ins, once the office has said (accounts only).
+  SignInsState? signins;
   String version = '';
   TeamState? team;
   UpgradeState upgrade = UpgradeState.fromJson(const {'available': false, 'phase': 'idle'});
@@ -553,6 +558,9 @@ class Store {
       case DogMsg m:
         _setDog(m.dog);
         emit(Topic.dog);
+      case SignInsMsg m:
+        signins = m.state;
+        emit(Topic.signins);
       case SkyMsg m:
         sky = m.state;
         emit(Topic.sky);
