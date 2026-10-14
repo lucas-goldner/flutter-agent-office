@@ -6,6 +6,7 @@ import 'dart:math' as math;
 
 import 'package:agent_office/office/blast.dart';
 import 'package:agent_office/ui/elevator.dart';
+import 'package:agent_office/ui/window_parts.dart' show BoxInput;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:office_shared/protocol.dart';
@@ -130,5 +131,65 @@ void main() {
     await tester.pump();
     expect(find.byKey(const ValueKey('dir-input')), findsNothing);
     expect(find.textContaining('~/code/<owner>/<repo>'), findsWidgets);
+  });
+
+  testWidgets('a floor being cloned shows how far it has got, and ⏹️ stops it', (tester) async {
+    final office = Office()
+      ..welcome(
+        floors: [
+          floorJson('f1', 'one'),
+          {
+            ...floorJson('f2', 'big'),
+            'cloning': true,
+            'clone': {'step': 'Receiving objects', 'percent': 42, 'detail': '231.4 MiB · 1.5 MiB/s'},
+          },
+        ],
+      );
+    await office.pump(tester, const SizedBox());
+    openElevator(office.scope(), ride: (_) {});
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('⏳ Receiving objects 42%'), findsOneWidget);
+    expect(find.text('acme/big · 231.4 MiB · 1.5 MiB/s'), findsOneWidget);
+    expect(find.byType(CloneBar), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('stop-f2')));
+    await tester.pump();
+    await tester.tap(find.text('⏹️ Stop cloning'));
+    await tester.pump();
+    expect(office.net.sent.whereType<FloorCancelCmd>().map((c) => c.floor), ['f2']);
+  });
+
+  testWidgets('waiting on a clone: the floor list says how it ended, even with no answer', (tester) async {
+    final office = Office()..welcome(floor: null);
+    await office.pump(tester, const SizedBox());
+    String? rode;
+    openElevator(office.scope(), ride: (f) => rode = f);
+    await tester.pump();
+    await tester.pump();
+    await tester.enterText(find.widgetWithText(BoxInput, 'Search your repositories, or type owner/name'), 'acme/big');
+    await tester.pump();
+    await tester.tap(find.text('🛗 Add acme/big'));
+    await tester.pump();
+    expect(office.net.sent.whereType<FloorAddCmd>().single.repo, 'acme/big');
+    expect(elevatorWaitingOn('acme/big'), isTrue);
+    expect(find.text('⏳ Asking GitHub about acme/big…'), findsOneWidget);
+    void floors(bool cloning) => office.store.apply(
+      ServerMsg.parse({
+        't': 'floors',
+        'floors': [
+          floorJson('f1', 'one'),
+          {...floorJson('f2', 'big'), 'cloning': cloning},
+        ],
+      }),
+    );
+    floors(true);
+    await tester.pump();
+    expect(find.text('⏳ Cloning acme/big into ~/Workspace/acme/big'), findsOneWidget);
+    // The office restarted mid-clone: no floor.added, but the floor is there now.
+    floors(false);
+    await tester.pump();
+    expect(rode, 'f2');
+    expect(elevatorWaitingOn('acme/big'), isFalse);
+    await tester.pump(const Duration(seconds: 61));
   });
 }

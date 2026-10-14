@@ -4,6 +4,8 @@
 // where you start: the workspace folder, GitHub, then your first project. Admins can blow a floor
 // off the building here too (💣); its checkout stays on disk (ui/elevator.ts).
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../office_scope.dart';
@@ -26,6 +28,51 @@ const _shown = 60;
 const _reposStaleMs = 5 * 60000;
 
 ModalHandle? _current;
+
+/// Longer than the office takes to ask GitHub about a repository before its clone starts (ms).
+const _startMs = 60000;
+
+/// The repository the open panel is waiting on the clone of, if any.
+String? _waitingOn;
+
+/// Whether the elevator's panel is waiting on [repo]'s clone, so it hears how it ended. When it isn't (the
+/// panel was closed while it cloned), a clone that failed still says why: the office shows a toast.
+bool elevatorWaitingOn(String repo) => _waitingOn != null && _waitingOn == repo;
+
+/// How far through its step a floor's clone is, as a bar (none until git gives a percentage).
+class CloneBar extends StatelessWidget {
+  const CloneBar(this.p, {super.key});
+  final CloneProgress? p;
+
+  @override
+  Widget build(BuildContext context) {
+    final pct = p?.percent;
+    if (pct == null) return const SizedBox.shrink();
+    return Semantics(
+      label: p!.step,
+      value: '$pct%',
+      child: Container(
+        height: 11,
+        margin: const EdgeInsets.only(top: 5),
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: Swatch.paper2,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: Swatch.ink, width: 2),
+        ),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: AnimatedFractionallySizedBox(
+            duration: const Duration(milliseconds: 600),
+            widthFactor: (pct / 100).clamp(0.0, 1.0),
+            heightFactor: 1,
+            child: const ColoredBox(color: Swatch.good),
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 /// What the 💣 asks before a floor comes off the building: (title, body).
 (String, String) blowUpText(FloorInfo f, List<FloorInfo> floors) {
@@ -107,6 +154,10 @@ class _ElevatorWindowState extends State<_ElevatorWindow> with ListenTo {
   String _filter = '';
   String? _selected;
   String? _adding;
+
+  /// The office has started cloning [_adding] (it's on the floor list).
+  bool _seen = false;
+  Timer? _startTimer;
   String _error = '';
   late bool _showAdd = widget.setup || store.floors.isEmpty;
 
@@ -120,6 +171,7 @@ class _ElevatorWindowState extends State<_ElevatorWindow> with ListenTo {
   @override
   void initState() {
     super.initState();
+    listenTo(store.topic(Topic.floors), _checkAdding);
     listenTo(
       store.topics(const [Topic.floors, Topic.repos, Topic.floor, Topic.peers, Topic.me]),
       () => setState(() {}),
@@ -137,6 +189,8 @@ class _ElevatorWindowState extends State<_ElevatorWindow> with ListenTo {
 
   @override
   void dispose() {
+    _startTimer?.cancel();
+    if (_adding != null && _waitingOn == _adding) _waitingOn = null;
     _dir.dispose();
     _dirFocus.dispose();
     _input.dispose();
@@ -189,19 +243,82 @@ class _ElevatorWindowState extends State<_ElevatorWindow> with ListenTo {
     if (_adding != null) return;
     setState(() {
       _adding = repo;
+      _seen = false;
       _error = '';
     });
+    _waitingOn = repo;
     widget.scope.net.send(FloorAddCmd(repo));
+    // The office went away before it started (a restart): don't wait forever.
+    _startTimer?.cancel();
+    _startTimer = Timer(const Duration(milliseconds: _startMs), () {
+      if (!mounted || _adding != repo || _seen) return;
+      setState(() {
+        _adding = null;
+        _error = "The office didn't start cloning $repo — try again";
+      });
+    });
+  }
+
+  /// The floor being added, once the office is cloning it (and after, when it's there).
+  FloorInfo? _addingFloor() {
+    final a = _adding;
+    return a == null ? null : store.floors.where((f) => sameRepo(f.repo, a)).firstOrNull;
+  }
+
+  /// Done waiting on the clone, one way or another.
+  void _settle(String? floor, [String? why]) {
+    _startTimer?.cancel();
+    if (_waitingOn == _adding) _waitingOn = null;
+    setState(() => _adding = null);
+    if (floor != null) return _go(floor);
+    setState(() => _error = why ?? 'The floor could not be added');
   }
 
   void _onAdded(FloorAddedMsg msg) {
     if (_adding == null || msg.repo != _adding) return;
-    setState(() => _adding = null);
-    if (msg.error != null || msg.floor == null) {
-      setState(() => _error = msg.error ?? 'The floor could not be added');
-      return;
+    _settle(msg.error != null ? null : msg.floor, msg.error);
+  }
+
+  /// The floor list changed. The office answers the one who asked with floor.added, but if it restarted
+  /// mid-clone that answer went nowhere: the floor list still shows how it ended.
+  void _checkAdding() {
+    final adding = _adding;
+    if (adding == null) return;
+    final f = _addingFloor();
+    if (f?.cloning == true) {
+      _seen = true;
+    } else if (_seen) {
+      _settle(f?.id, 'Cloning $adding stopped before it finished — add it again');
     }
-    _go(msg.floor!);
+  }
+
+  /// ⏹️: whoever added it, or an admin, stops a clone.
+  void _stopClone(FloorInfo f) => confirmDialog(
+    'Stop cloning ${f.repo ?? f.name}?',
+    "What's come down so far is thrown away. You can add it again any time.",
+    '⏹️ Stop cloning',
+    () => widget.scope.net.send(FloorCancelCmd(f.id)),
+  );
+
+  /// While it clones: how far it's got (the office asks GitHub about it first).
+  Widget _cloning(String dir, TextStyle note) {
+    final on = _addingFloor();
+    final repo = on?.repo ?? _adding!;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          on != null ? '⏳ Cloning $repo into $dir/$repo' : '⏳ Asking GitHub about $_adding…',
+          style: note.copyWith(color: Swatch.ink),
+        ),
+        if (on != null) ...[
+          CloneBar(on.clone),
+          Text([cloneStep(on.clone), ?on.clone?.detail].join(' · '), style: note),
+        ],
+        Text('You can close this and carry on: everyone hears when the new floor opens.', style: note),
+      ],
+    );
   }
 
   List<RepoChoice> _matches(String q) => store.repos.list
@@ -262,6 +379,15 @@ class _ElevatorWindowState extends State<_ElevatorWindow> with ListenTo {
                     Expanded(
                       child: _FloorButton(f, i, here: f.id == store.floor, onRide: () => _go(f.id)),
                     ),
+                    if (f.cloning == true && (store.me.admin || (_adding != null && sameRepo(f.repo, _adding!)))) ...[
+                      const SizedBox(width: 8),
+                      OfficeButton(
+                        key: ValueKey('stop-${f.id}'),
+                        label: '⏹️',
+                        tooltip: 'Stop cloning ${f.repo ?? f.name}',
+                        onPressed: () => _stopClone(f),
+                      ),
+                    ],
                     if (store.me.admin && f.cloning != true) ...[
                       const SizedBox(width: 8),
                       OfficeButton(
@@ -455,10 +581,7 @@ class _ElevatorWindowState extends State<_ElevatorWindow> with ListenTo {
         Padding(
           padding: const EdgeInsets.only(top: 8),
           child: _adding != null
-              ? Text(
-                  '⏳ Cloning $_adding into $dir/$_adding… A big repository can take a minute.',
-                  style: note.copyWith(color: Swatch.ink),
-                )
+              ? _cloning(dir, note)
               : Wrap(
                   crossAxisAlignment: WrapCrossAlignment.center,
                   spacing: 6,
@@ -560,7 +683,10 @@ class _FloorButtonState extends State<_FloorButton> {
     final stat = heavy(13);
     final stats = <Widget>[
       if (cloning)
-        Text('⏳ Cloning…', style: stat)
+        Tooltip(
+          message: f.clone?.detail ?? 'Being cloned',
+          child: Text(cloneLabel(f.clone), style: stat),
+        )
       else ...[
         if (f.busy > 0)
           Tooltip(
@@ -651,11 +777,12 @@ class _FloorButtonState extends State<_FloorButton> {
                         ],
                       ),
                       Text(
-                        f.repo ?? f.dir,
+                        [f.repo ?? f.dir, if (cloning) ?f.clone?.detail].join(' · '),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: heavy(12, color: Swatch.muted, weight: FontWeight.w700),
                       ),
+                      if (cloning) CloneBar(f.clone),
                     ],
                   ),
                 ),

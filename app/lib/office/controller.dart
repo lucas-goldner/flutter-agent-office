@@ -617,6 +617,9 @@ class OfficeController implements OfficeActions {
           _setCarrying(null);
         }
         _arrive();
+      // The panel was closed while it cloned: a clone that failed still says why.
+      case FloorAddedMsg m when m.error != null && !elevatorWaitingOn(m.repo):
+        toast('🛗 ${m.error}', ToastKind.warn);
       case ToastMsg m:
         toast(m.text, switch (m.level) {
           ToastLevel.warn => ToastKind.warn,

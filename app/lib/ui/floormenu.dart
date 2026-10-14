@@ -165,7 +165,7 @@ class FloorMenu extends StatelessWidget {
                     sub: r.sub,
                     here: r.here,
                     stats: r.floor.cloning == true
-                        ? const [('⏳ Cloning…', 'Still being cloned', false)]
+                        ? [(cloneLabel(r.floor.clone), r.floor.clone?.detail ?? 'Being cloned', false)]
                         : [
                             if (r.floor.waiting > 0) ('🙋 ${r.floor.waiting}', 'Workers waiting on someone', true),
                             if (r.floor.busy > 0) ('👷 ${r.floor.busy}', 'Working', false),
