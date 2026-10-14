@@ -11,8 +11,10 @@ import 'package:flutter/material.dart';
 import '../interop/browser.dart';
 import '../net/office_socket.dart';
 import '../office_scope.dart';
+
 import 'package:office_shared/avatar.dart';
 import 'package:office_shared/protocol.dart';
+
 import '../state/store.dart';
 import '../ui/boards.dart';
 import '../ui/markdown.dart';
@@ -38,44 +40,64 @@ final labels = {
   'perf': label('perf', '#0e8a16'),
 };
 
-GhIssue issue(int n, String title, {String state = 'OPEN', List<String> l = const [], List<String> assignees = const [], int comments = 0, int hours = 5, String author = 'mika'}) =>
-    GhIssue.fromJson({
-      'number': n,
-      'title': title,
-      'state': state,
-      'url': '$repo/issues/$n',
-      'author': author,
-      'labels': [for (final x in l) labels[x]],
-      'assignees': assignees,
-      'createdAt': ago(Duration(hours: hours * 3)),
-      'updatedAt': ago(Duration(hours: hours)),
-      'body': sampleIssueBody,
-      'comments': comments,
-    });
+GhIssue issue(
+  int n,
+  String title, {
+  String state = 'OPEN',
+  List<String> l = const [],
+  List<String> assignees = const [],
+  int comments = 0,
+  int hours = 5,
+  String author = 'mika',
+}) => GhIssue.fromJson({
+  'number': n,
+  'title': title,
+  'state': state,
+  'url': '$repo/issues/$n',
+  'author': author,
+  'labels': [for (final x in l) labels[x]],
+  'assignees': assignees,
+  'createdAt': ago(Duration(hours: hours * 3)),
+  'updatedAt': ago(Duration(hours: hours)),
+  'body': sampleIssueBody,
+  'comments': comments,
+});
 
-GhPull pr(int n, String title,
-        {String state = 'OPEN', bool draft = false, String review = 'REVIEW_REQUIRED', String checks = 'pass', int add = 42, int del = 7, List<String> l = const [], String head = '', int hours = 3, String author = 'ana'}) =>
-    GhPull.fromJson({
-      'number': n,
-      'title': title,
-      'state': state,
-      'isDraft': draft,
-      'url': '$repo/pull/$n',
-      'author': author,
-      'labels': [for (final x in l) labels[x]],
-      'reviewDecision': review,
-      'headRefName': head.isEmpty ? 'feat/pr-$n' : head,
-      'baseRefName': 'main',
-      'createdAt': ago(Duration(hours: hours * 4)),
-      'updatedAt': ago(Duration(hours: hours)),
-      'additions': add,
-      'deletions': del,
-      'checks': checks,
-      'body': samplePrBody,
-      'closes': [],
-    });
+GhPull pr(
+  int n,
+  String title, {
+  String state = 'OPEN',
+  bool draft = false,
+  String review = 'REVIEW_REQUIRED',
+  String checks = 'pass',
+  int add = 42,
+  int del = 7,
+  List<String> l = const [],
+  String head = '',
+  int hours = 3,
+  String author = 'ana',
+}) => GhPull.fromJson({
+  'number': n,
+  'title': title,
+  'state': state,
+  'isDraft': draft,
+  'url': '$repo/pull/$n',
+  'author': author,
+  'labels': [for (final x in l) labels[x]],
+  'reviewDecision': review,
+  'headRefName': head.isEmpty ? 'feat/pr-$n' : head,
+  'baseRefName': 'main',
+  'createdAt': ago(Duration(hours: hours * 4)),
+  'updatedAt': ago(Duration(hours: hours)),
+  'additions': add,
+  'deletions': del,
+  'checks': checks,
+  'body': samplePrBody,
+  'closes': [],
+});
 
-const sampleIssueBody = '''The jukebox skips a track whenever someone joins the floor mid-song. It should pick up where everyone else is.
+const sampleIssueBody =
+    '''The jukebox skips a track whenever someone joins the floor mid-song. It should pick up where everyone else is.
 
 **Steps**
 1. Start a track in the lounge
@@ -115,7 +137,14 @@ final issues = [
   issue(841, 'Board faces should repaint only when their notes change', l: ['perf', 'enhancement'], comments: 3),
   issue(839, 'Jukebox restarts the track when someone joins mid-song', l: ['bug'], comments: 5, hours: 2),
   issue(836, 'Add keyboard shortcuts to the PR files view', l: ['ui', 'good first issue'], hours: 20),
-  issue(833, 'Dog gets stuck behind the kitchen counter on floor 2', l: ['bug'], assignees: ['ana'], comments: 2, hours: 9),
+  issue(
+    833,
+    'Dog gets stuck behind the kitchen counter on floor 2',
+    l: ['bug'],
+    assignees: ['ana'],
+    comments: 2,
+    hours: 9,
+  ),
   issue(830, 'Show the worker provider on the queue board', l: ['in progress', 'ui'], hours: 30),
   issue(828, 'Document the /api/image proxy', l: ['docs'], hours: 50),
   issue(824, 'Let people rename floors from the elevator panel', hours: 70, author: 'kenji-t'),
@@ -124,17 +153,71 @@ final issues = [
 ];
 
 final pulls = [
-  pr(852, 'Flutter: the GitHub windows and board faces', add: 2380, del: 12, l: ['ui'], head: 'wt/ui-github', checks: 'pending', hours: 1),
-  pr(850, 'Fix jukebox sync for late joiners', review: 'APPROVED', add: 88, del: 31, l: ['bug'], head: 'fix/jukebox-sync', hours: 2),
-  pr(849, 'WIP: smoke-break animation for workers', draft: true, add: 410, del: 3, checks: 'none', hours: 6, author: 'kenji-t'),
-  pr(847, 'Queue: retry failed tasks with backoff', review: 'CHANGES_REQUESTED', checks: 'fail', add: 156, del: 44, hours: 12),
-  pr(845, 'Speed up the diff parser on huge PRs', add: 64, del: 58, l: ['perf'], head: 'perf/diff', hours: 18, author: 'mika'),
-  pr(843, 'Docs: explain floors and the elevator', state: 'MERGED', review: 'APPROVED', add: 120, del: 4, l: ['docs'], hours: 5),
+  pr(
+    852,
+    'Flutter: the GitHub windows and board faces',
+    add: 2380,
+    del: 12,
+    l: ['ui'],
+    head: 'wt/ui-github',
+    checks: 'pending',
+    hours: 1,
+  ),
+  pr(
+    850,
+    'Fix jukebox sync for late joiners',
+    review: 'APPROVED',
+    add: 88,
+    del: 31,
+    l: ['bug'],
+    head: 'fix/jukebox-sync',
+    hours: 2,
+  ),
+  pr(
+    849,
+    'WIP: smoke-break animation for workers',
+    draft: true,
+    add: 410,
+    del: 3,
+    checks: 'none',
+    hours: 6,
+    author: 'kenji-t',
+  ),
+  pr(
+    847,
+    'Queue: retry failed tasks with backoff',
+    review: 'CHANGES_REQUESTED',
+    checks: 'fail',
+    add: 156,
+    del: 44,
+    hours: 12,
+  ),
+  pr(
+    845,
+    'Speed up the diff parser on huge PRs',
+    add: 64,
+    del: 58,
+    l: ['perf'],
+    head: 'perf/diff',
+    hours: 18,
+    author: 'mika',
+  ),
+  pr(
+    843,
+    'Docs: explain floors and the elevator',
+    state: 'MERGED',
+    review: 'APPROVED',
+    add: 120,
+    del: 4,
+    l: ['docs'],
+    hours: 5,
+  ),
   pr(840, 'Remove the old lobby carpet texture', state: 'MERGED', review: 'APPROVED', add: 2, del: 380, hours: 26),
   pr(838, 'Try WebGPU for the office renderer', state: 'CLOSED', add: 900, del: 200, hours: 60),
 ];
 
-WorkerInfo worker(String id, String name, String color, String desk, String status, {String? branch, int? prNo}) => WorkerInfo.fromJson({
+WorkerInfo worker(String id, String name, String color, String desk, String status, {String? branch, int? prNo}) =>
+    WorkerInfo.fromJson({
       'id': id,
       'kind': 'agent',
       'deskId': desk,
@@ -156,90 +239,189 @@ final workers = {
     w.id: w,
 };
 
-QueueTask task(String id, String status, {int? issue, String title = '', String? workerId, String? workerName, String? outcome, Map<String, dynamic>? pr, String provider = 'claude'}) =>
-    QueueTask.fromJson({
-      'id': id,
-      'issue': issue,
-      'title': title,
-      'prompt': '',
-      'addedBy': 'you',
-      'addedAt': 0,
-      'status': status,
-      'provider': provider,
-      'workerId': ?workerId,
-      'workerName': ?workerName,
-      'outcome': ?outcome,
-      'pr': ?pr,
-    });
+QueueTask task(
+  String id,
+  String status, {
+  int? issue,
+  String title = '',
+  String? workerId,
+  String? workerName,
+  String? outcome,
+  Map<String, dynamic>? pr,
+  String provider = 'claude',
+}) => QueueTask.fromJson({
+  'id': id,
+  'issue': issue,
+  'title': title,
+  'prompt': '',
+  'addedBy': 'you',
+  'addedAt': 0,
+  'status': status,
+  'provider': provider,
+  'workerId': ?workerId,
+  'workerName': ?workerName,
+  'outcome': ?outcome,
+  'pr': ?pr,
+});
 
 final queue = QueueState.fromJson({'tasks': [], 'maxWorkers': 3});
 
-QueueState fullQueue() => QueueState(maxWorkers: 3, tasks: [
-      task('t1', 'running', issue: 830, title: '#830 Show the worker provider on the queue board', workerId: 'w1', workerName: 'Pixel'),
-      task('t2', 'running', issue: 839, title: '#839 Jukebox restarts the track when someone joins mid-song', workerId: 'w2', workerName: 'Mochi', provider: 'opencode'),
-      task('t3', 'queued', issue: 836, title: '#836 Add keyboard shortcuts to the PR files view'),
-      task('t4', 'queued', issue: 828, title: '#828 Document the /api/image proxy', provider: 'codex'),
-      task('t5', 'queued', title: 'Tidy up the loft plants'),
-      task('t6', 'done', issue: 820, title: '#820 Confetti clips through the ceiling in the loft', outcome: 'done', pr: {'number': 843, 'url': '$repo/pull/843', 'state': 'MERGED', 'title': 'x'}),
-      task('t7', 'done', issue: 815, title: '#815 Snow piles up on the balcony forever', outcome: 'killed'),
-    ]);
+QueueState fullQueue() => QueueState(
+  maxWorkers: 3,
+  tasks: [
+    task(
+      't1',
+      'running',
+      issue: 830,
+      title: '#830 Show the worker provider on the queue board',
+      workerId: 'w1',
+      workerName: 'Pixel',
+    ),
+    task(
+      't2',
+      'running',
+      issue: 839,
+      title: '#839 Jukebox restarts the track when someone joins mid-song',
+      workerId: 'w2',
+      workerName: 'Mochi',
+      provider: 'opencode',
+    ),
+    task('t3', 'queued', issue: 836, title: '#836 Add keyboard shortcuts to the PR files view'),
+    task('t4', 'queued', issue: 828, title: '#828 Document the /api/image proxy', provider: 'codex'),
+    task('t5', 'queued', title: 'Tidy up the loft plants'),
+    task(
+      't6',
+      'done',
+      issue: 820,
+      title: '#820 Confetti clips through the ceiling in the loft',
+      outcome: 'done',
+      pr: {'number': 843, 'url': '$repo/pull/843', 'state': 'MERGED', 'title': 'x'},
+    ),
+    task('t7', 'done', issue: 815, title: '#815 Snow piles up on the balcony forever', outcome: 'killed'),
+  ],
+);
 
 ServicesState services() => ServicesState.fromJson({
-      'port': 4600,
-      'items': [
-        {'port': 5173, 'host': '127.0.0.1', 'pid': 1, 'command': 'vite --port 5173', 'workerId': 'w1', 'title': 'Agent Office (dev)', 'since': 0},
-        {'port': 8080, 'host': '127.0.0.1', 'pid': 2, 'command': 'python3 -m http.server 8080', 'workerId': 'w2', 'since': 0},
-        {'port': 6006, 'host': '127.0.0.1', 'pid': 3, 'command': 'storybook dev -p 6006', 'workerId': 'w3', 'title': 'Storybook: board components', 'since': 0},
-      ],
-    });
+  'port': 4600,
+  'items': [
+    {
+      'port': 5173,
+      'host': '127.0.0.1',
+      'pid': 1,
+      'command': 'vite --port 5173',
+      'workerId': 'w1',
+      'title': 'Agent Office (dev)',
+      'since': 0,
+    },
+    {
+      'port': 8080,
+      'host': '127.0.0.1',
+      'pid': 2,
+      'command': 'python3 -m http.server 8080',
+      'workerId': 'w2',
+      'since': 0,
+    },
+    {
+      'port': 6006,
+      'host': '127.0.0.1',
+      'pid': 3,
+      'command': 'storybook dev -p 6006',
+      'workerId': 'w3',
+      'title': 'Storybook: board components',
+      'since': 0,
+    },
+  ],
+});
 
-Map<String, dynamic> comment(String id, String author, String body, int hoursAgo, {String? state}) =>
-    {'id': id, 'author': author, 'body': body, 'createdAt': ago(Duration(hours: hoursAgo)), 'url': '$repo/pull/852#issuecomment-$id', 'state': ?state};
+Map<String, dynamic> comment(String id, String author, String body, int hoursAgo, {String? state}) => {
+  'id': id,
+  'author': author,
+  'body': body,
+  'createdAt': ago(Duration(hours: hoursAgo)),
+  'url': '$repo/pull/852#issuecomment-$id',
+  'state': ?state,
+};
 
 Map<String, dynamic> pullDetail(int n) => {
-      'number': n,
-      'body': samplePrBody,
-      'state': 'OPEN',
-      'isDraft': false,
-      'reviewDecision': 'REVIEW_REQUIRED',
-      'headRefName': 'wt/ui-github',
-      'baseRefName': 'main',
-      'mergeable': 'MERGEABLE',
-      'mergeStateStatus': 'UNSTABLE',
-      'commits': 4,
-      'comments': [
-        comment('c1', 'kenji-t', 'Nice! Does the queue board still strike through finished tasks?', 8),
-        comment('c2', 'ana', 'Yes, see `QueueBoardPainter`. Screenshots below:\n\n- issues ✅\n- queue ✅', 6),
-      ],
-      'reviews': [
-        comment('r1', 'mika', 'A couple of nits on the diff view, otherwise good to go.', 5, state: 'CHANGES_REQUESTED'),
-        comment('r2', 'kenji-t', '', 2, state: 'APPROVED'),
-      ],
-      'reviewComments': [
-        {'id': 101, 'author': 'mika', 'body': 'This should use `roundToDouble()` like the canvas did.', 'createdAt': ago(const Duration(hours: 5)), 'url': '$repo/pull/852#discussion_r101', 'path': 'app/lib/world/board_faces.dart', 'line': 4, 'side': 'RIGHT'},
-        {'id': 102, 'replyTo': 101, 'author': 'ana', 'body': 'Good catch, fixed.', 'createdAt': ago(const Duration(hours: 4)), 'url': '$repo/pull/852#discussion_r102', 'path': 'app/lib/world/board_faces.dart', 'line': 4, 'side': 'RIGHT'},
-        {'id': 103, 'author': 'mika', 'body': 'Was this removed on purpose?', 'createdAt': ago(const Duration(hours: 3)), 'url': '$repo/pull/852#discussion_r103', 'path': 'src/client/world/boards.ts', 'line': null, 'side': 'LEFT'},
-      ],
-      'checks': [
-        {'name': 'build / web', 'state': 'pass', 'url': '$repo/actions/runs/1'},
-        {'name': 'test / dart', 'state': 'pending', 'url': '$repo/actions/runs/2'},
-        {'name': 'lint', 'state': 'pass'},
-        {'name': 'deploy preview', 'state': 'skip'},
-      ],
-      'repo': {'nameWithOwner': 'acme/rocket', 'methods': ['squash', 'merge', 'rebase']},
-      'viewer': 'office-bot',
-    };
+  'number': n,
+  'body': samplePrBody,
+  'state': 'OPEN',
+  'isDraft': false,
+  'reviewDecision': 'REVIEW_REQUIRED',
+  'headRefName': 'wt/ui-github',
+  'baseRefName': 'main',
+  'mergeable': 'MERGEABLE',
+  'mergeStateStatus': 'UNSTABLE',
+  'commits': 4,
+  'comments': [
+    comment('c1', 'kenji-t', 'Nice! Does the queue board still strike through finished tasks?', 8),
+    comment('c2', 'ana', 'Yes, see `QueueBoardPainter`. Screenshots below:\n\n- issues ✅\n- queue ✅', 6),
+  ],
+  'reviews': [
+    comment('r1', 'mika', 'A couple of nits on the diff view, otherwise good to go.', 5, state: 'CHANGES_REQUESTED'),
+    comment('r2', 'kenji-t', '', 2, state: 'APPROVED'),
+  ],
+  'reviewComments': [
+    {
+      'id': 101,
+      'author': 'mika',
+      'body': 'This should use `roundToDouble()` like the canvas did.',
+      'createdAt': ago(const Duration(hours: 5)),
+      'url': '$repo/pull/852#discussion_r101',
+      'path': 'app/lib/world/board_faces.dart',
+      'line': 4,
+      'side': 'RIGHT',
+    },
+    {
+      'id': 102,
+      'replyTo': 101,
+      'author': 'ana',
+      'body': 'Good catch, fixed.',
+      'createdAt': ago(const Duration(hours: 4)),
+      'url': '$repo/pull/852#discussion_r102',
+      'path': 'app/lib/world/board_faces.dart',
+      'line': 4,
+      'side': 'RIGHT',
+    },
+    {
+      'id': 103,
+      'author': 'mika',
+      'body': 'Was this removed on purpose?',
+      'createdAt': ago(const Duration(hours: 3)),
+      'url': '$repo/pull/852#discussion_r103',
+      'path': 'src/client/world/boards.ts',
+      'line': null,
+      'side': 'LEFT',
+    },
+  ],
+  'checks': [
+    {'name': 'build / web', 'state': 'pass', 'url': '$repo/actions/runs/1'},
+    {'name': 'test / dart', 'state': 'pending', 'url': '$repo/actions/runs/2'},
+    {'name': 'lint', 'state': 'pass'},
+    {'name': 'deploy preview', 'state': 'skip'},
+  ],
+  'repo': {
+    'nameWithOwner': 'acme/rocket',
+    'methods': ['squash', 'merge', 'rebase'],
+  },
+  'viewer': 'office-bot',
+};
 
 Map<String, dynamic> issueDetail(int n) => {
-      'number': n,
-      'state': 'OPEN',
-      'body': sampleIssueBody,
-      'comments': [
-        comment('i1', 'ana', 'I can reproduce this on Firefox too.', 20),
-        comment('i2', 'kenji-t', 'Probably the `pong` clock sync. See #812.\n\n```ts\nconst offset = m.now - (m.at + rtt / 2);\n```', 10),
-      ],
-      'viewer': 'office-bot',
-    };
+  'number': n,
+  'state': 'OPEN',
+  'body': sampleIssueBody,
+  'comments': [
+    comment('i1', 'ana', 'I can reproduce this on Firefox too.', 20),
+    comment(
+      'i2',
+      'kenji-t',
+      'Probably the `pong` clock sync. See #812.\n\n```ts\nconst offset = m.now - (m.at + rtt / 2);\n```',
+      10,
+    ),
+  ],
+  'viewer': 'office-bot',
+};
 
 String fakeDiff() {
   final big = StringBuffer();
@@ -314,7 +496,8 @@ ${big.toString()}   "name": "agent-office"
 
 /// Answers the GitHub commands by itself, a moment later, as the server would.
 class FakeSocket extends OfficeSocket {
-  FakeSocket(this.store) : super(profile: () => (name: 'You', color: '#4f86f7', look: randomLook()), floor: () => 'main');
+  FakeSocket(this.store)
+    : super(profile: () => (name: 'You', color: '#4f86f7', look: randomLook()), floor: () => 'main');
   final Store store;
   final _out = StreamController<ServerMsg>.broadcast();
 
@@ -327,13 +510,28 @@ class FakeSocket extends OfficeSocket {
     Timer(const Duration(milliseconds: 700), () {
       switch (msg) {
         case GhMergeCmd m:
-          _out.add(GhMergedMsg(m.number, error: m.method == GhMergeMethod.rebase ? 'GraphQL: Rebase merges are not allowed on this repository (mergePullRequest)' : null));
+          _out.add(
+            GhMergedMsg(
+              m.number,
+              error: m.method == GhMergeMethod.rebase
+                  ? 'GraphQL: Rebase merges are not allowed on this repository (mergePullRequest)'
+                  : null,
+            ),
+          );
         case GhCommentCmd m:
-          _out.add(GhCommentedMsg(
-            kind: m.kind,
-            number: m.number,
-            comment: GhComment(id: 'new', author: 'office-bot', body: m.body, createdAt: DateTime.now().toUtc().toIso8601String(), url: '$repo/pull/${m.number}'),
-          ));
+          _out.add(
+            GhCommentedMsg(
+              kind: m.kind,
+              number: m.number,
+              comment: GhComment(
+                id: 'new',
+                author: 'office-bot',
+                body: m.body,
+                createdAt: DateTime.now().toUtc().toIso8601String(),
+                url: '$repo/pull/${m.number}',
+              ),
+            ),
+          );
         case GhCloseCmd m:
           _out.add(GhClosedMsg(kind: m.kind, number: m.number));
         default:
@@ -345,7 +543,7 @@ class FakeSocket extends OfficeSocket {
 
 class FakeActions implements OfficeActions {
   @override
-  void sendToWorker(String title, {String? context, String? initial}) => toast('sendToWorker: $title');
+  void sendToWorker(String title, {String? context, String? initial, int? issue}) => toast('sendToWorker: $title');
   @override
   void goToDesk(String deskId) => toast('goToDesk: $deskId');
   @override
@@ -355,7 +553,13 @@ class FakeActions implements OfficeActions {
 Store fakeStore() {
   final s = Store()
     ..floor = 'main'
-    ..project = ProjectInfo.fromJson({'name': 'rocket', 'dir': '/src/rocket', 'agentCmd': 'claude', 'defaultProvider': 'claude', 'agentProviders': ['claude', 'opencode', 'codex']})
+    ..project = ProjectInfo.fromJson({
+      'name': 'rocket',
+      'dir': '/src/rocket',
+      'agentCmd': 'claude',
+      'defaultProvider': 'claude',
+      'agentProviders': ['claude', 'opencode', 'codex'],
+    })
     ..workers = workers
     ..issues = GhState(items: issues, fetchedAt: DateTime.now().millisecondsSinceEpoch - 90000, loading: false)
     ..pulls = GhState(items: pulls, fetchedAt: DateTime.now().millisecondsSinceEpoch - 30000, loading: false)
@@ -392,24 +596,24 @@ class _PreviewAppState extends State<PreviewApp> {
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-        debugShowCheckedModeBanner: false,
-        theme: officeTheme(),
-        home: OfficeScope(
-          store: store,
-          net: net,
-          settings: Settings(),
-          actions: FakeActions(),
-          child: Scaffold(
-            body: Stack(
-              children: [
-                Positioned.fill(child: which.startsWith('face-') ? _face(which) : const ColoredBox(color: Swatch.sky)),
-                if (!which.startsWith('face-')) _Opener(which),
-                const Positioned(top: 12, left: 0, right: 0, child: Center(child: ToastLayer())),
-              ],
-            ),
-          ),
+    debugShowCheckedModeBanner: false,
+    theme: officeTheme(),
+    home: OfficeScope(
+      store: store,
+      net: net,
+      settings: Settings(),
+      actions: FakeActions(),
+      child: Scaffold(
+        body: Stack(
+          children: [
+            Positioned.fill(child: which.startsWith('face-') ? _face(which) : const ColoredBox(color: Swatch.sky)),
+            if (!which.startsWith('face-')) _Opener(which),
+            const Positioned(top: 12, left: 0, right: 0, child: Center(child: ToastLayer())),
+          ],
         ),
-      );
+      ),
+    ),
+  );
 
   Widget _face(String w) {
     if (w == 'face-issues-empty') store.issues = const GhState(items: [], fetchedAt: 1, loading: false);
@@ -420,7 +624,10 @@ class _PreviewAppState extends State<PreviewApp> {
       'face-queue' || 'face-queue-empty' => QueueBoardFace(store: store),
       _ => CorkBoardFace(store: store, kind: CorkKind.issues),
     };
-    return ColoredBox(color: const Color(0xFF444444), child: Center(child: FittedBox(child: face)));
+    return ColoredBox(
+      color: const Color(0xFF444444),
+      child: Center(child: FittedBox(child: face)),
+    );
   }
 }
 
@@ -460,14 +667,18 @@ class _OpenerState extends State<_Opener> {
         r.set(files[1], true);
         openPull(scope, pulls[0]);
       case 'markdown':
-        ModalStack.instance.show((modal) => ModalWindow(
-              modal: modal,
-              width: 900,
-              title: const Text('📝 Markdown'),
-              bodyPadding: EdgeInsets.zero,
-              body: const MarkdownView('$samplePrBody\n\n---\n\n$sampleIssueBody\n\n> [!CAUTION]\n> Careful with ~~force pushes~~.\n\n<details><summary>Logs</summary>\n\nall *green*\n</details>',
-                  itemUrl: '$repo/pull/852'),
-            ));
+        ModalStack.instance.show(
+          (modal) => ModalWindow(
+            modal: modal,
+            width: 900,
+            title: const Text('📝 Markdown'),
+            bodyPadding: EdgeInsets.zero,
+            body: const MarkdownView(
+              '$samplePrBody\n\n---\n\n$sampleIssueBody\n\n> [!CAUTION]\n> Careful with ~~force pushes~~.\n\n<details><summary>Logs</summary>\n\nall *green*\n</details>',
+              itemUrl: '$repo/pull/852',
+            ),
+          ),
+        );
       default:
         storageSet('agent-office.pr-tab', '"conversation"');
         openPull(scope, pulls[0]);

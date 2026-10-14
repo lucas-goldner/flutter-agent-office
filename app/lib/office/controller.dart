@@ -1179,7 +1179,7 @@ class OfficeController implements OfficeActions {
     if (aim.it.kind != InteractKind.issues || face == null || !identical(aim.hit.node, face.node) || uv == null) {
       return null;
     }
-    final spots = corkLayout(CorkBoardPainter.issueNumbers(store.issues, _cork.off)).spots;
+    final spots = corkLayout(CorkBoardPainter.issueNumbers(store.issues, _cork.off, store.taskForIssue)).spots;
     final n = corkNoteAt(spots, uv.x, uv.y);
     return n == null ? null : store.issues.items.where((i) => i.number == n).firstOrNull;
   }
@@ -1640,6 +1640,7 @@ class OfficeController implements OfficeActions {
     AgentProvider? provider,
     String? model,
     AgentEffort? effort,
+    int? issue,
   }) {
     net.send(
       WorkerSpawnCmd(
@@ -1649,6 +1650,7 @@ class OfficeController implements OfficeActions {
         provider: provider,
         model: model,
         effort: effort,
+        issue: issue,
       ),
     );
     // The moment notifications start to matter: ask once (it has to come from a key press or click).
@@ -1913,7 +1915,7 @@ class OfficeController implements OfficeActions {
 
   /// A prompt from the boards goes to a new worker at a free desk, or to one already at a desk.
   @override
-  void sendToWorker(String title, {String? context, String? initial}) {
+  void sendToWorker(String title, {String? context, String? initial, int? issue}) {
     final desk = _freeDesk();
     final awake = store.workers.values.where((w) => w.kind == WorkerKind.agent && !isAsleep(w.status)).toList();
     if (desk == null && awake.isEmpty) {
@@ -1932,9 +1934,17 @@ class OfficeController implements OfficeActions {
         providerOption: true,
         onSubmit: (prompt, to, worktree, provider, model, effort) {
           if (to != null) {
-            net.send(WorkerPromptCmd(to, prompt));
+            net.send(WorkerPromptCmd(to, prompt, issue: issue));
           } else if (desk != null) {
-            hire(desk, prompt: prompt, worktree: worktree, provider: provider, model: model, effort: effort);
+            hire(
+              desk,
+              prompt: prompt,
+              worktree: worktree,
+              provider: provider,
+              model: model,
+              effort: effort,
+              issue: issue,
+            );
           }
         },
       ),
@@ -2451,7 +2461,7 @@ class OfficeController implements OfficeActions {
             ],
           );
         }
-        final notes = CorkBoardPainter.issueNumbers(store.issues, _cork.off).isNotEmpty;
+        final notes = CorkBoardPainter.issueNumbers(store.issues, _cork.off, store.taskForIssue).isNotEmpty;
         return notes
             ? (
                 'notes',

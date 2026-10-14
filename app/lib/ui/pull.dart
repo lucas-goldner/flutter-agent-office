@@ -16,7 +16,9 @@ import '../interop/browser.dart';
 import '../interop/open_url.dart';
 import '../net/server.dart';
 import '../office_scope.dart';
+
 import 'package:office_shared/protocol.dart';
+
 import '../state/store.dart';
 import 'gh_logic.dart';
 import 'markdown.dart';
@@ -85,7 +87,8 @@ const _tabKey = 'agent-office.pr-tab';
 /// Followed by the issue or PR's URL: the comment you were writing there.
 const _draftKey = 'agent-office.comment:';
 
-({GhMergeMethod method, bool deleteBranch}) _mergePref(List<GhMergeMethod> methods) => mergePrefFrom(_pref(_mergeKey), methods);
+({GhMergeMethod method, bool deleteBranch}) _mergePref(List<GhMergeMethod> methods) =>
+    mergePrefFrom(_pref(_mergeKey), methods);
 
 final _reviewStore = KeyValueStore(get: storageGet, set: storageSet);
 
@@ -103,14 +106,14 @@ class LabelChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-        decoration: BoxDecoration(
-          color: parseHex(label.color),
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: Swatch.ink, width: 1.5),
-        ),
-        child: Text(label.name, style: heavy(10, color: labelIsDark(label.color) ? Colors.white : Swatch.ink)),
-      );
+    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+    decoration: BoxDecoration(
+      color: parseHex(label.color),
+      borderRadius: BorderRadius.circular(999),
+      border: Border.all(color: Swatch.ink, width: 1.5),
+    ),
+    child: Text(label.name, style: heavy(10, color: labelIsDark(label.color) ? Colors.white : Swatch.ink)),
+  );
 }
 
 class GhAvatar extends StatelessWidget {
@@ -132,7 +135,10 @@ class GhAvatar extends StatelessWidget {
         shape: BoxShape.circle,
         border: Border.all(color: Swatch.ink, width: 2),
       ),
-      child: Text(name.isEmpty ? '?' : String.fromCharCode(name.runes.first).toUpperCase(), style: heavy(12, color: Colors.white, weight: FontWeight.w900)),
+      child: Text(
+        name.isEmpty ? '?' : String.fromCharCode(name.runes.first).toUpperCase(),
+        style: heavy(12, color: Colors.white, weight: FontWeight.w900),
+      ),
     );
   }
 }
@@ -149,7 +155,10 @@ class _Link extends StatelessWidget {
   Widget build(BuildContext context) {
     Widget w = MouseRegion(
       cursor: SystemMouseCursors.click,
-      child: GestureDetector(onTap: () => openUrl(url), child: Text(text, style: style)),
+      child: GestureDetector(
+        onTap: () => openUrl(url),
+        child: Text(text, style: style),
+      ),
     );
     if (tooltip != null && tooltip!.isNotEmpty) w = Tooltip(message: tooltip!, child: w);
     return w;
@@ -162,7 +171,10 @@ Widget _when(String iso, [String? url]) {
   final style = heavy(13, color: Swatch.muted, weight: FontWeight.w700);
   return url != null && url.isNotEmpty
       ? _Link(timeAgo(iso), url, style: style, tooltip: _localTime(iso))
-      : Tooltip(message: _localTime(iso), child: Text(timeAgo(iso), style: style));
+      : Tooltip(
+          message: _localTime(iso),
+          child: Text(timeAgo(iso), style: style),
+        );
 }
 
 class _Badge extends StatelessWidget {
@@ -182,8 +194,15 @@ class _Badge extends StatelessWidget {
     };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(999), border: Border.all(color: Swatch.ink, width: 2)),
-      child: Text(text, style: heavy(11, color: fg, weight: FontWeight.w900)),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Swatch.ink, width: 2),
+      ),
+      child: Text(
+        text,
+        style: heavy(11, color: fg, weight: FontWeight.w900),
+      ),
     );
   }
 }
@@ -197,129 +216,156 @@ class _GhCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        clipBehavior: Clip.antiAlias,
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: Swatch.ink, width: 2),
-          boxShadow: const [BoxShadow(color: Swatch.ink, offset: Offset(0, 3))],
+    clipBehavior: Clip.antiAlias,
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(14),
+      border: Border.all(color: Swatch.ink, width: 2),
+      boxShadow: const [BoxShadow(color: Swatch.ink, offset: Offset(0, 3))],
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+          decoration: BoxDecoration(
+            color: switch (tone) {
+              'ok' => const Color(0xFFD8F5E3),
+              'bad' => const Color(0xFFFFE3EA),
+              _ => Swatch.paper2,
+            },
+            border: child == null ? null : const Border(bottom: BorderSide(color: Color(0x262B2D42), width: 2)),
+          ),
+          child: DefaultTextStyle(
+            style: heavy(13, color: Swatch.muted, weight: FontWeight.w700),
+            child: Row(children: _gap(header, 8)),
+          ),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-              decoration: BoxDecoration(
-                color: switch (tone) { 'ok' => const Color(0xFFD8F5E3), 'bad' => const Color(0xFFFFE3EA), _ => Swatch.paper2 },
-                border: child == null ? null : const Border(bottom: BorderSide(color: Color(0x262B2D42), width: 2)),
-              ),
-              child: DefaultTextStyle(
-                style: heavy(13, color: Swatch.muted, weight: FontWeight.w700),
-                child: Row(children: _gap(header, 8)),
-              ),
-            ),
-            ?child,
-          ],
-        ),
-      );
+        ?child,
+      ],
+    ),
+  );
 }
 
 List<Widget> _gap(List<Widget> ws, double g) => [
-      for (var i = 0; i < ws.length; i++) ...[if (i > 0 && ws[i] is! Spacer) SizedBox(width: g), ws[i]],
-    ];
+  for (var i = 0; i < ws.length; i++) ...[if (i > 0 && ws[i] is! Spacer) SizedBox(width: g), ws[i]],
+];
 
 Widget _commentCard(GhComment c, String itemUrl, String verb, [(String, String)? badge]) => _GhCard(
-      tone: badge?.$2 ?? '',
-      header: [
-        GhAvatar(c.author),
-        Text(c.author, style: heavy(13, weight: FontWeight.w900)),
-        if (verb.isNotEmpty) Text(verb),
-        _when(c.createdAt, c.url),
-        if (badge != null) _Badge(badge.$1, badge.$2),
-      ],
-      child: c.body.trim().isNotEmpty || badge == null ? MarkdownView(c.body, itemUrl: itemUrl) : null,
-    );
+  tone: badge?.$2 ?? '',
+  header: [
+    GhAvatar(c.author),
+    Text(c.author, style: heavy(13, weight: FontWeight.w900)),
+    if (verb.isNotEmpty) Text(verb),
+    _when(c.createdAt, c.url),
+    if (badge != null) _Badge(badge.$1, badge.$2),
+  ],
+  child: c.body.trim().isNotEmpty || badge == null ? MarkdownView(c.body, itemUrl: itemUrl) : null,
+);
 
 class _Spinner extends StatelessWidget {
   const _Spinner();
   @override
   Widget build(BuildContext context) => const SizedBox(
-        width: 16,
-        height: 16,
-        child: CircularProgressIndicator(strokeWidth: 3, color: Swatch.ink, backgroundColor: Color(0x332B2D42)),
-      );
+    width: 16,
+    height: 16,
+    child: CircularProgressIndicator(strokeWidth: 3, color: Swatch.ink, backgroundColor: Color(0x332B2D42)),
+  );
 }
 
 Widget _spinnerRow(String text) => Padding(
-      padding: const EdgeInsets.all(18),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [const _Spinner(), const SizedBox(width: 10), Text(text, style: heavy(14, color: Swatch.muted))],
-      ),
-    );
+  padding: const EdgeInsets.all(18),
+  child: Row(
+    mainAxisAlignment: MainAxisAlignment.center,
+    children: [
+      const _Spinner(),
+      const SizedBox(width: 10),
+      Text(text, style: heavy(14, color: Swatch.muted)),
+    ],
+  ),
+);
 
 Widget _errorBox(String text, [VoidCallback? retry]) => Center(
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 16),
-        constraints: const BoxConstraints(maxWidth: 560),
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-        decoration: BoxDecoration(color: const Color(0xFFFFD6E0), borderRadius: BorderRadius.circular(14), border: Border.all(color: Swatch.ink, width: 3)),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text("Couldn't load from GitHub: $text", style: heavy(14), textAlign: TextAlign.center),
-            if (retry != null) ...[const SizedBox(height: 10), OfficeButton(label: 'Try again', onPressed: retry)],
-          ],
-        ),
-      ),
-    );
+  child: Container(
+    margin: const EdgeInsets.symmetric(vertical: 16),
+    constraints: const BoxConstraints(maxWidth: 560),
+    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+    decoration: BoxDecoration(
+      color: const Color(0xFFFFD6E0),
+      borderRadius: BorderRadius.circular(14),
+      border: Border.all(color: Swatch.ink, width: 3),
+    ),
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text("Couldn't load from GitHub: $text", style: heavy(14), textAlign: TextAlign.center),
+        if (retry != null) ...[const SizedBox(height: 10), OfficeButton(label: 'Try again', onPressed: retry)],
+      ],
+    ),
+  ),
+);
 
 Widget _quiet(String text) => Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Text(text, textAlign: TextAlign.center, style: heavy(14, color: Swatch.muted, weight: FontWeight.w700)),
-    );
+  padding: const EdgeInsets.symmetric(vertical: 4),
+  child: Text(
+    text,
+    textAlign: TextAlign.center,
+    style: heavy(14, color: Swatch.muted, weight: FontWeight.w700),
+  ),
+);
 
 Widget _checksList(List<GhCheck> checks) => ConstrainedBox(
-      constraints: const BoxConstraints(maxHeight: 190),
-      child: SingleChildScrollView(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            for (final c in sortedChecks(checks))
-              Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: Row(
-                  children: [
-                    Semantics(label: c.state.wire, child: Text(checkStateIcon[c.state]!, style: heavy(13))),
-                    const SizedBox(width: 8),
-                    Flexible(
-                      child: c.url != null
-                          ? _Link(c.name, c.url!, style: heavy(13, weight: FontWeight.w700))
-                          : Text(c.name, style: heavy(13, weight: FontWeight.w700)),
-                    ),
-                  ],
+  constraints: const BoxConstraints(maxHeight: 190),
+  child: SingleChildScrollView(
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (final c in sortedChecks(checks))
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Row(
+              children: [
+                Semantics(
+                  label: c.state.wire,
+                  child: Text(checkStateIcon[c.state]!, style: heavy(13)),
                 ),
-              ),
-          ],
-        ),
-      ),
-    );
+                const SizedBox(width: 8),
+                Flexible(
+                  child: c.url != null
+                      ? _Link(c.name, c.url!, style: heavy(13, weight: FontWeight.w700))
+                      : Text(c.name, style: heavy(13, weight: FontWeight.w700)),
+                ),
+              ],
+            ),
+          ),
+      ],
+    ),
+  ),
+);
 
 Color _toneBg(Tone t) => switch (t) {
-      Tone.ok => const Color(0xFFD8F5E3),
-      Tone.warn => const Color(0xFFFFF3C4),
-      Tone.bad => const Color(0xFFFFD6E0),
-      Tone.muted => const Color(0xFFEEF0F2),
-    };
+  Tone.ok => const Color(0xFFD8F5E3),
+  Tone.warn => const Color(0xFFFFF3C4),
+  Tone.bad => const Color(0xFFFFD6E0),
+  Tone.muted => const Color(0xFFEEF0F2),
+};
 
 Widget _status(String icon, String text, Tone tone) => Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-      decoration: BoxDecoration(color: _toneBg(tone), borderRadius: BorderRadius.circular(10), border: Border.all(color: Swatch.ink, width: 2)),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [Text(icon, style: heavy(14)), const SizedBox(width: 8), Expanded(child: Text(text, style: heavy(14).copyWith(height: 1.4)))],
-      ),
-    );
+  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+  decoration: BoxDecoration(
+    color: _toneBg(tone),
+    borderRadius: BorderRadius.circular(10),
+    border: Border.all(color: Swatch.ink, width: 2),
+  ),
+  child: Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(icon, style: heavy(14)),
+      const SizedBox(width: 8),
+      Expanded(child: Text(text, style: heavy(14).copyWith(height: 1.4))),
+    ],
+  ),
+);
 
 /// The result line under a dialog: a spinner while it works, the error when it didn't.
 Widget _result(String? busyText, String? error) {
@@ -327,15 +373,29 @@ Widget _result(String? busyText, String? error) {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-      decoration: BoxDecoration(color: const Color(0xFFFFD6E0), borderRadius: BorderRadius.circular(10), border: Border.all(color: Swatch.ink, width: 2)),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFD6E0),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Swatch.ink, width: 2),
+      ),
       child: SelectableText(error, style: heavy(13, weight: FontWeight.w700)),
     );
   }
   if (busyText == null) return const SizedBox.shrink();
   return Container(
     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-    decoration: BoxDecoration(color: const Color(0xFFE0F2FE), borderRadius: BorderRadius.circular(10), border: Border.all(color: Swatch.ink, width: 2)),
-    child: Row(children: [const _Spinner(), const SizedBox(width: 8), Expanded(child: Text(busyText, style: heavy(14)))]),
+    decoration: BoxDecoration(
+      color: const Color(0xFFE0F2FE),
+      borderRadius: BorderRadius.circular(10),
+      border: Border.all(color: Swatch.ink, width: 2),
+    ),
+    child: Row(
+      children: [
+        const _Spinner(),
+        const SizedBox(width: 8),
+        Expanded(child: Text(busyText, style: heavy(14))),
+      ],
+    ),
   );
 }
 
@@ -358,7 +418,9 @@ class _Check extends StatelessWidget {
           children: [
             _TickBox(value, color: Swatch.accent),
             const SizedBox(width: 8),
-            Flexible(child: Text(label, style: heavy(14, weight: FontWeight.w700))),
+            Flexible(
+              child: Text(label, style: heavy(14, weight: FontWeight.w700)),
+            ),
           ],
         ),
       ),
@@ -375,23 +437,30 @@ class _TickBox extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        width: 16,
-        height: 16,
-        decoration: BoxDecoration(
-          color: on ? color : Colors.white,
-          borderRadius: BorderRadius.circular(3),
-          border: Border.all(color: on ? color : const Color(0xFF767676), width: 1.5),
-        ),
-        child: on ? const Icon(Icons.check, size: 12, color: Colors.white) : null,
-      );
+    width: 16,
+    height: 16,
+    decoration: BoxDecoration(
+      color: on ? color : Colors.white,
+      borderRadius: BorderRadius.circular(3),
+      border: Border.all(color: on ? color : const Color(0xFF767676), width: 1.5),
+    ),
+    child: on ? const Icon(Icons.check, size: 12, color: Colors.white) : null,
+  );
 }
 
 /// Buttons in a row where one is picked (`.seg`).
-Widget _seg<T>(List<T> options, T picked, String Function(T) label, ValueChanged<T> onPick, {bool dense = true}) => Wrap(
+Widget _seg<T>(List<T> options, T picked, String Function(T) label, ValueChanged<T> onPick, {bool dense = true}) =>
+    Wrap(
       spacing: dense ? 4 : 8,
       runSpacing: 6,
       children: [
-        for (final o in options) OfficeButton(label: label(o), kind: o == picked ? BtnKind.on : BtnKind.plain, dense: dense, onPressed: () => onPick(o)),
+        for (final o in options)
+          OfficeButton(
+            label: label(o),
+            kind: o == picked ? BtnKind.on : BtnKind.plain,
+            dense: dense,
+            onPressed: () => onPick(o),
+          ),
       ],
     );
 
@@ -400,18 +469,28 @@ Widget _small(String text) => Text(text, style: mono(12, color: Swatch.muted));
 Widget _plusMinus(int add, int del, {bool binary = false, String binWord = 'bin'}) {
   final s = mono(12, weight: FontWeight.w800);
   if (binary) return Text(binWord, style: s.copyWith(color: Swatch.muted));
-  return Text.rich(TextSpan(children: [
-    TextSpan(text: '+$add', style: s.copyWith(color: _addFg)),
-    const TextSpan(text: ' '),
-    TextSpan(text: '−$del', style: s.copyWith(color: _delFg)),
-  ]));
+  return Text.rich(
+    TextSpan(
+      children: [
+        TextSpan(
+          text: '+$add',
+          style: s.copyWith(color: _addFg),
+        ),
+        const TextSpan(text: ' '),
+        TextSpan(
+          text: '−$del',
+          style: s.copyWith(color: _delFg),
+        ),
+      ],
+    ),
+  );
 }
 
 Widget _code(String text) => Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-      decoration: BoxDecoration(color: const Color(0xFFE0F2FE), borderRadius: BorderRadius.circular(6)),
-      child: Text(text, style: mono(12, color: const Color(0xFF1D4F91))),
-    );
+  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+  decoration: BoxDecoration(color: const Color(0xFFE0F2FE), borderRadius: BorderRadius.circular(6)),
+  child: Text(text, style: mono(12, color: const Color(0xFF1D4F91))),
+);
 
 /// The .pill for an issue or PR, by its CSS class.
 Widget _pill(String word, String cls) {
@@ -424,32 +503,54 @@ Widget _pill(String word, String cls) {
   };
   return Container(
     padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-    decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(999), border: Border.all(color: Swatch.ink, width: 2)),
-    child: Text(word, style: heavy(12, color: fg, weight: FontWeight.w900)),
+    decoration: BoxDecoration(
+      color: bg,
+      borderRadius: BorderRadius.circular(999),
+      border: Border.all(color: Swatch.ink, width: 2),
+    ),
+    child: Text(
+      word,
+      style: heavy(12, color: fg, weight: FontWeight.w900),
+    ),
   );
 }
 
 Widget _title(Widget pill, String text) => Row(
-      children: [
-        pill,
-        const SizedBox(width: 10),
-        Flexible(child: Tooltip(message: text, child: Text(text, overflow: TextOverflow.ellipsis))),
-      ],
-    );
+  children: [
+    pill,
+    const SizedBox(width: 10),
+    Flexible(
+      child: Tooltip(
+        message: text,
+        child: Text(text, overflow: TextOverflow.ellipsis),
+      ),
+    ),
+  ],
+);
 
 /// A multi-line text box in the office's style.
-Widget _textArea(TextEditingController c, {FocusNode? focus, String? hint, int minLines = 4, bool readOnly = false, ValueChanged<String>? onChanged, bool autofocus = false}) =>
-    TextField(
-      controller: c,
-      focusNode: focus,
-      minLines: minLines,
-      maxLines: 12,
-      readOnly: readOnly,
-      autofocus: autofocus,
-      onChanged: onChanged,
-      style: heavy(15, weight: FontWeight.w500),
-      decoration: InputDecoration(hintText: hint, hintStyle: heavy(15, color: Swatch.muted, weight: FontWeight.w500)),
-    );
+Widget _textArea(
+  TextEditingController c, {
+  FocusNode? focus,
+  String? hint,
+  int minLines = 4,
+  bool readOnly = false,
+  ValueChanged<String>? onChanged,
+  bool autofocus = false,
+}) => TextField(
+  controller: c,
+  focusNode: focus,
+  minLines: minLines,
+  maxLines: 12,
+  readOnly: readOnly,
+  autofocus: autofocus,
+  onChanged: onChanged,
+  style: heavy(15, weight: FontWeight.w500),
+  decoration: InputDecoration(
+    hintText: hint,
+    hintStyle: heavy(15, color: Swatch.muted, weight: FontWeight.w500),
+  ),
+);
 
 // ---- Comment box --------------------------------------------------------------------------------
 
@@ -457,7 +558,14 @@ Widget _textArea(TextEditingController c, {FocusNode? focus, String? hint, int m
 /// as that account rather than as you. The draft is kept per item until it is posted, so Esc or a
 /// closed window doesn't lose it.
 class _CommentBox extends StatefulWidget {
-  const _CommentBox({required this.kind, required this.number, required this.itemUrl, required this.net, required this.onPosted, this.viewer = ''});
+  const _CommentBox({
+    required this.kind,
+    required this.number,
+    required this.itemUrl,
+    required this.net,
+    required this.onPosted,
+    this.viewer = '',
+  });
   final GhKind kind;
   final int number;
   final String itemUrl;
@@ -547,7 +655,9 @@ class _CommentBoxState extends State<_CommentBox> {
     _timer = Timer(const Duration(seconds: 45), () {
       _settle();
       if (mounted) {
-        setState(() => _error = 'No answer from the office. Reload the conversation to see whether the comment went through before posting it again.');
+        setState(
+          () => _error = 'No answer from the office. Reload the conversation to see whether the comment went through before posting it again.',
+        );
       }
     });
     widget.net.send(GhCommentCmd(kind: widget.kind, number: widget.number, body: body));
@@ -555,7 +665,9 @@ class _CommentBoxState extends State<_CommentBox> {
 
   @override
   Widget build(BuildContext context) {
-    final who = widget.viewer.isNotEmpty ? 'Posts to GitHub as @${widget.viewer}' : "Posts to GitHub as the office's gh account";
+    final who = widget.viewer.isNotEmpty
+        ? 'Posts to GitHub as @${widget.viewer}'
+        : "Posts to GitHub as the office's gh account";
     final canPost = !_busy && _ta.text.trim().isNotEmpty;
     return _GhCard(
       header: [
@@ -602,9 +714,18 @@ class _CommentBoxState extends State<_CommentBox> {
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
             child: Row(
               children: [
-                Expanded(child: Text(who, style: heavy(12, color: Swatch.muted, weight: FontWeight.w700))),
+                Expanded(
+                  child: Text(
+                    who,
+                    style: heavy(12, color: Swatch.muted, weight: FontWeight.w700),
+                  ),
+                ),
                 const SizedBox(width: 10),
-                OfficeButton(label: _busy ? 'Posting…' : '💬 Comment', kind: BtnKind.primary, onPressed: canPost ? _submit : null),
+                OfficeButton(
+                  label: _busy ? 'Posting…' : '💬 Comment',
+                  kind: BtnKind.primary,
+                  onPressed: canPost ? _submit : null,
+                ),
               ],
             ),
           ),
@@ -621,8 +742,10 @@ class BoardActions {
   BoardActions(this.scope);
   final OfficeScope scope;
 
-  /// Start a worker on a ready-made prompt (shown for editing first).
-  void assign(String prompt, String title) => scope.actions.sendToWorker('🤖 $title', initial: prompt);
+  /// Start a worker on a ready-made prompt (shown for editing first). With [issue], the worker takes that GitHub
+  /// issue, which moves to In progress.
+  void assign(String prompt, String title, [int? issue]) =>
+      scope.actions.sendToWorker('🤖 $title', initial: prompt, issue: issue);
 
   /// Your own prompt about an issue or PR; `context` goes first so the worker knows which.
   void ask(String context, String title) => scope.actions.sendToWorker('✍️ $title', context: context);
@@ -643,11 +766,21 @@ OfficeSocketLike _sock(OfficeScope s) => (send: s.net.send, messages: s.net.mess
 // ---- Merge dialog -------------------------------------------------------------------------------
 
 void _openMerge(OfficeScope scope, GhPull it, GhPullDetail d, VoidCallback handToWorker, VoidCallback onMerged) {
-  ModalStack.instance.show((modal) => _MergeDialog(modal: modal, net: _sock(scope), it: it, d: d, handToWorker: handToWorker, onMerged: onMerged));
+  ModalStack.instance.show(
+    (modal) =>
+        _MergeDialog(modal: modal, net: _sock(scope), it: it, d: d, handToWorker: handToWorker, onMerged: onMerged),
+  );
 }
 
 class _MergeDialog extends StatefulWidget {
-  const _MergeDialog({required this.modal, required this.net, required this.it, required this.d, required this.handToWorker, required this.onMerged});
+  const _MergeDialog({
+    required this.modal,
+    required this.net,
+    required this.it,
+    required this.d,
+    required this.handToWorker,
+    required this.onMerged,
+  });
   final ModalHandle modal;
   final OfficeSocketLike net;
   final GhPull it;
@@ -701,7 +834,9 @@ class _MergeDialogState extends State<_MergeDialog> {
       widget.modal.close();
       widget.onMerged();
     });
-    widget.net.send(GhMergeCmd(number: widget.it.number, method: method, deleteBranch: deleteBranch, auto: auto && st.auto));
+    widget.net.send(
+      GhMergeCmd(number: widget.it.number, method: method, deleteBranch: deleteBranch, auto: auto && st.auto),
+    );
   }
 
   void _worker() {
@@ -723,7 +858,11 @@ class _MergeDialogState extends State<_MergeDialog> {
             tooltip: 'A new worker merges the base in, resolves the conflicts, then merges it the way picked above',
             onPressed: _worker,
           )
-        : OfficeButton(label: '🤖 Hand to a worker', tooltip: 'A worker fixes whatever is in the way, then merges', onPressed: _worker);
+        : OfficeButton(
+            label: '🤖 Hand to a worker',
+            tooltip: 'A worker fixes whatever is in the way, then merges',
+            onPressed: _worker,
+          );
     final go = OfficeButton(
       label: auto ? '⏱ Merge when ready' : '🔀 ${methodLabel[method]}',
       kind: BtnKind.primary,
@@ -739,11 +878,19 @@ class _MergeDialogState extends State<_MergeDialog> {
           _mergeTitle(it.title, '${it.headRefName} → ${it.baseRefName}'),
           _status(st.icon, st.text, st.tone),
           if (d.checks.isNotEmpty) _checksList(d.checks),
-          Padding(padding: const EdgeInsets.only(top: 4), child: Text('How', style: heavy(14))),
-          _seg(methods, method, (m) => methodLabel[m]!, (m) => setState(() {
-                method = m;
-                _save();
-              })),
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text('How', style: heavy(14)),
+          ),
+          _seg(
+            methods,
+            method,
+            (m) => methodLabel[m]!,
+            (m) => setState(() {
+              method = m;
+              _save();
+            }),
+          ),
           _Check(
             value: deleteBranch,
             label: 'Delete ${it.headRefName} after merging',
@@ -759,7 +906,8 @@ class _MergeDialogState extends State<_MergeDialog> {
               tooltip: 'gh pr merge --auto (the repo must allow auto-merge)',
               onChanged: (v) => setState(() => auto = v),
             ),
-          if (busy || error != null) _result(busy ? (auto && st.auto ? 'Asking GitHub to merge it when ready…' : 'Merging…') : null, error),
+          if (busy || error != null)
+            _result(busy ? (auto && st.auto ? 'Asking GitHub to merge it when ready…' : 'Merging…') : null, error),
         ], 10),
       ),
       footer: Row(
@@ -776,16 +924,16 @@ class _MergeDialogState extends State<_MergeDialog> {
 }
 
 List<Widget> _vgap(List<Widget> ws, double g) => [
-      for (var i = 0; i < ws.length; i++) ...[if (i > 0) SizedBox(height: g), ws[i]],
-    ];
+  for (var i = 0; i < ws.length; i++) ...[if (i > 0) SizedBox(height: g), ws[i]],
+];
 
 Widget _mergeTitle(String title, String? refs) => Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(title, style: heavy(16, weight: FontWeight.w900)),
-        if (refs != null) Padding(padding: const EdgeInsets.only(top: 2), child: _small(refs)),
-      ],
-    );
+  crossAxisAlignment: CrossAxisAlignment.start,
+  children: [
+    Text(title, style: heavy(16, weight: FontWeight.w900)),
+    if (refs != null) Padding(padding: const EdgeInsets.only(top: 2), child: _small(refs)),
+  ],
+);
 
 // ---- Close dialog -------------------------------------------------------------------------------
 
@@ -795,7 +943,16 @@ const _reasonLabel = {GhCloseReason.completed: '✅ Completed', GhCloseReason.no
 void _openClose(OfficeScope scope, GhKind kind, int number, String title, GhPull? pull, VoidCallback onClosed) {
   final w = pull == null ? null : workerForPull(scope.store.workers.values, pull);
   ModalStack.instance.show(
-    (modal) => _CloseDialog(modal: modal, net: _sock(scope), kind: kind, number: number, title: title, pull: pull, worker: w, onClosed: onClosed),
+    (modal) => _CloseDialog(
+      modal: modal,
+      net: _sock(scope),
+      kind: kind,
+      number: number,
+      title: title,
+      pull: pull,
+      worker: w,
+      onClosed: onClosed,
+    ),
   );
 }
 
@@ -858,13 +1015,15 @@ class _CloseDialogState extends State<_CloseDialog> {
       widget.onClosed();
     });
     final text = _comment.text.trim();
-    widget.net.send(GhCloseCmd(
-      kind: widget.kind,
-      number: widget.number,
-      comment: text.isEmpty ? null : text,
-      reason: widget.pull != null ? null : reason,
-      deleteBranch: widget.pull != null && del,
-    ));
+    widget.net.send(
+      GhCloseCmd(
+        kind: widget.kind,
+        number: widget.number,
+        comment: text.isEmpty ? null : text,
+        reason: widget.pull != null ? null : reason,
+        deleteBranch: widget.pull != null && del,
+      ),
+    );
   }
 
   @override
@@ -880,14 +1039,24 @@ class _CloseDialogState extends State<_CloseDialog> {
         children: _vgap([
           _mergeTitle(widget.title, pull == null ? null : '${pull.headRefName} → ${pull.baseRefName}'),
           if (pull != null)
-            _status('ℹ️', "It won't be merged, and can be reopened on GitHub later.${w != null ? ' ${w.name} is still at a desk working on its branch.' : ''}", Tone.muted)
+            _status(
+              'ℹ️',
+              "It won't be merged, and can be reopened on GitHub later.${w != null ? ' ${w.name} is still at a desk working on its branch.' : ''}",
+              Tone.muted,
+            )
           else
-            Padding(padding: const EdgeInsets.only(top: 4), child: Text('Why', style: heavy(14))),
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text('Why', style: heavy(14)),
+            ),
           if (pull != null)
             _Check(value: del, label: 'Delete ${pull.headRefName} too', onChanged: (v) => setState(() => del = v))
           else
             _seg(GhCloseReason.values, reason, (r) => _reasonLabel[r]!, (r) => setState(() => reason = r)),
-          Semantics(label: 'Closing comment', child: _textArea(_comment, hint: 'Leave a comment (optional)', autofocus: true)),
+          Semantics(
+            label: 'Closing comment',
+            child: _textArea(_comment, hint: 'Leave a comment (optional)', autofocus: true),
+          ),
           if (busy || error != null) _result(busy ? 'Closing the $noun…' : null, error),
         ], 10),
       ),
@@ -897,7 +1066,9 @@ class _CloseDialogState extends State<_CloseDialog> {
           OfficeButton(label: 'Cancel', onPressed: widget.modal.close),
           const SizedBox(width: 8),
           OfficeButton(
-            label: pull != null ? '🚫 Close pull request' : '${reason == GhCloseReason.completed ? '✔️' : '🚫'} Close as ${reason.wire}',
+            label: pull != null
+                ? '🚫 Close pull request'
+                : '${reason == GhCloseReason.completed ? '✔️' : '🚫'} Close as ${reason.wire}',
             kind: BtnKind.danger,
             onPressed: busy ? null : _go,
           ),
@@ -911,7 +1082,15 @@ class _CloseDialogState extends State<_CloseDialog> {
 
 /// Picks an issue's or PR's labels from the repo's own, like GitHub's sidebar: tick them on and off,
 /// then save, and the office's gh account adds and takes off the difference.
-void openLabels(OfficeScope scope, GhKind kind, int number, String title, String url, List<GhLabel> labels, {ValueChanged<List<GhLabel>>? onSaved}) {
+void openLabels(
+  OfficeScope scope,
+  GhKind kind,
+  int number,
+  String title,
+  String url,
+  List<GhLabel> labels, {
+  ValueChanged<List<GhLabel>>? onSaved,
+}) {
   ModalStack.instance.show(
     (modal) => _LabelDialog(
       modal: modal,
@@ -931,7 +1110,10 @@ void openLabels(OfficeScope scope, GhKind kind, int number, String title, String
 Future<List<GhLabel>> _repoLabels(Store store) async {
   final j = jsonDecode(await GhApi.getText(onFloor(store, '/api/gh/labels')));
   if (j is! List) throw GhApiError('No labels came back');
-  return [for (final l in j) if (l is Map<String, dynamic>) GhLabel.fromJson(l)];
+  return [
+    for (final l in j)
+      if (l is Map<String, dynamic>) GhLabel.fromJson(l),
+  ];
 }
 
 class _LabelDialog extends StatefulWidget {
@@ -996,11 +1178,13 @@ class _LabelDialogState extends State<_LabelDialog> {
       repo = null;
       rows = labelRows(widget.labels, null);
     });
-    _repoLabels(widget.store).then((l) {
-      if (mounted) setState(() => rows = labelRows(widget.labels, repo = l));
-    }).catchError((Object err) {
-      if (mounted) setState(() => error = '$err');
-    });
+    _repoLabels(widget.store)
+        .then((l) {
+          if (mounted) setState(() => rows = labelRows(widget.labels, repo = l));
+        })
+        .catchError((Object err) {
+          if (mounted) setState(() => error = '$err');
+        });
   }
 
   void _settle() {
@@ -1031,7 +1215,12 @@ class _LabelDialogState extends State<_LabelDialog> {
     // The office drops messages while it's disconnected, and then no answer comes.
     _timer = Timer(const Duration(seconds: 45), () {
       _settle();
-      if (mounted) setState(() => result = 'No answer from the office. Look at the board to see whether the labels changed before saving again.');
+      if (mounted) {
+        setState(
+          () => result =
+              'No answer from the office. Look at the board to see whether the labels changed before saving again.',
+        );
+      }
     });
     widget.net.send(GhLabelsCmd(kind: widget.kind, number: widget.number, add: c.add, remove: c.remove));
   }
@@ -1077,11 +1266,16 @@ class _LabelDialogState extends State<_LabelDialog> {
             Container(
               constraints: BoxConstraints(maxHeight: math.min(420, MediaQuery.sizeOf(context).height * 0.5)),
               padding: const EdgeInsets.all(4),
-              decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: Swatch.ink, width: 3)),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Swatch.ink, width: 3),
+              ),
               child: ListView(
                 shrinkWrap: true,
                 children: [
-                  for (final l in shown) _LabelRow(label: l, on: on.contains(l.name), enabled: !busy, onTap: () => _toggle(l.name)),
+                  for (final l in shown)
+                    _LabelRow(label: l, on: on.contains(l.name), enabled: !busy, onTap: () => _toggle(l.name)),
                   if (error.isNotEmpty)
                     _errorBox(error, _load)
                   else if (repo == null)
@@ -1092,7 +1286,10 @@ class _LabelDialogState extends State<_LabelDialog> {
                       child: Wrap(
                         alignment: WrapAlignment.center,
                         children: [
-                          Text(q.isNotEmpty ? 'No labels match “$q”. ' : 'This repository has no labels yet. ', style: heavy(14, color: Swatch.muted, weight: FontWeight.w700)),
+                          Text(
+                            q.isNotEmpty ? 'No labels match “$q”. ' : 'This repository has no labels yet. ',
+                            style: heavy(14, color: Swatch.muted, weight: FontWeight.w700),
+                          ),
                           _Link('Make one on GitHub ↗', manage, style: heavy(14, color: _blueLink)),
                         ],
                       ),
@@ -1106,7 +1303,12 @@ class _LabelDialogState extends State<_LabelDialog> {
         footer: Row(
           children: [
             Expanded(
-              child: Text(labelSummary(had, on), maxLines: 1, overflow: TextOverflow.ellipsis, style: heavy(13, weight: FontWeight.w700)),
+              child: Text(
+                labelSummary(had, on),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: heavy(13, weight: FontWeight.w700),
+              ),
             ),
             const SizedBox(width: 8),
             OfficeButton(label: 'Cancel', onPressed: widget.modal.close),
@@ -1147,11 +1349,20 @@ class _LabelRow extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(children: [_TickBox(on, color: Swatch.accent), const SizedBox(width: 8), Flexible(child: _BigLabel(label))]),
+              Row(
+                children: [
+                  _TickBox(on, color: Swatch.accent),
+                  const SizedBox(width: 8),
+                  Flexible(child: _BigLabel(label)),
+                ],
+              ),
               if (d != null && d.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(left: 24, top: 3),
-                  child: Text(d, style: heavy(12, color: Swatch.muted, weight: FontWeight.w600)),
+                  child: Text(
+                    d,
+                    style: heavy(12, color: Swatch.muted, weight: FontWeight.w600),
+                  ),
                 ),
             ],
           ),
@@ -1168,10 +1379,14 @@ class _BigLabel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
-        decoration: BoxDecoration(color: parseHex(label.color), borderRadius: BorderRadius.circular(999), border: Border.all(color: Swatch.ink, width: 1.5)),
-        child: Text(label.name, style: heavy(12, color: labelIsDark(label.color) ? Colors.white : Swatch.ink)),
-      );
+    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
+    decoration: BoxDecoration(
+      color: parseHex(label.color),
+      borderRadius: BorderRadius.circular(999),
+      border: Border.all(color: Swatch.ink, width: 1.5),
+    ),
+    child: Text(label.name, style: heavy(12, color: labelIsDark(label.color) ? Colors.white : Swatch.ink)),
+  );
 }
 
 /// The button after an issue's or PR's labels that opens the label picker.
@@ -1182,16 +1397,22 @@ class _LabelButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Semantics(
-        label: 'Change the labels',
-        child: OfficeButton(label: has ? '🏷️ Edit' : '🏷️ Add labels', dense: true, tooltip: 'Change the labels', onPressed: onPressed),
-      );
+    label: 'Change the labels',
+    child: OfficeButton(
+      label: has ? '🏷️ Edit' : '🏷️ Add labels',
+      dense: true,
+      tooltip: 'Change the labels',
+      onPressed: onPressed,
+    ),
+  );
 }
 
 // ---- The PR window ------------------------------------------------------------------------------
 
 /// Opens a pull request's window, on the tab you used last.
 ModalHandle openPull(OfficeScope scope, GhPull first) =>
-    ModalStack.instance.show((modal) => _PullWindow(modal: modal, scope: scope, first: first))..doing = '🔀 reading PR #${first.number}';
+    ModalStack.instance.show((modal) => _PullWindow(modal: modal, scope: scope, first: first))
+      ..doing = '🔀 reading PR #${first.number}';
 
 class _Section {
   _Section({required this.big});
@@ -1268,27 +1489,30 @@ class _PullWindowState extends State<_PullWindow> {
     setState(() => it = d != null ? _withState(fresh, fresh.state == 'OPEN' ? d.state : fresh.state) : fresh);
   }
 
-  static GhPull _withLabels(GhPull p, List<GhLabel> labels) => GhPull.fromJson({...p.toJson(), 'labels': [for (final l in labels) l.toJson()]});
+  static GhPull _withLabels(GhPull p, List<GhLabel> labels) => GhPull.fromJson({
+    ...p.toJson(),
+    'labels': [for (final l in labels) l.toJson()],
+  });
 
   static GhPull _withState(GhPull p, String state, {bool? isDraft, String? reviewDecision}) => GhPull(
-        number: p.number,
-        title: p.title,
-        state: state,
-        isDraft: isDraft ?? p.isDraft,
-        url: p.url,
-        author: p.author,
-        labels: p.labels,
-        reviewDecision: reviewDecision ?? p.reviewDecision,
-        headRefName: p.headRefName,
-        baseRefName: p.baseRefName,
-        createdAt: p.createdAt,
-        updatedAt: p.updatedAt,
-        additions: p.additions,
-        deletions: p.deletions,
-        checks: p.checks,
-        body: p.body,
-        closes: p.closes,
-      );
+    number: p.number,
+    title: p.title,
+    state: state,
+    isDraft: isDraft ?? p.isDraft,
+    url: p.url,
+    author: p.author,
+    labels: p.labels,
+    reviewDecision: reviewDecision ?? p.reviewDecision,
+    headRefName: p.headRefName,
+    baseRefName: p.baseRefName,
+    createdAt: p.createdAt,
+    updatedAt: p.updatedAt,
+    additions: p.additions,
+    deletions: p.deletions,
+    checks: p.checks,
+    body: p.body,
+    closes: p.closes,
+  );
 
   // --- Loading
   void _loadAll() {
@@ -1297,27 +1521,31 @@ class _PullWindowState extends State<_PullWindow> {
       detailError = '';
       diffError = '';
     });
-    GhApi.getJson(onFloor(store, '/api/gh/pull?number=${it.number}')).then((j) {
-      if (g != _generation || !mounted) return;
-      final d = GhPullDetail.fromJson(j);
-      setState(() {
-        detail = d;
-        it = _withState(it, d.state, isDraft: d.isDraft, reviewDecision: d.reviewDecision);
-        // Line comments go into the diff, so draw it again with them.
-        if (files != null) _setupFiles();
-      });
-    }).catchError((Object err) {
-      if (g == _generation && mounted) setState(() => detailError = '$err');
-    });
-    GhApi.getText(onFloor(store, '/api/gh/pull/diff?number=${it.number}')).then((text) {
-      if (g != _generation || !mounted) return;
-      setState(() {
-        files = parseDiff(text);
-        _setupFiles();
-      });
-    }).catchError((Object err) {
-      if (g == _generation && mounted) setState(() => diffError = '$err');
-    });
+    GhApi.getJson(onFloor(store, '/api/gh/pull?number=${it.number}'))
+        .then((j) {
+          if (g != _generation || !mounted) return;
+          final d = GhPullDetail.fromJson(j);
+          setState(() {
+            detail = d;
+            it = _withState(it, d.state, isDraft: d.isDraft, reviewDecision: d.reviewDecision);
+            // Line comments go into the diff, so draw it again with them.
+            if (files != null) _setupFiles();
+          });
+        })
+        .catchError((Object err) {
+          if (g == _generation && mounted) setState(() => detailError = '$err');
+        });
+    GhApi.getText(onFloor(store, '/api/gh/pull/diff?number=${it.number}'))
+        .then((text) {
+          if (g != _generation || !mounted) return;
+          setState(() {
+            files = parseDiff(text);
+            _setupFiles();
+          });
+        })
+        .catchError((Object err) {
+          if (g == _generation && mounted) setState(() => diffError = '$err');
+        });
   }
 
   void _reload() {
@@ -1376,7 +1604,12 @@ class _PullWindowState extends State<_PullWindow> {
 
   Widget _bodyOf(DiffFile f) {
     final s = sections[f.path]!;
-    return s.body ??= FileDiffLines(file: f, comments: detail?.reviewComments ?? const [], itemUrl: itemUrl, rowKeys: s.rowKeys);
+    return s.body ??= FileDiffLines(
+      file: f,
+      comments: detail?.reviewComments ?? const [],
+      itemUrl: itemUrl,
+      rowKeys: s.rowKeys,
+    );
   }
 
   double? _offsetOf(String p) {
@@ -1401,8 +1634,8 @@ class _PullWindowState extends State<_PullWindow> {
   }
 
   void _after(VoidCallback fn) => WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) fn();
-      });
+    if (mounted) fn();
+  });
 
   void _scrollToFile(String p, {bool reveal = false}) {
     final f = files?.where((x) => x.path == p).firstOrNull;
@@ -1463,7 +1696,9 @@ class _PullWindowState extends State<_PullWindow> {
     final hw = HardwareKeyboard.instance;
     if (hw.isMetaPressed || hw.isControlPressed || hw.isAltPressed) return KeyEventResult.ignored;
     final ctx = FocusManager.instance.primaryFocus?.context;
-    if (ctx != null && (ctx.widget is EditableText || ctx.findAncestorWidgetOfExactType<EditableText>() != null)) return KeyEventResult.ignored;
+    if (ctx != null && (ctx.widget is EditableText || ctx.findAncestorWidgetOfExactType<EditableText>() != null)) {
+      return KeyEventResult.ignored;
+    }
     final k = e.logicalKey;
     if (k == LogicalKeyboardKey.keyJ || k == LogicalKeyboardKey.keyN) {
       _step(1);
@@ -1501,11 +1736,7 @@ class _PullWindowState extends State<_PullWindow> {
             _meta(),
             _tabs(),
             Expanded(
-              child: IndexedStack(
-                index: tab.index,
-                sizing: StackFit.expand,
-                children: [_conversation(), _filesPane()],
-              ),
+              child: IndexedStack(index: tab.index, sizing: StackFit.expand, children: [_conversation(), _filesPane()]),
             ),
           ],
         ),
@@ -1521,25 +1752,36 @@ class _PullWindowState extends State<_PullWindow> {
     final badge = it.reviewDecision.isEmpty
         ? null
         : _Badge(
-            it.reviewDecision == 'REVIEW_REQUIRED' ? 'review required' : (reviewBadge[it.reviewDecision]?.$1 ?? it.reviewDecision.toLowerCase()),
+            it.reviewDecision == 'REVIEW_REQUIRED'
+                ? 'review required'
+                : (reviewBadge[it.reviewDecision]?.$1 ?? it.reviewDecision.toLowerCase()),
             reviewBadge[it.reviewDecision]?.$2 ?? '',
           );
-    return _MetaBar(children: [
-      GhAvatar(it.author),
-      Text(it.author, style: heavy(13, weight: FontWeight.w900)),
-      Text(it.state == 'MERGED' ? 'merged $commits into' : 'wants to merge $commits into', style: muted),
-      _code(it.baseRefName),
-      Text('from', style: muted),
-      _code(it.headRefName),
-      _plusMinus(it.additions, it.deletions),
-      ...it.labels.map(LabelChip.new),
-      _LabelButton(
-        has: it.labels.isNotEmpty,
-        onPressed: () => openLabels(widget.scope, GhKind.pull, it.number, it.title, it.url, it.labels,
-            onSaved: (labels) => mounted ? setState(() => it = _withLabels(it, labels)) : null),
-      ),
-      ?badge,
-    ]);
+    return _MetaBar(
+      children: [
+        GhAvatar(it.author),
+        Text(it.author, style: heavy(13, weight: FontWeight.w900)),
+        Text(it.state == 'MERGED' ? 'merged $commits into' : 'wants to merge $commits into', style: muted),
+        _code(it.baseRefName),
+        Text('from', style: muted),
+        _code(it.headRefName),
+        _plusMinus(it.additions, it.deletions),
+        ...it.labels.map(LabelChip.new),
+        _LabelButton(
+          has: it.labels.isNotEmpty,
+          onPressed: () => openLabels(
+            widget.scope,
+            GhKind.pull,
+            it.number,
+            it.title,
+            it.url,
+            it.labels,
+            onSaved: (labels) => mounted ? setState(() => it = _withLabels(it, labels)) : null,
+          ),
+        ),
+        ?badge,
+      ],
+    );
   }
 
   Widget _tabs() {
@@ -1548,7 +1790,10 @@ class _PullWindowState extends State<_PullWindow> {
     final done = fs == null ? 0 : fs.where((f) => reviewed.mark(f) == ReviewMark.reviewed).length;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: const BoxDecoration(color: Swatch.paper, border: Border(bottom: BorderSide(color: Swatch.ink, width: 3))),
+      decoration: const BoxDecoration(
+        color: Swatch.paper,
+        border: Border(bottom: BorderSide(color: Swatch.ink, width: 3)),
+      ),
       child: Row(
         children: [
           _TabButton(
@@ -1556,7 +1801,8 @@ class _PullWindowState extends State<_PullWindow> {
             onTap: () => _setTab(_Tab.conversation),
             children: [
               const Text('💬 Conversation'),
-              if (d != null) _Count(d.comments.length + d.reviews.length + d.reviewComments.where((c) => c.replyTo == null).length),
+              if (d != null)
+                _Count(d.comments.length + d.reviews.length + d.reviewComments.where((c) => c.replyTo == null).length),
             ],
           ),
           const SizedBox(width: 4),
@@ -1567,7 +1813,10 @@ class _PullWindowState extends State<_PullWindow> {
               const Text('📄 Files changed'),
               if (fs != null) _Count(fs.length),
               if (fs != null && fs.isNotEmpty)
-                Text('✓ $done/${fs.length}', style: heavy(11, color: done == fs.length ? _addFg : Swatch.muted, weight: FontWeight.w900)),
+                Text(
+                  '✓ $done/${fs.length}',
+                  style: heavy(11, color: done == fs.length ? _addFg : Swatch.muted, weight: FontWeight.w900),
+                ),
             ],
           ),
         ],
@@ -1582,7 +1831,12 @@ class _PullWindowState extends State<_PullWindow> {
     final w = workerForPull(store.workers.values, it);
     return Row(
       children: [
-        Expanded(child: Align(alignment: Alignment.centerLeft, child: _Link('Open on GitHub ↗', it.url, style: heavy(14, color: _blueLink)))),
+        Expanded(
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: _Link('Open on GitHub ↗', it.url, style: heavy(14, color: _blueLink)),
+          ),
+        ),
         Flexible(
           flex: 4,
           child: Wrap(
@@ -1590,18 +1844,24 @@ class _PullWindowState extends State<_PullWindow> {
             spacing: 8,
             runSpacing: 8,
             children: [
-              if (w != null) OfficeButton(label: "🪑 Go to ${w.name}'s desk", onPressed: () => actions.goToDesk(w.deskId)),
+              if (w != null)
+                OfficeButton(label: "🪑 Go to ${w.name}'s desk", onPressed: () => actions.goToDesk(w.deskId)),
               OfficeButton(
                 label: '✍️ Ask a worker…',
                 tooltip: 'Send a worker your own prompt about this PR',
                 onPressed: () => actions.ask(pullContext(it), 'Ask about PR #${it.number}'),
               ),
-              if (isOpen) OfficeButton(label: '🔍 Review', onPressed: () => actions.assign(reviewPrompt(it), 'Review PR #${it.number}')),
+              if (isOpen)
+                OfficeButton(
+                  label: '🔍 Review',
+                  onPressed: () => actions.assign(reviewPrompt(it), 'Review PR #${it.number}'),
+                ),
               if (conflicts)
                 OfficeButton(
                   label: '✨ Fix conflicts & merge',
                   kind: BtnKind.primary,
-                  tooltip: 'A new worker merges the base in, resolves the conflicts, gets the checks green, then merges',
+                  tooltip:
+                      'A new worker merges the base in, resolves the conflicts, gets the checks green, then merges',
                   onPressed: _handToWorker,
                 )
               else if (isOpen)
@@ -1639,7 +1899,11 @@ class _PullWindowState extends State<_PullWindow> {
   Widget _conversation() {
     final d = detail;
     final items = <Widget>[
-      _commentCard(GhComment(id: 'body', author: it.author, body: d?.body ?? it.body, createdAt: it.createdAt, url: it.url), itemUrl, 'opened this'),
+      _commentCard(
+        GhComment(id: 'body', author: it.author, body: d?.body ?? it.body, createdAt: it.createdAt, url: it.url),
+        itemUrl,
+        'opened this',
+      ),
     ];
     if (detailError.isNotEmpty) {
       items.add(_errorBox(detailError, _loadAll));
@@ -1649,14 +1913,27 @@ class _PullWindowState extends State<_PullWindow> {
       final replies = repliesOf(d.reviewComments);
       final timeline = <(String, Widget)>[
         for (final c in d.comments) (c.createdAt, _commentCard(c, itemUrl, 'commented')),
-        for (final r in d.reviews) (r.createdAt, _commentCard(r, itemUrl, '', reviewBadge[r.state ?? ''] ?? (r.state?.toLowerCase() ?? 'reviewed', ''))),
+        for (final r in d.reviews)
+          (
+            r.createdAt,
+            _commentCard(r, itemUrl, '', reviewBadge[r.state ?? ''] ?? (r.state?.toLowerCase() ?? 'reviewed', '')),
+          ),
         for (final c in d.reviewComments.where((c) => c.replyTo == null))
           (
             c.createdAt,
             _GhCard(
               header: [
                 const Text('💬'),
-                Flexible(child: Tooltip(message: c.path, child: Text('${c.path}${c.line != null ? ':${c.line}' : ''}', overflow: TextOverflow.ellipsis, style: mono(12)))),
+                Flexible(
+                  child: Tooltip(
+                    message: c.path,
+                    child: Text(
+                      '${c.path}${c.line != null ? ':${c.line}' : ''}',
+                      overflow: TextOverflow.ellipsis,
+                      style: mono(12),
+                    ),
+                  ),
+                ),
                 if (c.line == null) const _Badge('outdated', 'muted'),
                 const Spacer(),
                 if (c.line != null) OfficeButton(label: 'Show in diff', dense: true, onPressed: () => _showInDiff(c)),
@@ -1718,9 +1995,16 @@ class _PullWindowState extends State<_PullWindow> {
         children: _vgap([
           _status(st.icon, st.text, st.tone),
           if (d.checks.isNotEmpty) _checksList(d.checks),
-          if (it.state == 'OPEN' && st.can) go(OfficeButton(label: '🔀 Merge…', kind: BtnKind.primary, onPressed: _merge)),
+          if (it.state == 'OPEN' && st.can)
+            go(OfficeButton(label: '🔀 Merge…', kind: BtnKind.primary, onPressed: _merge)),
           if (conflicted(d))
-            go(OfficeButton(label: '✨ New worker: fix conflicts & merge', kind: BtnKind.primary, onPressed: _handToWorker))
+            go(
+              OfficeButton(
+                label: '✨ New worker: fix conflicts & merge',
+                kind: BtnKind.primary,
+                onPressed: _handToWorker,
+              ),
+            )
           else if (it.state == 'OPEN' && !st.can && !d.isDraft)
             go(OfficeButton(label: '🤖 Have a worker fix it & merge', onPressed: _handToWorker)),
         ], 10),
@@ -1768,7 +2052,10 @@ class _PullWindowState extends State<_PullWindow> {
           const SizedBox(height: 6),
           _ProgressBar(fs.isEmpty ? 0 : done / fs.length),
           const SizedBox(height: 6),
-          Text('$done of ${fs.length} file${fs.length == 1 ? '' : 's'} reviewed', style: heavy(12, color: Swatch.muted)),
+          Text(
+            '$done of ${fs.length} file${fs.length == 1 ? '' : 's'} reviewed',
+            style: heavy(12, color: Swatch.muted),
+          ),
           const SizedBox(height: 8),
           SizedBox(
             height: 32,
@@ -1779,15 +2066,28 @@ class _PullWindowState extends State<_PullWindow> {
               decoration: InputDecoration(
                 hintText: 'Filter files…',
                 contentPadding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-                enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: Swatch.ink, width: 2)),
-                focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: Swatch.accent, width: 2)),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: const BorderSide(color: Swatch.ink, width: 2),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: const BorderSide(color: Swatch.accent, width: 2),
+                ),
               ),
             ),
           ),
           const SizedBox(height: 8),
           Expanded(
             child: rows.isEmpty
-                ? Padding(padding: const EdgeInsets.all(6), child: Text(filter.isNotEmpty ? 'No files match.' : 'No files changed.', textAlign: TextAlign.center, style: heavy(13, color: Swatch.muted, weight: FontWeight.w700)))
+                ? Padding(
+                    padding: const EdgeInsets.all(6),
+                    child: Text(
+                      filter.isNotEmpty ? 'No files match.' : 'No files changed.',
+                      textAlign: TextAlign.center,
+                      style: heavy(13, color: Swatch.muted, weight: FontWeight.w700),
+                    ),
+                  )
                 : ListView(children: rows),
           ),
           const SizedBox(height: 8),
@@ -1798,14 +2098,14 @@ class _PullWindowState extends State<_PullWindow> {
   }
 
   Widget _modeBtn(bool tree, String label) => OfficeButton(
-        label: label,
-        dense: true,
-        kind: treeMode == tree ? BtnKind.on : BtnKind.plain,
-        onPressed: () {
-          setState(() => treeMode = tree);
-          _savePref(_filesKey, tree ? 'tree' : 'list');
-        },
-      );
+    label: label,
+    dense: true,
+    kind: treeMode == tree ? BtnKind.on : BtnKind.plain,
+    onPressed: () {
+      setState(() => treeMode = tree);
+      _savePref(_filesKey, tree ? 'tree' : 'list');
+    },
+  );
 
   void _dirRows(TreeDir d, int depth, Set<DiffFile> visible, List<Widget> out) {
     for (final sub in d.dirs) {
@@ -1813,17 +2113,34 @@ class _PullWindowState extends State<_PullWindow> {
       if (inside.isEmpty) continue;
       final shut = collapsedDirs.contains(sub.path) && filter.isEmpty;
       final all = inside.every((f) => reviewed.mark(f) == ReviewMark.reviewed);
-      out.add(_TreeRow(
-        depth: depth,
-        tooltip: sub.path,
-        onTap: () => setState(() => collapsedDirs.contains(sub.path) ? collapsedDirs.remove(sub.path) : collapsedDirs.add(sub.path)),
-        children: [
-          SizedBox(width: 12, child: Text(shut ? '▸' : '▾', style: heavy(11, color: Swatch.muted))),
-          const Text('📁'),
-          Expanded(child: Text(sub.name, overflow: TextOverflow.ellipsis, style: heavy(13, weight: FontWeight.w700))),
-          if (all) Tooltip(message: 'Everything in here is reviewed', child: const Icon(Icons.check, size: 15, color: _addFg)),
-        ],
-      ));
+      out.add(
+        _TreeRow(
+          depth: depth,
+          tooltip: sub.path,
+          onTap: () => setState(
+            () => collapsedDirs.contains(sub.path) ? collapsedDirs.remove(sub.path) : collapsedDirs.add(sub.path),
+          ),
+          children: [
+            SizedBox(
+              width: 12,
+              child: Text(shut ? '▸' : '▾', style: heavy(11, color: Swatch.muted)),
+            ),
+            const Text('📁'),
+            Expanded(
+              child: Text(
+                sub.name,
+                overflow: TextOverflow.ellipsis,
+                style: heavy(13, weight: FontWeight.w700),
+              ),
+            ),
+            if (all)
+              Tooltip(
+                message: 'Everything in here is reviewed',
+                child: const Icon(Icons.check, size: 15, color: _addFg),
+              ),
+          ],
+        ),
+      );
       if (!shut) _dirRows(sub, depth + 1, visible, out);
     }
     for (final f in d.files) {
@@ -1846,15 +2163,32 @@ class _PullWindowState extends State<_PullWindow> {
         _StatusBox(f.status),
         Expanded(
           child: Text.rich(
-            TextSpan(children: [
-              TextSpan(text: f.path.substring(slash + 1), style: heavy(13, color: mark == ReviewMark.reviewed ? Swatch.muted : Swatch.ink, weight: FontWeight.w700)),
-              if (!treeMode && slash >= 0) TextSpan(text: ' ${f.path.substring(0, slash)}', style: heavy(13, color: Swatch.muted, weight: FontWeight.w600)),
-            ]),
+            TextSpan(
+              children: [
+                TextSpan(
+                  text: f.path.substring(slash + 1),
+                  style: heavy(
+                    13,
+                    color: mark == ReviewMark.reviewed ? Swatch.muted : Swatch.ink,
+                    weight: FontWeight.w700,
+                  ),
+                ),
+                if (!treeMode && slash >= 0)
+                  TextSpan(
+                    text: ' ${f.path.substring(0, slash)}',
+                    style: heavy(13, color: Swatch.muted, weight: FontWeight.w600),
+                  ),
+              ],
+            ),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
         ),
-        if (n > 0) Tooltip(message: '$n comment${n > 1 ? 's' : ''}', child: Text('💬$n', style: heavy(11))),
+        if (n > 0)
+          Tooltip(
+            message: '$n comment${n > 1 ? 's' : ''}',
+            child: Text('💬$n', style: heavy(11)),
+          ),
         _plusMinus(f.additions, f.deletions, binary: f.binary),
       ],
     );
@@ -1865,11 +2199,19 @@ class _PullWindowState extends State<_PullWindow> {
     for (final f in order) {
       slivers.add(SliverPadding(padding: const EdgeInsets.fromLTRB(12, 12, 12, 0), sliver: _fileSliver(f)));
     }
-    if (order.isEmpty) slivers.add(const SliverToBoxAdapter(child: Padding(padding: EdgeInsets.only(top: 12), child: DiffNote('No files match the filter.'))));
+    if (order.isEmpty) {
+      slivers.add(
+        const SliverToBoxAdapter(
+          child: Padding(padding: EdgeInsets.only(top: 12), child: DiffNote('No files match the filter.')),
+        ),
+      );
+    }
     slivers.add(const SliverToBoxAdapter(child: SizedBox(height: 16)));
     return ColoredBox(
       color: const Color(0xFFEFE6DA),
-      child: SelectionArea(child: CustomScrollView(controller: _main, slivers: slivers)),
+      child: SelectionArea(
+        child: CustomScrollView(controller: _main, slivers: slivers),
+      ),
     );
   }
 
@@ -1881,8 +2223,14 @@ class _PullWindowState extends State<_PullWindow> {
     if (isOpen) {
       body = s.big && open[f.path] != true && s.body == null
           ? DiffNote(
-              looksGenerated(f.path) ? 'Generated or lock file — not shown by default.' : 'Large diff (${f.lines.length} lines) — not shown by default.',
-              action: OfficeButton(label: 'Show diff', dense: true, onPressed: () => setState(() => open[f.path] = true)),
+              looksGenerated(f.path)
+                  ? 'Generated or lock file — not shown by default.'
+                  : 'Large diff (${f.lines.length} lines) — not shown by default.',
+              action: OfficeButton(
+                label: 'Show diff',
+                dense: true,
+                onPressed: () => setState(() => open[f.path] = true),
+              ),
             )
           : _bodyOf(f);
     }
@@ -1899,7 +2247,10 @@ class _PullWindowState extends State<_PullWindow> {
           PinnedHeaderSliver(child: _fileHeader(f, isOpen, mark)),
           if (body != null)
             SliverToBoxAdapter(
-              child: ClipRRect(borderRadius: const BorderRadius.vertical(bottom: Radius.circular(10)), child: body),
+              child: ClipRRect(
+                borderRadius: const BorderRadius.vertical(bottom: Radius.circular(10)),
+                child: body,
+              ),
             ),
         ],
       ),
@@ -1925,7 +2276,11 @@ class _PullWindowState extends State<_PullWindow> {
                 cursor: SystemMouseCursors.click,
                 child: GestureDetector(
                   onTap: () => setState(() => open[f.path] = !_isOpenFile(f)),
-                  child: SizedBox(width: 22, height: 22, child: Center(child: Text(isOpen ? '▾' : '▸', style: heavy(12)))),
+                  child: SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: Center(child: Text(isOpen ? '▾' : '▸', style: heavy(12))),
+                  ),
                 ),
               ),
             ),
@@ -1947,7 +2302,11 @@ class _PullWindowState extends State<_PullWindow> {
                 message: 'The file changed after you marked it reviewed',
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8),
-                  decoration: BoxDecoration(color: Swatch.warn, borderRadius: BorderRadius.circular(999), border: Border.all(color: Swatch.ink, width: 2)),
+                  decoration: BoxDecoration(
+                    color: Swatch.warn,
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: Swatch.ink, width: 2),
+                  ),
                   child: Text('changed since review', style: heavy(11)),
                 ),
               ),
@@ -1969,7 +2328,10 @@ class _PullWindowState extends State<_PullWindow> {
                       children: [
                         _TickBox(mark == ReviewMark.reviewed, color: _addFg),
                         const SizedBox(width: 6),
-                        Text('Reviewed', style: heavy(12.5, color: mark == ReviewMark.reviewed ? Colors.white : Swatch.ink)),
+                        Text(
+                          'Reviewed',
+                          style: heavy(12.5, color: mark == ReviewMark.reviewed ? Colors.white : Swatch.ink),
+                        ),
                       ],
                     ),
                   ),
@@ -1989,10 +2351,12 @@ class _MetaBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: Color(0x262B2D42), width: 2))),
-        child: Wrap(spacing: 6, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: children),
-      );
+    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+    decoration: const BoxDecoration(
+      border: Border(bottom: BorderSide(color: Color(0x262B2D42), width: 2)),
+    ),
+    child: Wrap(spacing: 6, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: children),
+  );
 }
 
 class _TabButton extends StatefulWidget {
@@ -2010,28 +2374,30 @@ class _TabButtonState extends State<_TabButton> {
 
   @override
   Widget build(BuildContext context) => Semantics(
-        selected: widget.on,
-        button: true,
-        child: MouseRegion(
-          cursor: SystemMouseCursors.click,
-          onEnter: (_) => setState(() => hover = true),
-          onExit: (_) => setState(() => hover = false),
-          child: GestureDetector(
-            onTap: widget.onTap,
-            child: Transform.translate(
-              offset: const Offset(0, 3),
-              child: Container(
-                padding: const EdgeInsets.fromLTRB(12, 9, 12, 7),
-                decoration: BoxDecoration(border: Border(bottom: BorderSide(color: widget.on ? Swatch.accent : Colors.transparent, width: 4))),
-                child: DefaultTextStyle(
-                  style: heavy(14, color: widget.on || hover ? Swatch.ink : Swatch.muted),
-                  child: Row(mainAxisSize: MainAxisSize.min, children: _gap(widget.children, 6)),
-                ),
-              ),
+    selected: widget.on,
+    button: true,
+    child: MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => hover = true),
+      onExit: (_) => setState(() => hover = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: Transform.translate(
+          offset: const Offset(0, 3),
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(12, 9, 12, 7),
+            decoration: BoxDecoration(
+              border: Border(bottom: BorderSide(color: widget.on ? Swatch.accent : Colors.transparent, width: 4)),
+            ),
+            child: DefaultTextStyle(
+              style: heavy(14, color: widget.on || hover ? Swatch.ink : Swatch.muted),
+              child: Row(mainAxisSize: MainAxisSize.min, children: _gap(widget.children, 6)),
             ),
           ),
         ),
-      );
+      ),
+    ),
+  );
 }
 
 class _Count extends StatelessWidget {
@@ -2040,10 +2406,14 @@ class _Count extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 7),
-        decoration: BoxDecoration(color: Swatch.paper2, borderRadius: BorderRadius.circular(999), border: Border.all(color: Swatch.ink, width: 2)),
-        child: Text('$n', style: heavy(11)),
-      );
+    padding: const EdgeInsets.symmetric(horizontal: 7),
+    decoration: BoxDecoration(
+      color: Swatch.paper2,
+      borderRadius: BorderRadius.circular(999),
+      border: Border.all(color: Swatch.ink, width: 2),
+    ),
+    child: Text('$n', style: heavy(11)),
+  );
 }
 
 class _ProgressBar extends StatelessWidget {
@@ -2052,38 +2422,56 @@ class _ProgressBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        height: 10,
-        clipBehavior: Clip.antiAlias,
-        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(999), border: Border.all(color: Swatch.ink, width: 2)),
-        child: Align(
-          alignment: Alignment.centerLeft,
-          child: AnimatedFractionallySizedBox(
-            duration: const Duration(milliseconds: 250),
-            widthFactor: value.clamp(0, 1),
-            heightFactor: 1,
-            child: const ColoredBox(color: Swatch.good),
-          ),
-        ),
-      );
+    height: 10,
+    clipBehavior: Clip.antiAlias,
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(999),
+      border: Border.all(color: Swatch.ink, width: 2),
+    ),
+    child: Align(
+      alignment: Alignment.centerLeft,
+      child: AnimatedFractionallySizedBox(
+        duration: const Duration(milliseconds: 250),
+        widthFactor: value.clamp(0, 1),
+        heightFactor: 1,
+        child: const ColoredBox(color: Swatch.good),
+      ),
+    ),
+  );
 }
 
 class _KeysHint extends StatelessWidget {
   const _KeysHint();
 
   Widget _key(String k) => Container(
-        margin: const EdgeInsets.only(right: 3),
-        padding: const EdgeInsets.symmetric(horizontal: 5),
-        constraints: const BoxConstraints(minWidth: 18),
-        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(7), border: Border.all(color: Swatch.ink, width: 1.5)),
-        child: Text(k, textAlign: TextAlign.center, style: heavy(11, weight: FontWeight.w900)),
-      );
+    margin: const EdgeInsets.only(right: 3),
+    padding: const EdgeInsets.symmetric(horizontal: 5),
+    constraints: const BoxConstraints(minWidth: 18),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(7),
+      border: Border.all(color: Swatch.ink, width: 1.5),
+    ),
+    child: Text(
+      k,
+      textAlign: TextAlign.center,
+      style: heavy(11, weight: FontWeight.w900),
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
     final s = heavy(11, color: Swatch.muted, weight: FontWeight.w700);
     return Wrap(
       crossAxisAlignment: WrapCrossAlignment.center,
-      children: [_key('J'), _key('K'), Text('next / previous file · ', style: s), _key('V'), Text('reviewed', style: s)],
+      children: [
+        _key('J'),
+        _key('K'),
+        Text('next / previous file · ', style: s),
+        _key('V'),
+        Text('reviewed', style: s),
+      ],
     );
   }
 }
@@ -2124,7 +2512,9 @@ class _TreeRowState extends State<_TreeRow> {
         ),
       ),
     );
-    if (widget.tooltip != null) w = Tooltip(message: widget.tooltip!, waitDuration: const Duration(milliseconds: 600), child: w);
+    if (widget.tooltip != null) {
+      w = Tooltip(message: widget.tooltip!, waitDuration: const Duration(milliseconds: 600), child: w);
+    }
     return w;
   }
 }
@@ -2136,33 +2526,37 @@ class _ReviewTick extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Tooltip(
-        message: switch (mark) {
-          ReviewMark.reviewed => 'Reviewed — click to unmark',
-          ReviewMark.stale => 'Changed since you reviewed it',
-          ReviewMark.none => 'Mark as reviewed',
-        },
-        child: MouseRegion(
-          cursor: SystemMouseCursors.click,
-          child: GestureDetector(
-            onTap: onTap,
-            child: Container(
-              width: 18,
-              height: 18,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: switch (mark) { ReviewMark.reviewed => Swatch.good, ReviewMark.stale => Swatch.warn, ReviewMark.none => Colors.white },
-                border: Border.all(color: Swatch.ink, width: 2),
-              ),
-              child: switch (mark) {
-                ReviewMark.reviewed => const Icon(Icons.check, size: 12, color: Colors.white),
-                ReviewMark.stale => Text('!', style: heavy(11, weight: FontWeight.w900).copyWith(height: 1)),
-                ReviewMark.none => null,
-              },
-            ),
+    message: switch (mark) {
+      ReviewMark.reviewed => 'Reviewed — click to unmark',
+      ReviewMark.stale => 'Changed since you reviewed it',
+      ReviewMark.none => 'Mark as reviewed',
+    },
+    child: MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: 18,
+          height: 18,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: switch (mark) {
+              ReviewMark.reviewed => Swatch.good,
+              ReviewMark.stale => Swatch.warn,
+              ReviewMark.none => Colors.white,
+            },
+            border: Border.all(color: Swatch.ink, width: 2),
           ),
+          child: switch (mark) {
+            ReviewMark.reviewed => const Icon(Icons.check, size: 12, color: Colors.white),
+            ReviewMark.stale => Text('!', style: heavy(11, weight: FontWeight.w900).copyWith(height: 1)),
+            ReviewMark.none => null,
+          },
         ),
-      );
+      ),
+    ),
+  );
 }
 
 class _StatusBox extends StatelessWidget {
@@ -2183,8 +2577,15 @@ class _StatusBox extends StatelessWidget {
         width: 18,
         height: 18,
         alignment: Alignment.center,
-        decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(5), border: Border.all(color: Swatch.ink, width: 2)),
-        child: Text(status.name, style: mono(10, color: fg, weight: FontWeight.w900, height: 1)),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(5),
+          border: Border.all(color: Swatch.ink, width: 2),
+        ),
+        child: Text(
+          status.name,
+          style: mono(10, color: fg, weight: FontWeight.w900, height: 1),
+        ),
       ),
     );
   }
@@ -2193,7 +2594,8 @@ class _StatusBox extends StatelessWidget {
 // ---- The issue window -----------------------------------------------------------------------------
 
 ModalHandle openIssue(OfficeScope scope, GhIssue first) =>
-    ModalStack.instance.show((modal) => _IssueWindow(modal: modal, scope: scope, first: first))..doing = '📋 reading issue #${first.number}';
+    ModalStack.instance.show((modal) => _IssueWindow(modal: modal, scope: scope, first: first))
+      ..doing = '📋 reading issue #${first.number}';
 
 class _IssueWindow extends StatefulWidget {
   const _IssueWindow({required this.modal, required this.scope, required this.first});
@@ -2242,41 +2644,53 @@ class _IssueWindowState extends State<_IssueWindow> {
     setState(() => it = d != null ? _issueWithState(fresh, fresh.state == 'OPEN' ? d.state : fresh.state) : fresh);
   }
 
-  static GhIssue _issueWithLabels(GhIssue i, List<GhLabel> labels) => GhIssue.fromJson({...i.toJson(), 'labels': [for (final l in labels) l.toJson()]});
+  static GhIssue _issueWithLabels(GhIssue i, List<GhLabel> labels) => GhIssue.fromJson({
+    ...i.toJson(),
+    'labels': [for (final l in labels) l.toJson()],
+  });
 
   static GhIssue _issueWithState(GhIssue i, String state) => GhIssue(
-        number: i.number,
-        title: i.title,
-        state: state,
-        url: i.url,
-        author: i.author,
-        labels: i.labels,
-        assignees: i.assignees,
-        createdAt: i.createdAt,
-        updatedAt: i.updatedAt,
-        body: i.body,
-        comments: i.comments,
-      );
+    number: i.number,
+    title: i.title,
+    state: state,
+    url: i.url,
+    author: i.author,
+    labels: i.labels,
+    assignees: i.assignees,
+    taken: i.taken,
+    createdAt: i.createdAt,
+    updatedAt: i.updatedAt,
+    body: i.body,
+    comments: i.comments,
+  );
 
   void _load() {
     final g = ++_generation;
     setState(() => error = '');
-    GhApi.getJson(onFloor(store, '/api/gh/issue?number=${it.number}')).then((j) {
-      if (g != _generation || !mounted) return;
-      final d = GhIssueDetail.fromJson(j);
-      setState(() {
-        detail = d;
-        it = _issueWithState(it, d.state);
-      });
-    }).catchError((Object err) {
-      if (g == _generation && mounted) setState(() => error = '$err');
-    });
+    GhApi.getJson(onFloor(store, '/api/gh/issue?number=${it.number}'))
+        .then((j) {
+          if (g != _generation || !mounted) return;
+          final d = GhIssueDetail.fromJson(j);
+          setState(() {
+            detail = d;
+            it = _issueWithState(it, d.state);
+          });
+        })
+        .catchError((Object err) {
+          if (g == _generation && mounted) setState(() => error = '$err');
+        });
   }
 
   void _addToQueue() {
     if (!provider.valid()) return;
     widget.modal.close();
-    actions.queue(issuePrompt(it), '#${it.number} ${it.title}', it.number, provider: provider.value, model: provider.model);
+    actions.queue(
+      issuePrompt(it),
+      '#${it.number} ${it.title}',
+      it.number,
+      provider: provider.value,
+      model: provider.model,
+    );
   }
 
   @override
@@ -2294,18 +2708,30 @@ class _IssueWindowState extends State<_IssueWindow> {
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _MetaBar(children: [
-            GhAvatar(it.author),
-            Text(it.author, style: heavy(13, weight: FontWeight.w900)),
-            Text('opened this ${timeAgo(it.createdAt)}', style: muted),
-            if (it.assignees.isNotEmpty) Text('· 👤 ${it.assignees.join(', ')}', style: muted),
-            ...it.labels.map(LabelChip.new),
-            _LabelButton(
-              has: it.labels.isNotEmpty,
-              onPressed: () => openLabels(widget.scope, GhKind.issue, it.number, it.title, it.url, it.labels,
-                  onSaved: (labels) => mounted ? setState(() => it = _issueWithLabels(it, labels)) : null),
-            ),
-          ]),
+          _MetaBar(
+            children: [
+              GhAvatar(it.author),
+              Text(it.author, style: heavy(13, weight: FontWeight.w900)),
+              Text('opened this ${timeAgo(it.createdAt)}', style: muted),
+              if (it.assignees.isNotEmpty)
+                Text('· 👤 ${it.assignees.join(', ')}', style: muted)
+              else if (it.taken == true)
+                Text('· 🤖 handed to a worker', style: muted),
+              ...it.labels.map(LabelChip.new),
+              _LabelButton(
+                has: it.labels.isNotEmpty,
+                onPressed: () => openLabels(
+                  widget.scope,
+                  GhKind.issue,
+                  it.number,
+                  it.title,
+                  it.url,
+                  it.labels,
+                  onSaved: (labels) => mounted ? setState(() => it = _issueWithLabels(it, labels)) : null,
+                ),
+              ),
+            ],
+          ),
           Expanded(child: _conversation()),
         ],
       ),
@@ -2316,7 +2742,11 @@ class _IssueWindowState extends State<_IssueWindow> {
   Widget _conversation() {
     final d = detail;
     final items = <Widget>[
-      _commentCard(GhComment(id: 'body', author: it.author, body: d?.body ?? it.body, createdAt: it.createdAt, url: it.url), itemUrl, 'opened this'),
+      _commentCard(
+        GhComment(id: 'body', author: it.author, body: d?.body ?? it.body, createdAt: it.createdAt, url: it.url),
+        itemUrl,
+        'opened this',
+      ),
       if (error.isNotEmpty)
         _errorBox(error, _load)
       else if (d == null)
@@ -2362,7 +2792,12 @@ class _IssueWindowState extends State<_IssueWindow> {
     final onQueue = task != null && task.status != TaskStatus.done;
     return Row(
       children: [
-        Expanded(child: Align(alignment: Alignment.centerLeft, child: _Link('Open on GitHub ↗', it.url, style: heavy(14, color: _blueLink)))),
+        Expanded(
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: _Link('Open on GitHub ↗', it.url, style: heavy(14, color: _blueLink)),
+          ),
+        ),
         Flexible(
           flex: 4,
           child: Wrap(
@@ -2385,8 +2820,14 @@ class _IssueWindowState extends State<_IssueWindow> {
               if (isOpen && !onQueue) _ProviderPickerView(provider),
               if (isOpen)
                 OfficeButton(
-                  label: onQueue ? (task.status == TaskStatus.running ? '🤖 ${task.workerName ?? 'A worker'} is on it' : '📋 On the queue') : '📋 Add to queue',
-                  tooltip: onQueue ? null : 'A worker picks it up by itself when a desk is free and there is room under the worker limit',
+                  label: onQueue
+                      ? (task.status == TaskStatus.running
+                            ? '🤖 ${task.workerName ?? 'A worker'} is on it'
+                            : '📋 On the queue')
+                      : '📋 Add to queue',
+                  tooltip: onQueue
+                      ? null
+                      : 'A worker picks it up by itself when a desk is free and there is room under the worker limit',
                   onPressed: onQueue ? null : _addToQueue,
                 ),
               if (isOpen)
@@ -2398,7 +2839,7 @@ class _IssueWindowState extends State<_IssueWindow> {
               OfficeButton(
                 label: '🤖 Hand to a worker',
                 kind: BtnKind.primary,
-                onPressed: () => actions.assign(issuePrompt(it), 'Hand issue #${it.number} to a worker'),
+                onPressed: () => actions.assign(issuePrompt(it), 'Hand issue #${it.number} to a worker', it.number),
               ),
             ],
           ),
@@ -2421,11 +2862,11 @@ const _providerLabel = {
 };
 
 String _providerNote(AgentProvider p) => switch (p) {
-      AgentProvider.claude => 'Office usage and budget track Claude Code.',
-      AgentProvider.codex => 'Review Office hooks in /hooks to enable tracking. Codex reports root-session tokens; subagents are excluded and cost is unavailable.',
-      AgentProvider.custom => 'Usage is untracked unless compatible Claude Code hooks report it.',
-      _ => 'OpenCode reports model/provider estimates; they are not billing, and arrive after the first report.',
-    };
+  AgentProvider.claude => 'Office usage and budget track Claude Code.',
+  AgentProvider.codex => 'Review Office hooks in /hooks to enable tracking. Codex reports root-session tokens; subagents are excluded and cost is unavailable.',
+  AgentProvider.custom => 'Usage is untracked unless compatible Claude Code hooks report it.',
+  _ => 'OpenCode reports model/provider estimates; they are not billing, and arrive after the first report.',
+};
 
 /// Providers the server says this project can start.
 List<AgentProvider> _supportedProviders(ProjectInfo? project) {
@@ -2441,12 +2882,16 @@ String providerName(AgentProvider? provider, ProjectInfo? project) =>
 bool _validModel(String v) {
   if (v.isEmpty || v.length > 256 || RegExp(r'[\s\x00-\x1f\x7f]').hasMatch(v)) return false;
   final parts = v.split('/');
-  return parts.length >= 2 && RegExp(r'^[A-Za-z0-9_.][A-Za-z0-9_.-]*$').hasMatch(parts.first) && parts.skip(1).every((p) => p.isNotEmpty);
+  return parts.length >= 2 &&
+      RegExp(r'^[A-Za-z0-9_.][A-Za-z0-9_.-]*$').hasMatch(parts.first) &&
+      parts.skip(1).every((p) => p.isNotEmpty);
 }
 
 class _ProviderPicker extends ChangeNotifier {
   _ProviderPicker(ProjectInfo? project, this.label) : options = _supportedProviders(project) {
-    final fallback = project != null && options.contains(project.defaultProvider) ? project.defaultProvider : options.first;
+    final fallback = project != null && options.contains(project.defaultProvider)
+        ? project.defaultProvider
+        : options.first;
     final saved = AgentProvider.tryParse(storageGet(_providerKey));
     selected = saved != null && options.contains(saved) ? saved : fallback;
   }
@@ -2475,7 +2920,9 @@ class _ProviderPicker extends ChangeNotifier {
       return true;
     }
     final ok = _validModel(modelCtl.text);
-    modelError = ok ? null : 'Use provider/model format without whitespace or control characters (up to 256 characters).';
+    modelError = ok
+        ? null
+        : 'Use provider/model format without whitespace or control characters (up to 256 characters).';
     notifyListeners();
     return ok;
   }
@@ -2493,68 +2940,79 @@ class _ProviderPickerView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Row(
+    mainAxisSize: MainAxisSize.min,
+    crossAxisAlignment: CrossAxisAlignment.center,
+    children: [
+      Column(
         mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Column(
+          Text(p.label, style: heavy(12)),
+          const SizedBox(height: 2),
+          Container(
+            height: 30,
+            padding: const EdgeInsets.symmetric(horizontal: 9),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(9),
+              border: Border.all(color: Swatch.ink, width: 2),
+            ),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<AgentProvider>(
+                value: p.selected,
+                isDense: true,
+                style: heavy(13),
+                items: [for (final o in p.options) DropdownMenuItem(value: o, child: Text(_providerLabel[o]!))],
+                onChanged: (v) => v == null ? null : p.pick(v),
+              ),
+            ),
+          ),
+        ],
+      ),
+      const SizedBox(width: 8),
+      ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 150),
+        child: Text(
+          _providerNote(p.selected),
+          style: heavy(11, color: Swatch.muted, weight: FontWeight.w700),
+        ),
+      ),
+      if (p.selected == AgentProvider.opencode) ...[
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 190,
+          child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(p.label, style: heavy(12)),
-              const SizedBox(height: 2),
-              Container(
+              Text('OpenCode model', style: heavy(12)),
+              const SizedBox(height: 3),
+              SizedBox(
                 height: 30,
-                padding: const EdgeInsets.symmetric(horizontal: 9),
-                decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(9), border: Border.all(color: Swatch.ink, width: 2)),
-                child: DropdownButtonHideUnderline(
-                  child: DropdownButton<AgentProvider>(
-                    value: p.selected,
-                    isDense: true,
-                    style: heavy(13),
-                    items: [for (final o in p.options) DropdownMenuItem(value: o, child: Text(_providerLabel[o]!))],
-                    onChanged: (v) => v == null ? null : p.pick(v),
+                child: TextField(
+                  controller: p.modelCtl,
+                  maxLength: 256,
+                  style: heavy(13, weight: FontWeight.w500),
+                  decoration: InputDecoration(
+                    counterText: '',
+                    hintText: 'Default (OpenCode settings)',
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(9),
+                      borderSide: BorderSide(color: p.modelError != null ? Swatch.bad : Swatch.ink, width: 2),
+                    ),
                   ),
                 ),
               ),
+              if (p.modelError != null)
+                Text(
+                  p.modelError!,
+                  style: heavy(11, color: Swatch.bad, weight: FontWeight.w700),
+                ),
             ],
           ),
-          const SizedBox(width: 8),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 150),
-            child: Text(_providerNote(p.selected), style: heavy(11, color: Swatch.muted, weight: FontWeight.w700)),
-          ),
-          if (p.selected == AgentProvider.opencode) ...[
-            const SizedBox(width: 8),
-            SizedBox(
-              width: 190,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('OpenCode model', style: heavy(12)),
-                  const SizedBox(height: 3),
-                  SizedBox(
-                    height: 30,
-                    child: TextField(
-                      controller: p.modelCtl,
-                      maxLength: 256,
-                      style: heavy(13, weight: FontWeight.w500),
-                      decoration: InputDecoration(
-                        counterText: '',
-                        hintText: 'Default (OpenCode settings)',
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(9),
-                          borderSide: BorderSide(color: p.modelError != null ? Swatch.bad : Swatch.ink, width: 2),
-                        ),
-                      ),
-                    ),
-                  ),
-                  if (p.modelError != null) Text(p.modelError!, style: heavy(11, color: Swatch.bad, weight: FontWeight.w700)),
-                ],
-              ),
-            ),
-          ],
-        ],
-      );
+        ),
+      ],
+    ],
+  );
 }

@@ -207,7 +207,13 @@ class _BoardWindowState extends State<_BoardWindow> {
           meta: [
             ...it.labels.take(4).map(LabelChip.new),
             ?_queueChip(it.number),
-            _metaText(it.assignees.isNotEmpty ? '👤 ${it.assignees.join(', ')}' : 'by ${it.author}'),
+            _metaText(
+              it.assignees.isNotEmpty
+                  ? '👤 ${it.assignees.join(', ')}'
+                  : it.taken == true
+                  ? '🤖 handed to a worker'
+                  : 'by ${it.author}',
+            ),
             if (it.comments > 0) _metaText('💬 ${it.comments}'),
             _metaText(timeAgo(it.updatedAt)),
           ],

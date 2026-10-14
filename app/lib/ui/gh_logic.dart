@@ -31,21 +31,31 @@ final _progress = RegExp('progress|doing|wip|started', caseSensitive: false);
 
 int _byUpdatedDesc(dynamic a, dynamic b) => (b.updatedAt as String).compareTo(a.updatedAt as String);
 
+/// Whether someone has started on an open issue (github/progress.ts): a worker just took it (before GitHub
+/// lists its assignee), it's assigned, it has an in-progress label, or its queue task ([task]) is running.
+/// The issues window puts these under In progress, and the cork board on the wall leaves them off: it holds
+/// the ones still waiting to be taken.
+bool inProgress(GhIssue issue, QueueTask? task) =>
+    issue.taken == true ||
+    issue.assignees.isNotEmpty ||
+    issue.labels.any((l) => _progress.hasMatch(l.name)) ||
+    task?.status == TaskStatus.running;
+
+/// The issues pinned on the cork board on the wall: the open ones nobody has started on, less [off] (the
+/// cards someone's carrying around).
+List<GhIssue> pinnedIssues(List<GhIssue> items, {Set<int> off = const {}, QueueTask? Function(int issue)? taskFor}) => [
+  for (final i in items)
+    if (i.state == 'OPEN' && !off.contains(i.number) && !inProgress(i, taskFor?.call(i.number))) i,
+];
+
 List<BoardColumn<GhIssue>> issueColumns(List<GhIssue> items, QueueTask? Function(int issue) taskForIssue) {
   final open = items.where((i) => i.state == 'OPEN').toList();
-  final inProgress = open
-      .where(
-        (i) =>
-            i.assignees.isNotEmpty ||
-            i.labels.any((l) => _progress.hasMatch(l.name)) ||
-            taskForIssue(i.number)?.status == TaskStatus.running,
-      )
-      .toList();
-  final todo = open.where((i) => !inProgress.contains(i)).toList();
+  final started = open.where((i) => inProgress(i, taskForIssue(i.number))).toList();
+  final todo = open.where((i) => !started.contains(i)).toList();
   final closed = items.where((i) => i.state != 'OPEN').toList()..sort(_byUpdatedDesc);
   return [
     BoardColumn('open', '📥 Open', todo),
-    BoardColumn('progress', '🚧 In progress', inProgress),
+    BoardColumn('progress', '🚧 In progress', started),
     BoardColumn('closed', '✅ Closed', closed, max: 40),
   ];
 }

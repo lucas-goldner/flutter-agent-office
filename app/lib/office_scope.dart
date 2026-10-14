@@ -31,8 +31,9 @@ abstract class OfficeActions {
   /// ✋ Pick it up: the issue's card comes off the board and into your hands.
   void pickUp(GhIssue issue);
 
-  /// A prompt from the boards to a new worker at a free desk, or to one already at a desk.
-  void sendToWorker(String title, {String? context, String? initial});
+  /// A prompt from the boards to a new worker at a free desk, or to one already at a desk. With [issue], that
+  /// worker takes the GitHub issue, which moves to In progress.
+  void sendToWorker(String title, {String? context, String? initial, int? issue});
   void showSearch();
   void showQueue();
 
