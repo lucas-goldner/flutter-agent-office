@@ -171,7 +171,7 @@ Map<String, String> isolatedEnv(Fixture f, [Map<String, String> extra = const {}
 }
 
 WorkerEvents events(List<WorkerInfo> updates) =>
-    WorkerEvents(update: updates.add, remove: (_) {}, data: (_, _, _) {}, screen: (_, _) {}, toast: (_, _) {});
+    WorkerEvents(update: updates.add, remove: (_, _) {}, data: (_, _, _) {}, screen: (_, _) {}, toast: (_, _) {});
 
 Ledger ledger(String data) => Ledger(data, LedgerOptions(pauseHiring: false), (_) {}, (_, _) {});
 
@@ -1337,7 +1337,7 @@ void main() {
       _hook,
       WorkerEvents(
         update: updates.add,
-        remove: (_) {},
+        remove: (_, _) {},
         data: (_, _, _) {},
         screen: (_, _) {},
         toast: (text, _) => toasts.add(text),

@@ -134,7 +134,13 @@ WorkerManager manager(Fixture f, [List<WorkerInfo>? updates]) {
     f.dsh,
     const [],
     const HookEnv(url: 'http://127.0.0.1:1', token: ''),
-    WorkerEvents(update: (updates ?? []).add, remove: (_) {}, data: (_, _, _) {}, screen: (_, _) {}, toast: (_, _) {}),
+    WorkerEvents(
+      update: (updates ?? []).add,
+      remove: (_, _) {},
+      data: (_, _, _) {},
+      screen: (_, _) {},
+      toast: (_, _) {},
+    ),
     Ledger(f.data, LedgerOptions(pauseHiring: false), (_) {}, (_, _) {}),
     env: f.env(),
   );

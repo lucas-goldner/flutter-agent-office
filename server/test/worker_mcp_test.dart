@@ -65,7 +65,7 @@ void main() {
       const HookEnv(url: 'http://127.0.0.1:1', token: ''),
       WorkerEvents(
         update: (_) {},
-        remove: (_) {},
+        remove: (_, _) {},
         data: (_, _, _) {},
         screen: (_, _) {},
         toast: (text, _) => toasts.add(text),

@@ -4,6 +4,7 @@
 
 import 'package:office_shared/shared.dart';
 
+import 'clock.dart';
 import 'usage.dart';
 
 /// A worker's [WorkerInfo], as it changes. The wire type is immutable; this is copied into one for
@@ -18,7 +19,7 @@ class LiveInfo {
     required this.deskId,
     required this.name,
     required this.color,
-    required this.status,
+    required WorkerStatus status,
     required this.createdBy,
     required this.createdAt,
     this.prompt,
@@ -31,7 +32,9 @@ class LiveInfo {
     this.pr,
     this.usage,
     this.meeting,
-  });
+    this.workedMs,
+    this.via,
+  }) : _status = status;
 
   final String id;
   final WorkerKind kind;
@@ -41,7 +44,15 @@ class LiveInfo {
   final String deskId;
   final String name;
   final String color;
-  WorkerStatus status;
+  WorkerStatus _status;
+  WorkerStatus get status => _status;
+
+  /// Every change keeps count of how long it has worked (see clockWork).
+  set status(WorkerStatus next) {
+    clockWork(this, next);
+    _status = next;
+  }
+
   bool acked = true;
 
   /// When it last went to done or needs_input (ms), so N goes to whoever has waited longest first.
@@ -79,6 +90,14 @@ class LiveInfo {
   /// The meeting it was called to, for a worker at the meeting room's table.
   final String? meeting;
 
+  /// How long it has worked (ms) over the stretches that have ended, and since when it's been working
+  /// now (see clock.dart).
+  int? workedMs;
+  int? workingSince;
+
+  /// 'herald': sent out by a map's herald, so every browser has it run to its seat from beside them.
+  final String? via;
+
   WorkerInfo get view => WorkerInfo(
     id: id,
     kind: kind,
@@ -113,6 +132,9 @@ class LiveInfo {
     usage: usage,
     lastInput: lastInput,
     meeting: meeting,
+    workedMs: workedMs,
+    workingSince: workingSince,
+    via: via,
   );
 }
 

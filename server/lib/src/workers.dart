@@ -14,6 +14,7 @@ import 'package:office_shared/shared.dart';
 import 'package:path/path.dart' as p;
 
 import 'agents.dart';
+import 'clock.dart';
 import 'drops.dart';
 import 'dsh.dart';
 import 'github.dart' show gh;
@@ -38,6 +39,7 @@ import 'worktrees.dart';
 export 'providers/providers.dart' show childEnv;
 export 'providers/opencode.dart' show withoutOpenCodeModel;
 export 'worker_pr.dart' show OpenedPr, RepoSource;
+export 'clock.dart' show clockWork, workedMs, workedMsOf;
 
 part 'worker_trees.dart';
 
@@ -126,7 +128,9 @@ class WorkerEvents {
   });
 
   final void Function(WorkerInfo info) update;
-  final void Function(String workerId) remove;
+
+  /// It's gone (sent home), and what it was as it went.
+  final void Function(String workerId, WorkerInfo info) remove;
 
   /// Terminal output, for the people who have that terminal open (client ids).
   final void Function(String workerId, String data, List<String> viewers) data;
@@ -481,6 +485,7 @@ class WorkerManager implements QueueWorkers {
     ({String id, WorkerWorktree? worktree})? meeting,
     List<RepoSource> repos = const [],
     String? owner,
+    String? via,
   ]) {
     ({WorkerInfo? worker, String? error}) fail(String error) => (worker: null, error: error);
     // Nobody picked (a board agent, say): the office's default worker, model and effort included.
@@ -581,6 +586,7 @@ class WorkerManager implements QueueWorkers {
       repos: others,
       activity: prompt != null && prompt.isNotEmpty ? _truncate(prompt, 80) : null,
       meeting: meeting?.id,
+      via: via == 'herald' ? 'herald' : null,
     );
     final w = _Worker(info, newTracker())..owner = owner;
     _workers[id] = w;
@@ -688,7 +694,7 @@ class WorkerManager implements QueueWorkers {
     w.term?.dispose();
     _scrollback.remove(id);
     _drops.remove(id);
-    _events.remove(id);
+    _events.remove(id, w.info.view);
     _persist();
     return _sendHome(w.info, cleanup, landed, landedRepos);
   }
@@ -1721,6 +1727,7 @@ class WorkerManager implements QueueWorkers {
           if (w.info.pastPrs.isNotEmpty) 'pastPrs': w.info.pastPrs,
           if (w.info.repos case final repos?) 'repos': [for (final r in repos) r.toJson()],
           'meeting': ?w.info.meeting,
+          'workedMs': ?workedMs(w.info),
           if (w.info.kind == WorkerKind.agent) 'tracker': w.tracker.toJson(),
           if (providerAdapter(w.info.provider)?.usage?.persisted ?? false) 'usage': ?w.info.usage?.toJson(),
           ...?providerAdapter(w.info.provider)?.usage?.save?.call(w.state),
@@ -1793,6 +1800,9 @@ class WorkerManager implements QueueWorkers {
               : null,
           meeting: s['meeting'] is String && deskById[deskId]!.room ? s['meeting'] as String : null,
           repos: worktree is Map ? validRepos(s['repos']) : null,
+          workedMs: s['workedMs'] is num && (s['workedMs'] as num).isFinite && (s['workedMs'] as num) > 0
+              ? (s['workedMs'] as num).toInt()
+              : null,
         );
         final past = s['pastPrs'];
         if (past is List) {

@@ -23,6 +23,7 @@ import 'history.dart';
 import 'leave_on_merge.dart';
 import 'limits.dart';
 import 'machine.dart';
+import 'maps.dart';
 import 'models.dart';
 import 'prompts.dart';
 import 'relay.dart';
@@ -733,6 +734,30 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
   // Halloween or Christmas all over the building, the same for everyone (⚙️ Settings). On 'auto' it
   // goes by the calendar at the office, the sky's clock.
   final themes = Themes(cfg.dataDir, () => sky.state.utcOffset, (state) => broadcast(ThemeMsg(state)))..start();
+  // What the building looks like inside: the office, the castle, or a map of your own (⚙️ Settings).
+  final maps = Maps(cfg.dataDir);
+
+  /// Tells everyone about the maps, after a pick or a read of the folder. When the map everyone's on
+  /// changed ([was] before), everyone's off their seats (each browser forgets them too, see the
+  /// client's 'map'), and hears what it is now: [who] picked it, or a map of your own broke or came back.
+  void mapNews(String was, [String? who]) {
+    final now = maps.pick();
+    if (now != was) {
+      for (final other in clients.values) {
+        other.peer.seat = null;
+      }
+    }
+    broadcast(MapMsg(maps.state()));
+    if (now == was) return;
+    final plan = maps.plan();
+    // Without a pick, a map of your own broke (back to the office) or was fixed (back to it).
+    final why = now == officeMap ? ": the map \"$was\" won't load (see ⚙️ Settings)" : ': it loads again';
+    toastAll(
+      who != null
+          ? "$who changed the building's map to ${plan.icon} ${plan.name}"
+          : "The building's map is ${plan.icon} ${plan.name} now$why",
+    );
+  }
 
   // What the workers spend, all time and today, with the optional daily budget.
   final ledger = Ledger(
@@ -884,6 +909,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
           }
         })
         ..onLent = ((floor) => floors.values.any((f) => f != floor && _worksIn(f, floor)))
+        ..onLocksUp = (() => maps.plan().sendHome?.keeps ?? false)
         ..runAs = signins
         ..onGhAs = ((owner) => owner != null ? signins.ghAs(owner) : (as: null, refused: null));
   officeWorkersContext = _OfficeWorkersContext(
@@ -1012,6 +1038,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
       people: floor != null ? drawing(floor) : const [],
     ),
     meeting: floor?.meetings.state() ?? const MeetingState(),
+    jail: floor?.jail.state() ?? const JailState(),
   );
 
   /// The rooftop bar: nobody works up there, so it has none of a floor's things.
@@ -1797,8 +1824,20 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         // Everyone sees them sit down (or get up), and anyone who comes in later finds them sitting.
         // Only on a seat where they are: the roof's up on the roof, the office's on a floor.
         final key = _str(msg['seat'], 40);
-        final seat = seatHere(key, c.peer.floor == roof) != null ? key : null;
+        final seat = seatHereOn(maps.plan(), key, c.peer.floor == roof) != null ? key : null;
         if (seat == c.peer.seat) break;
+        // Somebody on the floor got there first (two people arriving at an empty throne at once).
+        // (Not yourself, on a connection that hasn't timed out yet after a reconnect.)
+        bool same(_Client o) => o.peer.name == c.peer.name || (o.accountId != null && o.accountId == c.accountId);
+        final there = seat == null
+            ? null
+            : clients.values
+                  .where((o) => o != c && !same(o) && o.peer.seat == seat && o.peer.floor == c.peer.floor)
+                  .firstOrNull;
+        if (there != null) {
+          sendTo(c, SitRefusedMsg(key, there.peer.name));
+          break;
+        }
         c.peer.seat = seat;
         broadcast(PeerUpdateMsg(c.peer.info), except: c.id);
       case 'carry':
@@ -2021,6 +2060,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
             null,
             repos,
             c.accountId,
+            msg['via'] == 'herald' ? 'herald' : null,
           );
           final across = repos.isNotEmpty ? ' across ${[floor.def.name, ...repos.map((x) => x.name)].join(' + ')}' : '';
           final w = r.worker;
@@ -2296,6 +2336,16 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
               ? '🤖 $who set the office’s default worker'
               : '🤖 $who put the office’s default worker back to ${p.basename(cfg.agentCmd)}',
         );
+      case 'map.set':
+        // Someone opened the list, or picked a map: either way the folder of maps of your own is read again first.
+        final was = maps.pick();
+        final reloaded = maps.reload();
+        if (!msg.containsKey('map') || msg['map'] == null || !maps.set(_str(msg['map'], 64), who)) {
+          if (reloaded) mapNews(was);
+          if (msg['map'] != null) warn(c, 'There’s no map by that name, or it won’t load: see ⚙️ Settings');
+          break;
+        }
+        mapNews(was, who);
       case 'leaveOnMerge.set':
         final on = msg['on'] == true;
         if (on == leaveOnMerge.on) break;
@@ -2858,6 +2908,9 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     client.peer
       ..y = spot.y
       ..rotY = spot.rotY;
+    // Maps of your own may have been added or edited since: everyone already in hears first.
+    final mapWas = maps.pick();
+    if (maps.reload()) mapNews(mapWas);
     clients[id] = client;
     if (account != null) accounts.seen(account.id);
     // dart:io pings on this interval and drops a connection whose pong doesn't come back in time,
@@ -2885,6 +2938,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         prompts: officePrompts.state(),
         leaveOnMerge: leaveOnMerge.state(),
         theme: themes.state(),
+        map: maps.state(),
         view: onRoof ? roofView() : floorView(floor),
       ),
     );
@@ -3135,6 +3189,9 @@ class _FloorContext implements FloorContext {
   bool Function(Floor floor)? onLent;
   @override
   bool lent(Floor floor) => onLent?.call(floor) ?? false;
+  bool Function()? onLocksUp;
+  @override
+  bool locksUp() => onLocksUp?.call() ?? false;
   @override
   RunAs? runAs;
   GhRunAs Function(String? owner)? onGhAs;

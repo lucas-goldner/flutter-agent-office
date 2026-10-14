@@ -14,6 +14,7 @@ import 'decor.dart';
 import 'docs.dart';
 import 'dog.dart';
 import 'github.dart';
+import 'jail.dart';
 import 'jukebox.dart';
 import 'leave_on_merge.dart' show Landed, landedWork, landedWorkers;
 import 'machine.dart' show Capacity;
@@ -77,6 +78,9 @@ abstract interface class FloorContext {
   /// Whether a worker on another floor works in this floor's project too.
   bool lent(Floor floor);
 
+  /// Whether the building's map locks up workers sent home (see MapPlan.sendHome), instead of letting them go.
+  bool locksUp();
+
   /// Workers hired by an account run on its own sign-ins (see signins.dart).
   RunAs? get runAs;
 
@@ -136,6 +140,8 @@ class Floor {
     excludeFromGit(def.dir);
     project = projectInfo(def.dir, def.name, _ctx.agentCmd, _ctx.agentArgs);
 
+    jail = Jail(dataDir);
+
     // Before the workers, so it hears about the ones who wake up needing input.
     dog = Dog(
       def.id,
@@ -164,9 +170,15 @@ class Floor {
           // Its turn ended, or whoever had its terminal open closed it: it may be free to go now.
           sendLandedHome();
         },
-        remove: (workerId) {
+        remove: (workerId, info) {
           _changes?.forget(workerId);
-          _ctx.emit(this, WorkerRemoveMsg(workerId));
+          // Sent home on a map that keeps workers (the castle locks them up, the station puts them out
+          // of its airlock): it's kept, for good (a meeting's workers aren't sent home when it's over,
+          // just let go).
+          final jail = info.meeting == null && _ctx.locksUp()
+              ? this.jail.add(id: info.id, name: info.name, color: info.color, workedMs: workedMsOf(info))
+              : null;
+          _ctx.emit(this, WorkerRemoveMsg(workerId, jail: jail));
           _queue?.onWorkerGone(workerId);
           _meetings?.onWorkerGone(workerId);
           dog.onWorkerGone(workerId);
@@ -328,6 +340,9 @@ class Floor {
   /// Completes once the workers whose terminals outlived the last office are picked back up, and the rest woken.
   late final Future<void> ready;
   late final Dog dog;
+
+  /// Workers sent home on a map that keeps them (see MapPlan.sendHome).
+  late final Jail jail;
   late final Timer _timer;
 
   /// Pull requests merging, to ring the gong for.

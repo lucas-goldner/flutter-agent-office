@@ -136,7 +136,13 @@ class Fixture {
   }
 }
 
-final _events = WorkerEvents(update: (_) {}, remove: (_) {}, data: (_, _, _) {}, screen: (_, _) {}, toast: (_, _) {});
+final _events = WorkerEvents(
+  update: (_) {},
+  remove: (_, _) {},
+  data: (_, _, _) {},
+  screen: (_, _) {},
+  toast: (_, _) {},
+);
 
 WorkerManager manager(Fixture f) {
   final data = p.join(f.a, '.agent-office');
