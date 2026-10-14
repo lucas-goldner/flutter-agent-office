@@ -66,6 +66,23 @@ abstract interface class FloorContext {
 
   /// ⚙️ Settings: a worker whose pull request merged goes home by itself.
   bool leaveOnMerge();
+
+  /// Another floor of the building: a worker across repositories works in its project too (see WorkerInfo.repos).
+  Floor? floor(String id);
+
+  /// This floor's pull requests came back: a worker on another floor with a repository here may have landed.
+  void pullsChanged(Floor floor);
+
+  /// Whether a worker on another floor works in this floor's project too.
+  bool lent(Floor floor);
+}
+
+/// The open pull request on a floor's board whose head is [branch].
+PrRef? _openPull(Floor floor, String branch) {
+  for (final pr in floor.github.pulls.items) {
+    if (pr.state == 'OPEN' && pr.headRefName == branch) return PrRef(number: pr.number, url: pr.url);
+  }
+  return null;
 }
 
 /// How long after a PR list or a worker's change the office looks for workers whose PR merged.
@@ -163,11 +180,14 @@ class Floor {
       _ctx.emit(this, GhPullsMsg(state));
       _queue?.onPulls(state.items);
       if (state.loading || state.error != null) return;
+      // A worker may have opened one from a branch it made itself, mid-turn or from a shell.
+      unawaited(workers.syncBranches());
       for (final pr in _merges.look(state.items)) {
         _ctx.toast(this, '🎉 PR #${pr.number} merged: ${pr.title}');
         merged(pr.number);
       }
       sendLandedHome();
+      _ctx.pullsChanged(this);
     });
     // The 📋 task queue seats workers by itself: it watches the workers and links PRs from GitHub.
     _queue = TaskQueue(
@@ -212,23 +232,35 @@ class Floor {
     _changes = Changes(
       def.dir,
       project.branch,
-      (workerId) {
+      (workerId, repo) {
         final w = workers.get(workerId);
         if (w == null) return null;
         final wt = w.worktree;
+        if (repo == null) {
+          return ChangesTarget(
+            name: w.name,
+            cwd: wt != null ? p.join(def.dir, wt.path) : def.dir,
+            rel: wt?.path ?? '',
+            worktreeBase: wt?.base,
+          );
+        }
+        // One of the other floors' repositories it works in: diffed against, and PRs opened against, that floor's branch.
+        final r = w.repos?.where((x) => x.floor == repo).firstOrNull;
+        if (r == null) return null;
+        final other = _ctx.floor(r.floor);
         return ChangesTarget(
           name: w.name,
-          cwd: wt != null ? p.join(def.dir, wt.path) : def.dir,
-          rel: wt?.path ?? '',
-          worktreeBase: wt?.base,
+          cwd: p.join(def.dir, r.path),
+          rel: r.path,
+          worktreeBase: r.base,
+          baseBranch: (branch: r.from),
+          openPull: (branch) => other != null ? _openPull(other, branch) : null,
+          refreshGitHub: () {
+            if (other != null) unawaited(other.github.refresh());
+          },
         );
       },
-      (branch) {
-        for (final pr in github.pulls.items) {
-          if (pr.state == 'OPEN' && pr.headRefName == branch) return PrRef(number: pr.number, url: pr.url);
-        }
-        return null;
-      },
+      (branch) => _openPull(this, branch),
       ChangesEvents(
         state: (state, ids) => _ctx.changes(state, ids),
         toast: (text, level) => _ctx.toast(this, text, level),
@@ -301,17 +333,40 @@ class Floor {
     _landedTimer = Timer(_landedDelay, () {
       _landedTimer = null;
       if (!_ctx.leaveOnMerge() || _closed) return;
-      for (final l in landedWorkers(workers.list(), github.pulls.items, queue.state().tasks)) {
-        final done = workers.kill(l.worker.id, null, l.head);
-        _ctx.toast(this, '🏠 ${l.worker.name} went home: PR #${l.pr} merged');
+      List<GhPull>? pullsOf(String id) => _ctx.floor(id)?.github.pulls.items;
+      for (final l in landedWorkers(workers.list(), github.pulls.items, queue.state().tasks, pullsOf)) {
+        final worker = l.worker;
+        if (worker.repos?.isEmpty ?? true) {
+          _goHome(worker, 'PR #${l.pr} merged', l.head);
+          continue;
+        }
+        // Across repositories, one PR can merge before another repository's work even has one:
+        // it goes once nothing is left that its merged PRs didn't deliver.
+        if (!_landing.add(worker.id)) continue;
         unawaited(
-          done.then((r) {
-            if (r.note != null) _ctx.toast(this, r.note!);
-            if (r.error != null) _ctx.toast(this, r.error!, ToastLevel.warn);
+          workers.holdsWork(worker.id, l.head, l.heads).catchError((_) => true).then((held) {
+            _landing.remove(worker.id);
+            if (!held && workers.get(worker.id)?.createdAt == worker.createdAt) {
+              _goHome(worker, 'its pull requests merged (${l.prs?.join(', ')})', l.head, l.heads);
+            }
           }),
         );
       }
     });
+  }
+
+  /// Workers across repositories whose worktrees are being checked before they go home.
+  final _landing = <String>{};
+
+  void _goHome(WorkerInfo worker, String why, [String? head, Map<String, String?>? heads]) {
+    final done = workers.kill(worker.id, null, head, heads);
+    _ctx.toast(this, '🏠 ${worker.name} went home: $why');
+    unawaited(
+      done.then((r) {
+        if (r.note != null) _ctx.toast(this, r.note!);
+        if (r.error != null) _ctx.toast(this, r.error!, ToastLevel.warn);
+      }),
+    );
   }
 
   bool _closed = false;
@@ -324,6 +379,7 @@ class Floor {
 
   bool _active() =>
       _ctx.people(this) > 0 ||
+      _ctx.lent(this) ||
       workers.list().any((w) => isBusy(w.status)) ||
       queue.state().tasks.any((t) => t.status != TaskStatus.done) ||
       meetings.state().current?.status == MeetingStatus.running;
@@ -336,6 +392,7 @@ class Floor {
       name: def.name,
       repo: def.repo,
       dir: dir,
+      branch: project.branch,
       palette: def.palette,
       local: local,
       addedBy: def.addedBy,

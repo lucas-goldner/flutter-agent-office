@@ -316,6 +316,18 @@ class TaskQueue {
 
   /// A worker changed. Cheap unless its status moved, which can free a slot or finish a task.
   void onWorker(WorkerInfo info) {
+    // It switched to a branch of its own (see WorkerManager.syncBranches): its task's pull request comes from there.
+    final branch = info.worktree?.branch;
+    var moved = false;
+    if (branch != null) {
+      for (final t in _tasks) {
+        if (t.workerId == info.id && t.branch != null && t.branch != branch) {
+          t.branch = branch;
+          moved = true;
+        }
+      }
+    }
+    if (moved) _changed();
     if (_lastStatus[info.id] == info.status) return;
     _lastStatus[info.id] = info.status;
     pump();

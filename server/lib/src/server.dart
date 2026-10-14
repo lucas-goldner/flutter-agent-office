@@ -446,12 +446,12 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
   /// Runs [go] once a worktree made on [floor] would start from what's on GitHub now (see
   /// Worktrees.fetch): right away when that was just fetched, else after a fetch, if [c] and the
   /// floor are still there.
-  void withFreshBase(_Client c, Floor floor, void Function() go) {
-    final fetching = floor.workers.fetchBase();
-    if (fetching == null) return go();
+  void withFreshBase(_Client c, List<Floor> all, void Function() go) {
+    final fetching = [for (final f in all) ?f.workers.fetchBase()];
+    if (fetching.isEmpty) return go();
     unawaited(
-      fetching.then((_) {
-        if (c.out || !c.open || floors[floor.id] != floor) return;
+      Future.wait(fetching).then((_) {
+        if (c.out || !c.open || all.any((f) => floors[f.id] != f)) return;
         go();
       }),
     );
@@ -763,7 +763,14 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         )
         ..capacity = machine
         ..prompts = officePrompts
-        ..onLeaveOnMerge = (() => leaveOnMerge.on);
+        ..onLeaveOnMerge = (() => leaveOnMerge.on)
+        ..onFloor = ((id) => floors[id])
+        ..onPullsChanged = ((floor) {
+          for (final f in floors.values) {
+            if (f != floor && _worksIn(f, floor)) f.sendLandedHome();
+          }
+        })
+        ..onLent = ((floor) => floors.values.any((f) => f != floor && _worksIn(f, floor)));
 
   Floor? openFloor(FloorDef def) {
     if (!Directory(def.dir).existsSync()) {
@@ -1184,7 +1191,9 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
       }
       if (floor == null) return _send(404, {'error': 'No such floor'});
       if (floor.workers.get(workerId) == null) return _send(404, {'error': 'No such worker'});
-      return _pictureResponse(await floor.changes.file(workerId, file, old: side == 'old'));
+      return _pictureResponse(
+        await floor.changes.file(workerId, file, old: side == 'old', repo: _repoOf(_query(url, 'repo'))),
+      );
     }
     if (path.startsWith('/api/docs') && method == Method.get) {
       // The bookshelf: the project's Markdown files, one to read, and the pictures in it (see docs.dart).
@@ -1717,6 +1726,26 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         final model = msg.containsKey('model') ? _str(msg['model'], openCodeModelMax + 1) : null;
         final effort = AgentEffort.tryParse(msg['effort']);
         final prompt = _str(msg['prompt'], 20000);
+        // Other floors' projects to work in too, each in a worktree of its own.
+        final repos = <RepoSource>[];
+        String? refused;
+        final asked = msg['repos'] is List
+            ? (msg['repos'] as List).take(maxRepos + 1).map((x) => _str(x, 64))
+            : const <String>[];
+        for (final id in asked.toSet()) {
+          final other = floors[id];
+          if (other == null || other == floor) {
+            refused = other != null
+                ? "The worker's own floor's project is already in its workspace"
+                : 'That project is no longer in the building';
+            break;
+          }
+          repos.add(RepoSource(floor: other.id, name: other.def.name, repo: other.def.repo, dir: other.dir));
+        }
+        if (refused != null) {
+          warn(c, refused);
+          break;
+        }
         void hire() {
           final r = floor.workers.spawn(
             _str(msg['deskId'], 32),
@@ -1727,7 +1756,10 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
             provider,
             model,
             effort,
+            null,
+            repos,
           );
+          final across = repos.isNotEmpty ? ' across ${[floor.def.name, ...repos.map((x) => x.name)].join(' + ')}' : '';
           final w = r.worker;
           final issue = kind == WorkerKind.agent ? _issueNumber(msg['issue']) : null;
           if (w == null) {
@@ -1741,14 +1773,15 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
                         ? ' for issue #$issue'
                         : (w.prompt ?? '').isNotEmpty
                         ? ' with a task'
-                        : ''}',
+                        : ''}$across',
             );
             if (issue != null) takeIssue(c, floor, issue);
           }
         }
 
         if (msg['worktree'] == true) {
-          withFreshBase(c, floor, hire);
+          // Every project it gets a worktree of starts from what's on GitHub.
+          withFreshBase(c, [floor, for (final x in repos) floors[x.floor]!], hire);
         } else {
           hire();
         }
@@ -1838,23 +1871,52 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         final (:floor, :wid, info: _) = w;
         unawaited(
           floor.workers.openPr(wid, who).then((r) {
-            final pr = r.pr;
-            if (pr == null) return warn(c, r.error);
-            final name = floor.workers.get(wid)?.name ?? 'the worker';
-            toastFloor(
-              floor,
-              pr.existed ? "$name's branch already has PR #${pr.number}" : '$who opened PR #${pr.number} for $name',
-            );
-            if (pr.dirty) warn(c, '$name still has uncommitted changes in its worktree — they are not in the PR');
+            if (r.error != null) return warn(c, r.error);
+            final info = floor.workers.get(wid);
+            final name = info?.name ?? 'the worker';
+            final one = r.prs.first;
+            if (r.prs.length == 1 && one.repo == null) {
+              toastFloor(
+                floor,
+                one.existed
+                    ? "$name's branch already has PR #${one.number}"
+                    : '$who opened PR #${one.number} for $name',
+              );
+            } else {
+              // Across repositories: one line for them all.
+              final list = r.prs.map((x) => '${x.repo} #${x.number}').join(', ');
+              toastFloor(
+                floor,
+                r.prs.every((x) => x.existed)
+                    ? "$name's pull requests are already open: $list"
+                    : "$who opened $name's pull requests: $list",
+              );
+            }
+            final dirty = r.prs.where((x) => x.dirty).toList();
+            if (dirty.isNotEmpty) {
+              final where = dirty.any((x) => x.repo != null)
+                  ? 'its worktree${dirty.length > 1 ? 's' : ''} of ${dirty.map((x) => x.repo).join(', ')}'
+                  : 'its worktree';
+              warn(c, '$name still has uncommitted changes in $where — they are not in the PR');
+            }
+            for (final f in r.failed) {
+              warn(c, f);
+            }
             // Put it on the board now rather than at the next poll. A refresh already in flight
             // returns at once and can miss it, so look again shortly after.
+            final ownName = info?.worktree == null ? null : p.basename(info!.worktree!.path);
+            final own = r.prs.where((x) => x.repo == null || x.repo == ownName).firstOrNull;
             unawaited(
               floor.github.refresh().then((_) {
-                if (!floor.github.pulls.items.any((x) => x.number == pr.number)) {
+                if (own != null && !floor.github.pulls.items.any((x) => x.number == own.number)) {
                   Timer(const Duration(seconds: 3), () => unawaited(floor.github.refresh()));
                 }
               }),
             );
+            for (final x in info?.repos ?? const <WorkerRepo>[]) {
+              final other = floors[x.floor];
+              if (other != null) unawaited(other.github.refresh());
+            }
           }),
         );
       case 'term.input':
@@ -1908,7 +1970,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
           model: msg.containsKey('model') && msg['model'] != null ? _str(msg['model'], openCodeModelMax + 1) : null,
           effort: AgentEffort.tryParse(msg['effort']),
         );
-        withFreshBase(c, floor, () => warn(c, floor.meetings.start(request, who)));
+        withFreshBase(c, [floor], () => warn(c, floor.meetings.start(request, who)));
       case 'meeting.stop':
         final floor = here();
         if (floor != null) warn(c, floor.meetings.stop(who));
@@ -2161,49 +2223,68 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         );
       case 'changes.watch':
         final w = worker(msg['workerId']);
-        if (w != null) w.floor.changes.watch(w.wid, c.id);
+        if (w != null) w.floor.changes.watch(w.wid, c.id, _repoOf(msg['repo']));
       case 'changes.unwatch':
         final wid = _str(msg['workerId'], 32);
         // Its worker may have gone home already; stop watching wherever it was.
         for (final f in floors.values) {
-          f.changes.unwatch(wid, c.id);
+          f.changes.unwatch(wid, c.id, _repoOf(msg['repo']));
         }
       case 'changes.diff':
         final workerId = _str(msg['workerId'], 32);
         final file = _str(msg['path'], 4096);
+        final repo = _repoOf(msg['repo']);
         final floor = workerFloor(workerId);
         if (floor == null) {
           sendTo(
             c,
-            ChangesDiffMsg(workerId: workerId, path: file, diff: '', truncated: false, error: 'No such worker'),
+            ChangesDiffMsg(
+              workerId: workerId,
+              repo: repo,
+              path: file,
+              diff: '',
+              truncated: false,
+              error: 'No such worker',
+            ),
           );
           break;
         }
         unawaited(
-          floor.changes.diff(workerId, file).then((r) {
+          floor.changes.diff(workerId, file, repo).then((r) {
             sendTo(
               c,
-              ChangesDiffMsg(workerId: workerId, path: file, diff: r.diff, truncated: r.truncated, error: r.error),
+              ChangesDiffMsg(
+                workerId: workerId,
+                repo: repo,
+                path: file,
+                diff: r.diff,
+                truncated: r.truncated,
+                error: r.error,
+              ),
             );
           }),
         );
       case 'changes.commit':
         final w = worker(msg['workerId']);
         if (w != null) {
-          unawaited(w.floor.changes.commit(w.wid, _str(msg['message'], 5000), who).then((err) => warn(c, err)));
+          unawaited(
+            w.floor.changes
+                .commit(w.wid, _str(msg['message'], 5000), who, _repoOf(msg['repo']))
+                .then((err) => warn(c, err)),
+          );
         }
       case 'changes.discard':
         final w = worker(msg['workerId']);
         if (w != null) {
           final path = msg['path'] is String ? _str(msg['path'], 4096) : null;
-          unawaited(w.floor.changes.discard(w.wid, path, who).then((err) => warn(c, err)));
+          unawaited(w.floor.changes.discard(w.wid, path, who, _repoOf(msg['repo'])).then((err) => warn(c, err)));
         }
       case 'changes.pr':
         final w = worker(msg['workerId']);
         if (w != null) {
           unawaited(
             w.floor.changes
-                .pullRequest(w.wid, _str(msg['title'], 300), _str(msg['body'], 20000), who)
+                .pullRequest(w.wid, _str(msg['title'], 300), _str(msg['body'], 20000), who, _repoOf(msg['repo']))
                 .then((err) => warn(c, err)),
           );
         }
@@ -2690,4 +2771,23 @@ class _FloorContext implements FloorContext {
   bool Function()? onLeaveOnMerge;
   @override
   bool leaveOnMerge() => onLeaveOnMerge?.call() ?? false;
+  Floor? Function(String id)? onFloor;
+  @override
+  Floor? floor(String id) => onFloor?.call(id);
+  void Function(Floor floor)? onPullsChanged;
+  @override
+  void pullsChanged(Floor floor) => onPullsChanged?.call(floor);
+  bool Function(Floor floor)? onLent;
+  @override
+  bool lent(Floor floor) => onLent?.call(floor) ?? false;
 }
+
+/// Which of a worker's repositories a Changes message is about: another floor's (see WorkerInfo.repos),
+/// or none for its own.
+String? _repoOf(Object? v) {
+  final s = _str(v, 64);
+  return s.isEmpty ? null : s;
+}
+
+/// Whether a worker on [from] works in [on]'s project too (see WorkerInfo.repos).
+bool _worksIn(Floor from, Floor on) => from.workers.list().any((w) => w.repos?.any((r) => r.floor == on.id) ?? false);

@@ -23,6 +23,7 @@ class LiveInfo {
     required this.createdAt,
     this.prompt,
     this.worktree,
+    this.repos,
     this.title,
     this.sessionId,
     this.activity,
@@ -53,6 +54,12 @@ class LiveInfo {
   /// Its worktree (or workspace) folder is gone, and where its branch still is (see worktrees.dart).
   LostBranch? lost;
   PrRef? pr;
+
+  /// Pull requests it opened before [pr] (it ran `gh pr create` again): still its own, for "landed".
+  List<int> pastPrs = const [];
+
+  /// Other floors' repositories it works in too, each a worktree in its workspace (see WorkerRepo).
+  List<WorkerRepo>? repos;
   bool? prOpening;
   String? title;
   String? sessionId;
@@ -90,6 +97,8 @@ class LiveInfo {
     worktree: worktree,
     lost: lost,
     pr: pr,
+    pastPrs: List.unmodifiable(pastPrs),
+    repos: repos == null ? null : List.unmodifiable(repos!),
     prOpening: prOpening,
     title: title,
     sessionId: sessionId,

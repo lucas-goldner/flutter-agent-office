@@ -28,7 +28,7 @@ import 'package:test/test.dart';
   final changes = Changes(
     dir,
     'main',
-    (id) => id == 'w1' ? target : null,
+    (id, _) => id == 'w1' ? target : null,
     (_) => null,
     ChangesEvents(state: (_, _) {}, toast: (_, _) {}, refreshGitHub: () {}),
   );

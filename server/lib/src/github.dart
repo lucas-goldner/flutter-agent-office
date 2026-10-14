@@ -120,10 +120,13 @@ Future<_Ran> _exec(String cmd, List<String> args, String cwd, Duration timeout) 
 }
 
 /// Runs the GitHub CLI in [cwd] and resolves to its stdout; a failure throws a message worth showing.
+/// The GitHub CLI the office runs: `gh` on PATH. Tests put a fake one in its place.
+String ghCommand = 'gh';
+
 Future<String> gh(List<String> args, String cwd, [int timeout = 30000]) async {
   _Ran r;
   try {
-    r = await _exec('gh', args, cwd, Duration(milliseconds: timeout));
+    r = await _exec(ghCommand, args, cwd, Duration(milliseconds: timeout));
   } on ProcessException catch (e) {
     if (e.errorCode == 2) throw GhError('GitHub CLI (gh) is not installed on the server');
     throw GhError(friendlyGhError(e.message));

@@ -143,7 +143,7 @@ void main() {
     final changes = Changes(
       f.dir,
       'main',
-      (_) => target,
+      (_, _) => target,
       (_) => null,
       ChangesEvents(state: (s, _) => states.add(s), toast: (_, _) {}, refreshGitHub: () {}),
     );

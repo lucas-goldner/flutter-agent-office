@@ -29,10 +29,14 @@ import 'services.dart' show ServiceOwner;
 import 'stations.dart';
 import 'tasks.dart';
 import 'usage.dart';
+import 'worker_pr.dart';
 import 'worktrees.dart';
 
 export 'providers/providers.dart' show childEnv;
 export 'providers/opencode.dart' show withoutOpenCodeModel;
+export 'worker_pr.dart' show OpenedPr, RepoSource;
+
+part 'worker_trees.dart';
 
 const _names = [
   'Pixel', 'Byte', 'Nibble', 'Sprocket', 'Widget', 'Gizmo', 'Bolt', 'Cosmo', 'Dot', 'Echo', //
@@ -65,8 +69,9 @@ const _taskTools = 10;
 /// While a worker works, refresh its task summary after this many tool calls, at most this often.
 const _taskRefreshTools = 8;
 const _taskRefreshMs = 90000;
-const _prTitleMax = 72;
-const _prTaskMax = 2500;
+
+/// The most other repositories one worker can take on (see WorkerInfo.repos).
+const maxRepos = 8;
 
 /// How often every worker's transcript is checked for new spend, on top of the hook-driven checks.
 const _usageScan = Duration(seconds: 10);
@@ -113,20 +118,6 @@ class WorkerEvents {
   /// A laptop screen frame.
   final void Function(String workerId, ScreenFrame frame) screen;
   final void Function(String text, ToastLevel level) toast;
-}
-
-/// A pull request [WorkerManager.openPr] opened, or found already open.
-class OpenedPr {
-  const OpenedPr({required this.number, required this.url, required this.existed, required this.dirty});
-
-  final int number;
-  final String url;
-
-  /// It was already open (a second press, or one opened by hand).
-  final bool existed;
-
-  /// The worktree has uncommitted changes that aren't in it.
-  final bool dirty;
 }
 
 /// Its terminal in the host as of the last save, and how it was doing, to pick back up after a restart.
@@ -388,6 +379,8 @@ class WorkerManager implements QueueWorkers {
       _checkLost(w);
     }
     wakeAll();
+    // It may have switched branches while the office was down, its terminal still going.
+    unawaited(syncBranches());
   }
 
   String? get resolvedAgent => _agentPath;
@@ -429,7 +422,8 @@ class WorkerManager implements QueueWorkers {
 
   /// Seats a new worker at [deskId]. Returns it, or why there is none as `error`. [meeting] seats one
   /// at the meeting room's table instead, for that meeting (see meetings.dart), in the meeting's own
-  /// worktree, which everyone at the table shares.
+  /// worktree, which everyone at the table shares. [repos] are other floors' repositories a worker in
+  /// its own worktree works in too (see _makeWorkspace).
   @override
   ({WorkerInfo? worker, String? error}) spawn(
     String deskId,
@@ -441,6 +435,7 @@ class WorkerManager implements QueueWorkers {
     String? model,
     AgentEffort? effort,
     ({String id, WorkerWorktree? worktree})? meeting,
+    List<RepoSource> repos = const [],
   ]) {
     ({WorkerInfo? worker, String? error}) fail(String error) => (worker: null, error: error);
     // Nobody picked (a board agent, say): the office's default worker, model and effort included.
@@ -477,6 +472,10 @@ class WorkerManager implements QueueWorkers {
     if (meeting != null && (kind != WorkerKind.agent || worktree)) {
       return fail('A meeting seats agents, in its own worktree');
     }
+    if (repos.isNotEmpty && (kind != WorkerKind.agent || !worktree || station != null || meeting != null)) {
+      return fail('Only a worker in its own worktree can work in other repositories too');
+    }
+    if (repos.length > maxRepos) return fail('A worker can take on at most $maxRepos other repositories');
     if (kind == WorkerKind.shell && provider != null) return fail('Shell workers do not have an agent provider');
     if (kind == WorkerKind.agent &&
         selectedProvider == AgentProvider.custom &&
@@ -495,12 +494,24 @@ class WorkerManager implements QueueWorkers {
         agent?.name ?? _names.firstWhere((n) => !used.contains(n), orElse: () => 'Worker ${_workers.length + 1}');
     final id = _randomHex(6);
     WorkerWorktree? wt = meeting?.worktree;
+    List<WorkerRepo>? others;
     if (worktree) {
-      final made = _trees.create('${name.toLowerCase()}-${id.substring(0, 4)}');
-      if (made.error != null) return fail(made.error!);
-      wt = made.worktree;
-      final note = made.note;
-      if (note != null) _events.toast("🌿 $name's worktree $note", ToastLevel.info);
+      final slug = '${name.toLowerCase()}-${id.substring(0, 4)}';
+      if (repos.isNotEmpty) {
+        final made = _makeWorkspace(slug, repos);
+        if (made.error != null) return fail(made.error!);
+        wt = made.worktree;
+        others = made.repos;
+        for (final note in made.notes) {
+          _events.toast("🌿 $name's worktree of $note", ToastLevel.info);
+        }
+      } else {
+        final made = _trees.create(slug);
+        if (made.error != null) return fail(made.error!);
+        wt = made.worktree;
+        final note = made.note;
+        if (note != null) _events.toast("🌿 $name's worktree $note", ToastLevel.info);
+      }
     }
     final trimmed = prompt?.trim();
     final info = LiveInfo(
@@ -517,6 +528,7 @@ class WorkerManager implements QueueWorkers {
       createdAt: _now(),
       prompt: kind == WorkerKind.shell || trimmed == null || trimmed.isEmpty ? null : trimmed,
       worktree: wt,
+      repos: others,
       activity: prompt != null && prompt.isNotEmpty ? _truncate(prompt, 80) : null,
       meeting: meeting?.id,
     );
@@ -602,7 +614,12 @@ class WorkerManager implements QueueWorkers {
   /// pull request's head commit) is work delivered. Resolves once that's done, with a line for the
   /// team about the worktree.
   @override
-  Future<({String? note, String? error})> kill(String id, [WorktreeCleanup? cleanup, String? landed]) async {
+  Future<({String? note, String? error})> kill(
+    String id, [
+    WorktreeCleanup? cleanup,
+    String? landed,
+    Map<String, String?>? landedRepos,
+  ]) async {
     const none = (note: null, error: null);
     final w = _workers.remove(id);
     if (w == null) return none;
@@ -622,25 +639,7 @@ class WorkerManager implements QueueWorkers {
     _scrollback.remove(id);
     _events.remove(id);
     _persist();
-    final wt = w.info.worktree;
-    // A meeting's worktree is everyone at the table's: the meeting tidies it away once they've all gone.
-    if (wt == null || w.info.meeting != null) return none;
-    final name = w.info.name;
-    final ref = _ref(wt);
-    if (cleanup == null) {
-      final work = describeWork(await _trees.inspect(ref, landed));
-      if (work.isNotEmpty) return (note: "Kept $name's worktree and branch ${wt.branch} — it has $work", error: null);
-      cleanup = WorktreeCleanup.all;
-    }
-    if (cleanup == WorktreeCleanup.keep) return (note: "Kept $name's worktree and branch ${wt.branch}", error: null);
-    final error = await _trees.remove(ref, cleanup);
-    if (error != null) return (note: null, error: "Couldn't delete $name's worktree: $error");
-    return (
-      note: cleanup == WorktreeCleanup.all
-          ? "Deleted $name's worktree and branch ${wt.branch}"
-          : "Deleted $name's worktree and kept branch ${wt.branch}",
-      error: null,
-    );
+    return _sendHome(w.info, cleanup, landed, landedRepos);
   }
 
   /// Whether the folder a worker works in (its worktree) is gone: deleted outside the office. It's then
@@ -693,15 +692,32 @@ class WorkerManager implements QueueWorkers {
     ];
     final froms = <String>[];
     if (!Directory(folder).existsSync()) {
+      final across = info.repos?.isNotEmpty ?? false;
       w.rebuilding = true;
       try {
-        final r = await _trees.restore(_ref(wt));
-        if (r.error != null) {
-          return (rebuilt: false, note: null, error: "Couldn't rebuild ${info.name}'s worktree: ${r.error}");
+        for (final t in _treesOf(info)) {
+          final rel = t.ref.path;
+          if (rel != null && Directory(p.join(t.dir, rel)).existsSync()) continue;
+          final r = await t.trees.restore(t.ref);
+          final which = across ? "${t.name}'s " : '';
+          if (r.error != null) {
+            return (
+              rebuilt: false,
+              note: null,
+              error: "Couldn't rebuild ${info.name}'s worktree${across ? ' of ${t.name}' : ''}: ${r.error}",
+            );
+          }
+          if (r.from == LostBranch.origin) froms.add('$which${t.ref.branch} came back from origin');
+          if (r.from == LostBranch.gone) {
+            froms.add('$which${t.ref.branch} was deleted too, so it starts again from where it began');
+          }
         }
-        if (r.from == LostBranch.origin) froms.add('${wt.branch} came back from origin');
-        if (r.from == LostBranch.gone) {
-          froms.add('${wt.branch} was deleted too, so it starts again from where it began');
+        if (across) {
+          try {
+            _writeBrief(wt, [for (final r in info.repos!) (name: r.name, project: r.repo ?? r.name, from: r.from)]);
+          } catch (_) {
+            // The worktrees are what it needs; the brief only says which folder is which.
+          }
         }
       } finally {
         w.rebuilding = false;
@@ -738,10 +754,10 @@ class WorkerManager implements QueueWorkers {
   }
 
   /// What a worker's worktree holds, so whoever sends it home knows what deleting it would lose.
-  Future<WorktreeState?> inspectWorktree(String id) async {
-    final wt = _workers[id]?.info.worktree;
-    return wt != null ? _trees.inspect(_ref(wt)) : null;
-  }
+  Future<WorktreeState?> inspectWorktree(String id) => _inspectTrees(id);
+
+  /// Every worker's worktree branch, looked at again (see [_syncBranch]): for when new pull requests may have come in.
+  Future<void> syncBranches() => Future.wait([for (final w in List.of(_workers.values)) _syncBranch(w)]);
 
   /// Someone opened a worker's terminal: what to draw in it first.
   ({String data, int cols, int rows})? attach(String id, String clientId, String name) {
@@ -844,93 +860,23 @@ class WorkerManager implements QueueWorkers {
   }
 
   /// Pushes a worktree worker's branch and opens a pull request for it, with a title and body
-  /// drafted from its task. Resolves to the PR, or to an `error` saying why there is none. The
-  /// branch may already have an open PR (a second press, or one opened by hand): that one is used.
-  Future<({OpenedPr? pr, String? error})> openPr(String id, String by) async {
-    ({OpenedPr? pr, String? error}) fail(String error) => (pr: null, error: error);
-    final w = _workers[id];
-    if (w == null) return fail('No such worker');
-    final info = w.info;
-    final wt = info.worktree;
-    if (wt == null) {
-      return fail('${info.name} works in the main checkout — only workers with their own worktree can open a PR');
-    }
-    if (info.prOpening == true) return fail("${info.name}'s pull request is already being opened");
-    if (isBusy(info.status)) {
-      final what = info.status == WorkerStatus.needsInput ? 'waiting on input' : info.status.wire;
-      return fail("${info.name} is still $what — wait until it's done");
-    }
-    final cwd = p.join(_dir, wt.path);
-    if (!Directory(cwd).existsSync()) return fail("${info.name}'s worktree is gone (${wt.path})");
-    info.prOpening = true;
-    _emitUpdate(w);
-    try {
-      final commits = (await _run('git', [
-        'log',
-        '--reverse',
-        '--format=%h %s',
-        '${wt.base}..${wt.branch}',
-      ], cwd)).split('\n').where((l) => l.isNotEmpty).toList();
-      final dirty = (await _run('git', ['status', '--porcelain'], cwd)) != '';
-      if (commits.isEmpty) {
-        return fail(
-          dirty
-              ? "${info.name} hasn't committed anything yet — ask it to commit first"
-              : '${info.name} has no commits on ${wt.branch} yet',
-        );
-      }
-      final open = await _findOpenPr(wt.branch, cwd);
-      if (open != null) {
-        info.pr = open;
-        _persist();
-        return (pr: OpenedPr(number: open.number, url: open.url, existed: true, dirty: dirty), error: null);
-      }
-      await _run('git', ['push', '-u', 'origin', wt.branch], cwd, 90000);
-      final base = await _pushedBranch([wt.from, _trees.currentBranch()], wt.branch);
-      final draft = _draftPr(info, commits, by);
-      final out = await gh(
-        [
-          'pr',
-          'create',
-          '--head',
-          wt.branch,
-          if (base != null) ...['--base', base],
-          '--title',
-          draft.title,
-          '--body',
-          draft.body,
-        ],
-        cwd,
-        60000,
-      );
-      final url = out.trim().split('\n').last;
-      final number = int.tryParse(RegExp(r'/pull/(\d+)').firstMatch(url)?.group(1) ?? '') ?? 0;
-      if (number == 0) throw _RunError('gh did not return a pull request URL (${_truncate(out, 120)})');
-      info.pr = PrRef(number: number, url: url);
-      _persist();
-      return (pr: OpenedPr(number: number, url: url, existed: false, dirty: dirty), error: null);
-    } catch (err) {
-      return fail("Couldn't open a PR for ${info.name}: ${_messageOf(err)}");
-    } finally {
-      info.prOpening = false;
-      // The worker may have been sent home meanwhile; an update would bring it back as a ghost.
-      if (_workers[id] == w) _emitUpdate(w);
-    }
-  }
+  /// drafted from its task. Resolves to the PRs (and what failed, across repositories), or to an
+  /// `error` saying why there is none. The branch may already have an open PR (a second press, or one
+  /// opened by hand): that one is used. A worker across repositories gets one in each repository it
+  /// committed to.
+  Future<({List<OpenedPr> prs, List<String> failed, String? error})> openPr(String id, String by) => _openPr(id, by);
 
-  /// The first of these branches that exists on origin, for a PR base. None: gh picks the default branch.
-  Future<String?> _pushedBranch(List<String?> candidates, String not) async {
-    for (final c in candidates) {
-      if (c == null || c.isEmpty || c == not) continue;
-      try {
-        await _run('git', ['rev-parse', '--verify', '--quiet', 'refs/remotes/origin/$c'], _dir);
-        return c;
-      } catch (_) {
-        // not on the remote (or never fetched)
-      }
-    }
-    return null;
-  }
+  /// The workspace of a worker across repositories (see _makeWorkspace): `.agent-office/worktrees/[slug]`
+  /// with a worktree of this floor's project and of each of [repos], or what went wrong as `error`.
+  ({WorkerWorktree? worktree, List<WorkerRepo> repos, List<String> notes, String? error}) makeWorkspace(
+    String slug,
+    List<RepoSource> repos,
+  ) => _makeWorkspace(slug, repos);
+
+  /// Whether any worktree of a worker across repositories holds work its merged pull requests didn't
+  /// deliver ([landed] and [landedRepos], as for kill): then it doesn't go home by itself yet.
+  Future<bool> holdsWork(String id, [String? landed, Map<String, String?>? landedRepos]) =>
+      _holdsWork(id, landed, landedRepos);
 
   void resize(String id, num cols, num rows) {
     final w = _workers[id];
@@ -1146,6 +1092,14 @@ class WorkerManager implements QueueWorkers {
         'AGENT_OFFICE_HOOK_TOKEN': w.hookToken,
       })
       ..addAll(plan.env ?? const {});
+    // A workspace isn't a repository, but it's inside this floor's checkout: git run in it must not
+    // find that checkout (and switch its branch, say) instead of saying it's no repository.
+    if (info.repos?.isNotEmpty ?? false) {
+      env['GIT_CEILING_DIRECTORIES'] = [
+        p.dirname(cwd),
+        if (env['GIT_CEILING_DIRECTORIES']?.isNotEmpty ?? false) env['GIT_CEILING_DIRECTORIES']!,
+      ].join(':');
+    }
     // A board agent reaches the queue with the `agent-office queue` command, whichever agent it runs.
     final queueBin = _queueBin;
     if (station != null && queueBin != null) {
@@ -1311,6 +1265,7 @@ class WorkerManager implements QueueWorkers {
       w.unsaved = true;
       _emitUpdate(w);
       _persist();
+      unawaited(_syncBranch(w));
     });
     // SessionStart fires as soon as Claude can take input. Still silent after a while means it is
     // blocked on a human: folder trust dialog, login, first-run onboarding. Flag it so it jumps.
@@ -1444,7 +1399,11 @@ class WorkerManager implements QueueWorkers {
     return providerCommand(info.provider ?? defaultProvider, _agentCmd);
   }
 
-  String _cwd(LiveInfo info) => info.worktree != null ? p.join(_dir, info.worktree!.path) : _dir;
+  /// Where a worker works: its worktree, a workspace for a worker across repositories, or the project itself.
+  String _cwd(LiveInfo info) {
+    final rel = workspaceOf(info.worktree, info.repos);
+    return rel != null ? p.join(_dir, rel) : _dir;
+  }
 
   /// Hooks fire in bursts (every tool call); one read a moment later covers the whole burst.
   void _scheduleScan(_Worker w) {
@@ -1507,6 +1466,8 @@ class WorkerManager implements QueueWorkers {
     _emitUpdate(w);
     // What a restarted office picks the worker back up as, should its terminal outlive this one.
     if (w.pty?.id != null || w.dsh != null) _persist();
+    // At rest: it may have made a branch of its own this turn, and opened its PR from there.
+    if (status == WorkerStatus.done || status == WorkerStatus.idle) unawaited(_syncBranch(w));
   }
 
   bool _syncViewers(_Worker w) {
@@ -1633,6 +1594,8 @@ class WorkerManager implements QueueWorkers {
           'activity': ?w.info.activity,
           'task': ?w.info.task?.toJson(),
           'pr': ?w.info.pr?.toJson(),
+          if (w.info.pastPrs.isNotEmpty) 'pastPrs': w.info.pastPrs,
+          if (w.info.repos case final repos?) 'repos': [for (final r in repos) r.toJson()],
           'meeting': ?w.info.meeting,
           if (w.info.kind == WorkerKind.agent) 'tracker': w.tracker.toJson(),
           if (providerAdapter(w.info.provider)?.usage?.persisted ?? false) 'usage': ?w.info.usage?.toJson(),
@@ -1705,7 +1668,14 @@ class WorkerManager implements QueueWorkers {
               ? trackerUsage(tracker)
               : null,
           meeting: s['meeting'] is String && deskById[deskId]!.room ? s['meeting'] as String : null,
+          repos: worktree is Map ? validRepos(s['repos']) : null,
         );
+        final past = s['pastPrs'];
+        if (past is List)
+          info.pastPrs = [
+            for (final n in past)
+              if (n is num) n.toInt(),
+          ];
         final token = s['hookToken'];
         final w = _Worker(info, tracker, token is String && token.isNotEmpty ? token : null);
         usage?.restore?.call(w.state, s);
@@ -1740,7 +1710,7 @@ class WorkerManager implements QueueWorkers {
 
 /// What starting a worker whose worktree was deleted (see WorkerInfo.lost) says instead.
 String lostMessage(LiveInfo info) =>
-    "${info.name}'s worktree ${info.worktree?.path} was deleted outside agent-office — rebuild it or send ${info.name} home from its desk";
+    "${info.name}'s worktree ${workspaceOf(info.worktree, info.repos)} was deleted outside agent-office — rebuild it or send ${info.name} home from its desk";
 
 /// In the middle of a turn: working, or asking something (not stuck on a trust or login screen).
 bool _midTurn(_Worker w) => midTurn(w.info, w.bootBlocked);
@@ -1756,7 +1726,7 @@ String? _str(Object? v) => v is String ? v : null;
 
 List<String> _lastN(List<String> xs, int n) => xs.length > n ? xs.sublist(xs.length - n) : xs;
 
-WorktreeRef _ref(WorkerWorktree wt) => WorktreeRef(path: wt.path, branch: wt.branch, base: wt.base);
+WorktreeRef _ref(WorkerWorktree wt) => WorktreeRef(path: wt.path, branch: wt.branch, base: wt.base, made: wt.made);
 
 WorkerTask? _validTask(Object? t) => t is Map && t['name'] is String && t['summary'] is String
     ? WorkerTask(name: t['name'] as String, summary: t['summary'] as String)
@@ -1855,62 +1825,6 @@ Future<String> _run(String cmd, List<String> args, String cwd, [int timeout = 30
     throw _RunError(last.isNotEmpty ? last : '$cmd failed');
   }
   return stdout.trim();
-}
-
-Future<PrRef?> _findOpenPr(String branch, String cwd) async {
-  final out = await gh([
-    'pr',
-    'list',
-    '--head',
-    branch,
-    '--state',
-    'open',
-    '--limit',
-    '1',
-    '--json',
-    'number,url',
-  ], cwd);
-  final list = jsonDecode(out.trim().isEmpty ? '[]' : out);
-  if (list is! List || list.isEmpty || list.first is! Map) return null;
-  final found = list.first as Map;
-  return PrRef(number: (found['number'] as num).toInt(), url: '${found['url']}');
-}
-
-/// A pull request title and body from what the worker was asked to do. The title is the issue's
-/// title when the task came off the issues board, else the task's first line; the body carries the
-/// task, the commits, a "Closes #n" when the task asked for one, and which desk it came from.
-({String title, String body}) _draftPr(LiveInfo info, List<String> commits, String by) {
-  final task = (info.prompt ?? '').replaceAll(RegExp(r'\r\n?'), '\n').trim();
-  final firstLine = task.split('\n').map((l) => l.trim()).firstWhere((l) => l.isNotEmpty, orElse: () => '');
-  // The issues board hands work over as: Work on GitHub issue #12: "Title".
-  final issue = RegExp(r'\bissue #(\d+):\s*["“](.+?)["”]\.?\s*$', caseSensitive: false).firstMatch(firstLine);
-  String? nonEmpty(String? s) => s != null && s.isNotEmpty ? s : null;
-  final title = _truncate(
-    nonEmpty(issue?.group(2)) ??
-        nonEmpty(firstLine.replaceFirst(RegExp(r'[.:;,]+$'), '')) ??
-        nonEmpty(commits.isNotEmpty ? commits.first.replaceFirst(RegExp(r'^\S+\s+'), '') : null) ??
-        nonEmpty(info.worktree?.branch) ??
-        info.name,
-    _prTitleMax,
-  );
-  final closes =
-      RegExp(
-        r'\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b[^\n]{0,40}?#(\d+)',
-        caseSensitive: false,
-      ).firstMatch(task)?.group(1) ??
-      issue?.group(1);
-  final parts = <String>[];
-  if (task.isNotEmpty) parts.add('## Task\n\n${task.length > _prTaskMax ? '${task.substring(0, _prTaskMax)}…' : task}');
-  String commitLine(String c) {
-    final i = c.indexOf(' ');
-    final hash = i < 0 ? c.substring(0, max(0, c.length - 1)) : c.substring(0, i);
-    return '- `$hash` ${c.substring(i + 1)}';
-  }
-
-  parts.add('## Commits\n\n${commits.map(commitLine).join('\n')}');
-  if (closes != null) parts.add('Closes #$closes');
-  parts.add('_Opened from Agent Office by $by · ${info.name} at ${deskById[info.deskId]?.label ?? info.deskId}_');
-  return (title: title, body: parts.join('\n\n'));
 }
 
 String _truncate(String s, int n) {

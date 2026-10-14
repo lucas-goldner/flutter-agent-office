@@ -13,8 +13,11 @@ final worktreesDir = p.join('.agent-office', 'worktrees');
 /// Their branches are `office/<worker>-<id>`.
 const branchPrefix = 'office/';
 
+/// What the office writes into a worker's workspace (see WorkerInfo.repos), besides the worktrees.
+const workspaceFiles = {'AGENTS.md', 'CLAUDE.md'};
+
 class WorktreeRef {
-  const WorktreeRef({this.path, required this.branch, this.base});
+  const WorktreeRef({this.path, required this.branch, this.base, this.made});
 
   /// Folder relative to the project dir; missing for a branch whose worktree is already gone.
   final String? path;
@@ -22,6 +25,9 @@ class WorktreeRef {
 
   /// The commit it was branched from, when known.
   final String? base;
+
+  /// The branch the office made for it, when the worker has since switched to [branch], one of its own.
+  final String? made;
 }
 
 class ListedWorktree {
@@ -65,13 +71,17 @@ class Worktrees {
   /// A new branch and worktree, from the latest of the branch the project is on (see [_startPoint]).
   /// `from` is that branch, which the worker's pull request targets; [note] says when commits the
   /// project has were left out. Returns what went wrong as `error`.
-  ({WorkerWorktree? worktree, String? note, String? error}) create(String slug) {
+  ///
+  /// For a worker across repositories, [sub] puts it in the folder of that name in the workspace
+  /// [slug], which is in [root] (the worker's own floor, when that isn't this project). The path it
+  /// returns is relative to [root].
+  ({WorkerWorktree? worktree, String? note, String? error}) create(String slug, [String? sub, String? root]) {
     try {
       final from = currentBranch();
       final start = _startPoint(from);
-      final rel = p.join(worktreesDir, slug);
+      final rel = sub != null ? p.join(worktreesDir, slug, sub) : p.join(worktreesDir, slug);
       final branch = '$branchPrefix$slug';
-      _gitSync(['worktree', 'add', '-b', branch, rel, start.base]);
+      _gitSync(['worktree', 'add', '-b', branch, p.normalize(p.absolute(root ?? _dir, rel)), start.base]);
       return (
         worktree: WorkerWorktree(path: rel, branch: branch, base: start.base, from: from),
         note: start.note,
@@ -159,6 +169,16 @@ class Worktrees {
     }
   }
 
+  /// The git folder every worktree of this project shares, to tell two checkouts of one repository
+  /// apart from two repositories.
+  String? commonDir() {
+    try {
+      return _real(p.normalize(p.absolute(_dir, _gitSync(['rev-parse', '--git-common-dir']))));
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// The branch the project is on, or null when HEAD is detached.
   String? currentBranch() {
     try {
@@ -167,6 +187,77 @@ class Worktrees {
     } catch (_) {
       return null;
     }
+  }
+
+  /// The branch a worktree is on now, which may be one the worker made itself; null when HEAD is
+  /// detached (mid-rebase, say) or the folder is gone.
+  Future<String?> branchOf(WorktreeRef wt) async {
+    final path = wt.path;
+    if (path == null) return null;
+    final abs = p.join(_dir, path);
+    if (FileSystemEntity.typeSync(abs) == FileSystemEntityType.notFound) return null;
+    String b;
+    try {
+      b = await _git(['rev-parse', '--abbrev-ref', 'HEAD'], abs);
+    } catch (_) {
+      return null;
+    }
+    return b.isNotEmpty && b != 'HEAD' ? b : null;
+  }
+
+  /// Whether [branch] was made since [than] was, going by the first line of each one's reflog: a
+  /// worker's own branch, made after the office made it one. False when git can't say.
+  Future<bool> madeSince(String branch, String than) async {
+    final r = await Future.wait([_createdAt(branch), _createdAt(than)]);
+    final a = r[0], b = r[1];
+    return a != null && b != null && a >= b;
+  }
+
+  /// When a branch was made (seconds), while its reflog still starts there.
+  Future<int?> _createdAt(String branch) async {
+    String log;
+    try {
+      log = await _git(['log', '-g', '--date=unix', '--format=%gd %gs', 'refs/heads/$branch', '--']);
+    } catch (_) {
+      log = '';
+    }
+    final lines = log.split('\n').where((l) => l.isNotEmpty);
+    final first = RegExp(r'@\{(\d+)\} branch: Created from ').firstMatch(lines.isEmpty ? '' : lines.last);
+    return first != null ? int.parse(first.group(1)!) : null;
+  }
+
+  /// Whether a branch is still there: not once it's deleted, or renamed (`git branch -m`).
+  Future<bool> hasBranch(String branch) async {
+    try {
+      await _git(['rev-parse', '--verify', '--quiet', 'refs/heads/$branch']);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Whether [from] was renamed to [branch] (`git branch -m`), going by the reflog that moved along with it.
+  Future<bool> renamedTo(String from, String branch) async {
+    String log;
+    try {
+      log = await _git(['log', '-g', '--format=%gs', 'refs/heads/$branch', '--']);
+    } catch (_) {
+      return false;
+    }
+    return log.split('\n').contains('Branch: renamed refs/heads/$from to refs/heads/$branch');
+  }
+
+  /// What deleting [branch] would lose that no remote, the project's checkout or the [besides]
+  /// branches have, as [describeWork] says it; '' when nothing.
+  Future<String> wouldLose(String branch, [List<String> besides = const []]) async {
+    var unpushed = 0;
+    String? error;
+    try {
+      unpushed = _number(await _git(['rev-list', '--count', branch, '--not', 'HEAD', '--remotes', ...besides, '--']));
+    } catch (err) {
+      error = gitError(err);
+    }
+    return describeWork(WorktreeState(exists: false, dirty: 0, ahead: 0, unpushed: unpushed, error: error));
   }
 
   /// Where a branch still is: in the project, only on origin (it was pushed), or nowhere.
@@ -242,12 +333,17 @@ class Worktrees {
           // not here
         }
       }
+      // The office's own branch, when the worker has moved to another, holds its work too.
+      final madeBranch = wt.made;
+      final made = madeBranch != null && madeBranch != wt.branch && await hasBranch(madeBranch)
+          ? [madeBranch]
+          : <String>[];
       // On no remote and not in the project's own checkout either: what deleting the branch would lose.
       unpushed = _number(
-        await _git(['rev-list', '--count', wt.branch, '--not', 'HEAD', '--remotes', if (known) landed!]),
+        await _git(['rev-list', '--count', wt.branch, ...made, '--not', 'HEAD', '--remotes', if (known) landed!]),
       );
       try {
-        ahead = _number(await _git(['rev-list', '--count', wt.branch, '--not', wt.base ?? 'HEAD']));
+        ahead = _number(await _git(['rev-list', '--count', wt.branch, ...made, '--not', wt.base ?? 'HEAD']));
       } catch (_) {
         ahead = unpushed;
       }
@@ -279,27 +375,53 @@ class Worktrees {
       }
       // Forget worktrees whose folders are gone: this one, and any someone rm -rf'd by hand.
       await _git(['worktree', 'prune']);
-      if (cleanup == WorktreeCleanup.all) await _git(['branch', '-D', wt.branch]);
+      if (cleanup == WorktreeCleanup.all) {
+        // The office's own branch, left behind when the worker made one of its own: it goes too,
+        // unless it has commits that no remote, the project's checkout or that one has.
+        final madeBranch = wt.made;
+        final made = madeBranch != null && madeBranch != wt.branch && (await wouldLose(madeBranch, [wt.branch])).isEmpty
+            ? madeBranch
+            : null;
+        await _git(['branch', '-D', wt.branch]);
+        if (made != null) {
+          try {
+            await _git(['branch', '-D', made]);
+          } catch (_) {
+            // already gone
+          }
+        }
+      }
       return null;
     } catch (err) {
       return gitError(err);
     }
   }
 
-  /// The worktrees git has under .agent-office/worktrees, every office/* branch, and folders there git doesn't know.
-  Future<({List<ListedWorktree> worktrees, List<String> branches, List<String> strays})> list() async {
+  /// The worktrees git has under .agent-office/worktrees, every office/* branch, and folders there git
+  /// doesn't know. A workspace (a worker across repositories) is a folder there with worktrees in it,
+  /// not a stray. `elsewhere` are office/* branches checked out somewhere else: in another floor's
+  /// workspace, by a worker across repositories that this project's office doesn't list.
+  Future<({List<ListedWorktree> worktrees, List<String> branches, List<String> strays, Map<String, String> elsewhere})>
+  list() async {
     final home = p.join(_root, worktreesDir);
     final worktrees = <ListedWorktree>[];
+    final elsewhere = <String, String>{};
     ListedWorktree? cur;
+    var abs = '';
     for (final line in (await _git(['worktree', 'list', '--porcelain'])).split('\n')) {
       if (line.startsWith('worktree ')) {
-        final abs = _real(line.substring('worktree '.length));
+        abs = _real(line.substring('worktree '.length));
         cur = _within(home, abs) ? ListedWorktree(path: p.relative(abs, from: _root)) : null;
         if (cur != null) worktrees.add(cur);
       } else if (cur != null && line.startsWith('HEAD ')) {
         cur.head = line.substring('HEAD '.length);
-      } else if (cur != null && line.startsWith('branch ')) {
-        cur.branch = line.substring('branch '.length).replaceFirst(RegExp(r'^refs/heads/'), '');
+      } else if (line.startsWith('branch ')) {
+        final branch = line.substring('branch '.length).replaceFirst(RegExp(r'^refs/heads/'), '');
+        if (cur != null) {
+          cur.branch = branch;
+        } else if (branch.startsWith(branchPrefix)) {
+          elsewhere[branch] = abs;
+        }
       }
     }
     final branches = (await _git([
@@ -307,15 +429,17 @@ class Worktrees {
       '--format=%(refname:short)',
       'refs/heads/$branchPrefix',
     ])).split('\n').where((l) => l.isNotEmpty).toList();
-    final known = {for (final w in worktrees) p.join(_root, w.path)};
+    final known = [for (final w in worktrees) p.join(_root, w.path)];
     final strays = <String>[];
     if (FileSystemEntity.typeSync(home) != FileSystemEntityType.notFound) {
       for (final e in Directory(home).listSync(followLinks: false)) {
         final path = p.join(home, p.basename(e.path));
-        if (!known.contains(path) && FileSystemEntity.isDirectorySync(path)) strays.add(p.relative(path, from: _root));
+        if (!known.any((k) => k == path || _within(path, k)) && FileSystemEntity.isDirectorySync(path)) {
+          strays.add(p.relative(path, from: _root));
+        }
       }
     }
-    return (worktrees: worktrees, branches: branches, strays: strays);
+    return (worktrees: worktrees, branches: branches, strays: strays, elsewhere: elsewhere);
   }
 
   /// True for a folder inside .agent-office/worktrees, the only place this class deletes on its own.
@@ -353,6 +477,13 @@ class Worktrees {
       timer.cancel();
     }
   }
+}
+
+/// Where a worker works: its worktree, or for a worker across repositories the workspace folder its
+/// worktrees are in. Relative to its floor's dir; null for the floor's own checkout.
+String? workspaceOf(WorkerWorktree? worktree, List<WorkerRepo>? repos) {
+  if (worktree == null) return null;
+  return repos != null && repos.isNotEmpty ? p.dirname(worktree.path) : worktree.path;
 }
 
 int _number(String s) => int.tryParse(s.trim()) ?? 0;

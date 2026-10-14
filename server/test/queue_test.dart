@@ -39,8 +39,9 @@ class FakeWorkers implements QueueWorkers {
     String? model,
     AgentEffort? effort,
   ]) {
+    final id = 'worker-${hired++}';
     final worker = WorkerInfo(
-      id: 'worker-${hired++}',
+      id: id,
       deskId: deskId,
       kind: kind,
       provider: provider,
@@ -56,6 +57,9 @@ class FakeWorkers implements QueueWorkers {
       cols: 80,
       rows: 24,
       viewers: const [],
+      worktree: worktree
+          ? WorkerWorktree(path: '.agent-office/worktrees/$id', branch: 'office/$id', base: 'abc')
+          : null,
     );
     workers.add(worker);
     return (worker: worker, error: null);
@@ -437,6 +441,46 @@ void main() {
     addTearDown(q.shutdown);
     q.add('Fix login', 'Tester');
     expect(manager.fetches, 0);
+  });
+
+  test("a queue worker that switches to a branch of its own takes its task's branch along, so the PR from there is "
+      'linked', () {
+    final f = fixture();
+    final q = f.open(worktree: true);
+    expect(q.add('Fix login', 'Tester'), isNull);
+    expect(q.state().tasks[0].branch, 'office/worker-0');
+    q.onWorker(f.manager.set(0, WorkerStatus.done));
+    expect(q.state().tasks[0].outcome, TaskOutcome.done);
+    // The office noticed it had run `git checkout -b fix-login` (see WorkerManager.syncBranches).
+    final w = f.workers[0];
+    f.workers[0] = WorkerInfo.fromJson({
+      ...w.toJson(),
+      'worktree': {...w.worktree!.toJson(), 'branch': 'fix-login', 'made': 'office/worker-0'},
+    });
+    q.onWorker(f.workers[0]);
+    expect(q.state().tasks[0].branch, 'fix-login');
+    q.onPulls([
+      GhPull.fromJson({
+        'number': 242,
+        'title': 'Fix login',
+        'state': 'OPEN',
+        'isDraft': false,
+        'url': 'https://github.com/o/r/pull/242',
+        'author': '',
+        'labels': <String>[],
+        'reviewDecision': '',
+        'headRefName': 'fix-login',
+        'baseRefName': 'main',
+        'createdAt': DateTime.now().toIso8601String(),
+        'updatedAt': '',
+        'additions': 0,
+        'deletions': 0,
+        'checks': 'none',
+        'body': '',
+        'closes': <int>[],
+      }),
+    ]);
+    expect(q.state().tasks[0].pr?.number, 242);
   });
 }
 
