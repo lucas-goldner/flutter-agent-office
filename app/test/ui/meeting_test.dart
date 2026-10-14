@@ -8,6 +8,7 @@ import 'package:agent_office/ui/modal.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:office_shared/layout.dart';
+import 'package:office_shared/meetings.dart';
 import 'package:office_shared/protocol.dart';
 
 Meeting meeting({MeetingStatus status = MeetingStatus.running, String? preview}) => Meeting(
@@ -122,6 +123,7 @@ void main() {
     final req = (sent.single as MeetingStartCmd).request;
     expect(req.roles.length, 3);
     expect(req.output, startsWith('docs/decisions/should-the-dog'));
+    expect(req.rounds, meetingPatterns[MeetingPattern.debate]!.rounds.defaultValue);
     expect(modal.closed, isTrue);
 
     store.apply(MeetingMsg(MeetingState(current: meeting())));
@@ -129,6 +131,51 @@ void main() {
     await tester.pump();
     expect(find.text('🤝 Meeting room'), findsOneWidget);
     expect(find.textContaining('Round 2 of 3'), findsOneWidget);
+    ModalStack.instance.closeAll();
+    await tester.pump(const Duration(seconds: 5));
+  });
+
+  testWidgets('the round limit: a dropdown for a range, a line saying why for fixed rounds', (tester) async {
+    tester.view.physicalSize = const Size(1400, 1400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) {
+            ModalStack.instance.attach(Overlay.of(context));
+            return const SizedBox();
+          },
+        ),
+      ),
+    );
+    final sent = <ClientMsg>[];
+    openMeeting(store: Store(), send: sent.add, openTerminal: (_) {});
+    await tester.pump();
+    final debate = meetingPatterns[MeetingPattern.debate]!;
+    expect(find.byKey(const ValueKey('rounds-pick')), findsOneWidget);
+    expect(find.textContaining('${debate.rounds.min} to ${debate.rounds.max}.'), findsOneWidget);
+    await tester.ensureVisible(find.byKey(const ValueKey('rounds-pick')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('rounds-pick')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('${debate.rounds.max} rounds').last);
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField).first, 'Tabs or spaces?');
+    await tester.ensureVisible(find.text('🤝 Start the meeting'));
+    await tester.tap(find.text('🤝 Start the meeting'));
+    await tester.pump();
+    expect((sent.single as MeetingStartCmd).request.rounds, debate.rounds.max);
+
+    final fixed = meetingPatterns.values.firstWhere((p) => p.rounds.min == p.rounds.max);
+    openMeeting(store: Store(), send: sent.add, openTerminal: (_) {});
+    await tester.pump();
+    await tester.tap(find.textContaining(fixed.label).first);
+    await tester.pump();
+    await tester.ensureVisible(find.textContaining('🔒'));
+    expect(find.byKey(const ValueKey('rounds-pick')), findsNothing);
+    expect(find.text('🔒 ${fixedRounds(fixed)!.line}'), findsOneWidget);
     ModalStack.instance.closeAll();
     await tester.pump(const Duration(seconds: 5));
   });

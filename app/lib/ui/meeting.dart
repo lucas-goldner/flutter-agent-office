@@ -259,10 +259,14 @@ class _MeetingWindowState extends State<_MeetingWindow> {
         Text(line, style: heavy(13, color: Swatch.muted)),
         const SizedBox(height: 10),
         // Meetings have no token limit: what the table has used is shown, never a reason to stop.
-        Text(
-          meetingSpend(tokens: m.tokens, cost: m.cost, costKnown: m.costKnown),
-          style: heavy(12, color: Swatch.muted),
-        ),
+        if (m.tokens > 0)
+          Tooltip(
+            message: '${m.tokens} tokens, cache reads included',
+            child: Text(
+              '💸 ${meetingSpend(tokens: m.tokens, cost: m.cost, costKnown: m.costKnown)}${running ? ' so far' : ''}',
+              style: heavy(13),
+            ),
+          ),
         const SizedBox(height: 12),
         for (var i = 0; i < m.seats.length; i++) _seat(m, i, running),
         const SizedBox(height: 12),
@@ -406,6 +410,54 @@ class _MeetingWindowState extends State<_MeetingWindow> {
 
   // ---- Calling one ----------------------------------------------------------------------------
 
+  /// The round limit: a pattern that always runs the same rounds says so, where a locked control would look
+  /// broken; a range gets a dropdown of the limits it allows.
+  Widget _roundLimit(PatternDef def) {
+    final fixed = fixedRounds(def);
+    if (fixed != null) {
+      return _field(
+        'Round limit',
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Tooltip(
+            message: fixed.why,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 11),
+              child: Text(
+                '🔒 ${fixed.line}',
+                key: const ValueKey('rounds-fixed'),
+                style: heavy(15).copyWith(
+                  decoration: TextDecoration.underline,
+                  decorationStyle: TextDecorationStyle.dotted,
+                  decorationColor: Swatch.muted,
+                ),
+              ),
+            ),
+          ),
+        ),
+        fixed.stages,
+      );
+    }
+    final limits = [for (var n = def.rounds.min; n <= def.rounds.max; n++) n];
+    final now = int.tryParse(_rounds.text) ?? def.rounds.defaultValue;
+    return _field(
+      'Round limit',
+      Align(
+        alignment: Alignment.centerLeft,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minWidth: 150),
+          child: OfficeSelect<int>(
+            key: const ValueKey('rounds-pick'),
+            value: limits.contains(now) ? now : def.rounds.defaultValue,
+            options: [for (final n in limits) (n, '$n round${n == 1 ? '' : 's'}')],
+            onChanged: (n) => setState(() => _rounds.text = '$n'),
+          ),
+        ),
+      ),
+      '${def.rounds.min} to ${def.rounds.max}. ${def.roundsNote ?? ''}'.trim(),
+    );
+  }
+
   Widget _field(String label, Widget child, [String? note, bool bad = false]) => Padding(
     padding: const EdgeInsets.only(bottom: 10),
     child: Column(
@@ -534,18 +586,7 @@ class _MeetingWindowState extends State<_MeetingWindow> {
             ],
           ),
         ),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: _field(
-                'Round limit',
-                BoxInput(controller: _rounds, enabled: def.rounds.min != def.rounds.max),
-                fixedRounds(def)?.line ?? '${def.roundsNote ?? ''} (${def.rounds.min}–${def.rounds.max})',
-              ),
-            ),
-          ],
-        ),
+        _roundLimit(def),
         ProviderPicker(controller: _provider, label: 'Workers'),
         if (m != null)
           Padding(

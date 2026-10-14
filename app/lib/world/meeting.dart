@@ -135,8 +135,8 @@ void paintMeetingBoard(Canvas canvas, MeetingState state) {
   }
 }
 
-/// The panel by the door, 500×800: what's on, the round, who has the floor and the tokens against the
-/// budget; once it's over, its one-line summary.
+/// The panel by the door, 500×800: what's on, the round, who has the floor and what it has used so far; once
+/// it's over, its one-line summary.
 void paintMeetingSign(Canvas canvas, MeetingState state) {
   final g = Pen(canvas);
   const w = signWidth, h = signHeight, pad = 28.0;
@@ -202,21 +202,14 @@ void paintMeetingSign(Canvas canvas, MeetingState state) {
     if (who.isNotEmpty) {
       lines('💬 ${who.join(', ')}', g.style(30, weight: FontWeight.w700, color: css('#bde0fe')), y + 8, 3, 38);
     }
-    // What's been spent: shown, never a limit.
-    g.text(
-      '${fmtTokens(m.tokens)} tokens',
-      pad,
-      h - 70,
-      g.style(30, weight: FontWeight.w800, color: paper),
-      align: TextAlignX.left,
-    );
-    if (m.cost > 0) {
-      g.text(
-        '${fmtCost(m.cost)}${m.costKnown ? '' : '+'} so far',
-        pad,
-        h - 32,
-        g.style(28, weight: FontWeight.w700, color: light),
-        align: TextAlignX.left,
+    // What's been spent, along the bottom.
+    if (m.tokens > 0) {
+      lines(
+        '${meetingSpend(tokens: m.tokens, cost: m.cost, costKnown: m.costKnown)} so far',
+        g.style(30, weight: FontWeight.w800, color: paper),
+        h - 40,
+        1,
+        38,
       );
     }
   } else {

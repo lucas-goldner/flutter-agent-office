@@ -376,7 +376,7 @@ class _ProviderPickerState extends State<ProviderPicker> {
           );
     if (!c.editing) return Padding(padding: const EdgeInsets.only(top: 10), child: summary);
     final label = Text(c.fields ? widget.label : 'Provider', style: heavy(13));
-    final select = _Select<AgentProvider>(
+    final select = OfficeSelect<AgentProvider>(
       key: const ValueKey('provider-select'),
       options: [for (final p in c.options) (p, kProviderLabel[p]!)],
       value: c.selected,
@@ -387,14 +387,14 @@ class _ProviderPickerState extends State<ProviderPicker> {
       select,
       if (c.selected == AgentProvider.claude) ...[
         Text('Model', style: heavy(13)),
-        _Select<String>(
+        OfficeSelect<String>(
           key: const ValueKey('claude-model'),
           options: [('', 'Default (--agent-args)'), for (final m in claudeModels) (m, kClaudeModelLabel[m]!)],
           value: c.claudeModel ?? '',
           onChanged: (m) => c.claudeModel = m,
         ),
         Text('Effort', style: heavy(13)),
-        _Select<AgentEffort?>(
+        OfficeSelect<AgentEffort?>(
           key: const ValueKey('claude-effort'),
           options: [(null, 'Default'), for (final e in AgentEffort.values) (e, kEffortLabel[e]!)],
           value: c.effortPicked,
@@ -437,8 +437,8 @@ class _ProviderPickerState extends State<ProviderPicker> {
 
 /// A small select box: white, with a 2px ink border (.provider-select). Its list is a MenuAnchor,
 /// which draws over the window it's in (a DropdownButton's route would open under the modal).
-class _Select<T> extends StatelessWidget {
-  const _Select({super.key, required this.options, required this.value, required this.onChanged});
+class OfficeSelect<T> extends StatelessWidget {
+  const OfficeSelect({super.key, required this.options, required this.value, required this.onChanged});
 
   final List<(T, String)> options;
   final T value;
