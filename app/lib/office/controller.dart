@@ -1394,6 +1394,7 @@ class OfficeController implements OfficeActions {
     );
     if (!up) player.street = inOffice ? streetBelow(office.stack.state.index) : streetOf(world);
     skyView.indoors = r.enclosed;
+    skyView.space = !up && world.ownSky;
     Toon.light.officeOn = inOffice ? 1 : 0;
     // The office's own: the holiday decorations round it and the street, the dog.
     holiday.group.visible = inOffice && !up;
@@ -1530,6 +1531,7 @@ class OfficeController implements OfficeActions {
     if (roofHub.setPlace()) {
       dog.root.visible = !roofHub.upTop;
       skyView.roof = roofHub.upTop;
+      skyView.space = !roofHub.upTop && world.ownSky;
       hanger.cancel();
       _hintKey = 'stale';
     }
@@ -3919,7 +3921,8 @@ class OfficeController implements OfficeActions {
       fog.start = haze.start;
       fog.end = haze.end;
     }
-    final bg = m.background.color;
+    // Out in space it's black, whatever the hour.
+    final bg = !roofHub.upTop && world.ownSky ? const Color(0xFF000000) : m.background.color;
     if (bg != sky.value) sky.value = bg;
     sound.setWeather(m.rain, 1 - m.daylight);
   }

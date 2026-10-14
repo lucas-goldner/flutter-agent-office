@@ -174,7 +174,7 @@ class _PreviewOfficeState extends State<PreviewOffice> {
   @override
   Widget build(BuildContext context) => Stack(
     children: [
-      const Positioned.fill(child: ColoredBox(color: Swatch.sky)),
+      Positioned.fill(child: ColoredBox(color: map?.ownSky == true ? const Color(0xFF000000) : Swatch.sky)),
       if (office != null) ...[
         Positioned.fill(
           child: SceneView(scene, camera: camera, onTick: _tick),

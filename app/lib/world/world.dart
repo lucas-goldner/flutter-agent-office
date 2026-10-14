@@ -172,6 +172,10 @@ abstract class World {
   /// Animates it; doors open for anyone in [people] who comes up to it.
   void update(double t, double dt, Iterable<vm.Vector3> people);
 
+  /// Out in space: the office's sky (its sun, moon, stars and colour) isn't drawn, and the world
+  /// draws what's outside its windows itself.
+  bool get ownSky => false;
+
   /// Lights it its own way, after the sky's had its say (the castle's torchlit hall). Null: the office's.
   void Function(Mood m)? get mood => null;
 

@@ -123,6 +123,9 @@ class SkyView {
   /// and the office's bulbs aren't there to glow.
   bool indoors = false;
 
+  /// Out in space (a world that draws its own sky): no sun, moon or stars of the office's.
+  bool space = false;
+
   bool _shelter(double x, double z) => indoors || (!roof && _sheltered(x, z));
 
   late final Node _stars, _sun, _moon, _haloNode, _rainNode, _snowNode;
@@ -169,6 +172,7 @@ class SkyView {
   void update(double dt, double t, SkyModel m, vm.Vector3 cam) {
     // Stars, the sun and the moon ride along with you, so they look infinitely far off.
     _dome.position = cam;
+    _dome.visible = !space;
     _starMat.baseColorFactor = vm.Vector4(1, 1, 1, m.starOpacity);
     _stars.visible = m.starOpacity > 0.01;
     vm.Vector3 up(double e, double a) =>

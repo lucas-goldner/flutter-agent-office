@@ -7,8 +7,9 @@ import 'package:office_shared/maps/maps.dart' show MapPlan, PlanStyle;
 
 import 'castle/castle.dart';
 import 'labels.dart';
+import 'station/station.dart';
 import 'world.dart';
 
 typedef WorldBuilder = World Function(MapPlan plan, LabelHub labels);
 
-final Map<PlanStyle, WorldBuilder> worldBuilders = {PlanStyle.castle: buildCastle};
+final Map<PlanStyle, WorldBuilder> worldBuilders = {PlanStyle.castle: buildCastle, PlanStyle.station: buildStation};
