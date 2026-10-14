@@ -21,6 +21,7 @@ import 'package:office_shared/protocol.dart';
 
 import '../state/store.dart';
 import 'gh_logic.dart';
+import 'provider.dart';
 import 'markdown.dart';
 import 'modal.dart';
 import 'pull_diff.dart';
@@ -757,8 +758,10 @@ class BoardActions {
   void pickUp(GhIssue issue) => scope.actions.pickUp(issue);
 
   /// Put an issue on the 📋 task queue; a worker is seated for it when there's room.
-  void queue(String prompt, String title, int issue, {AgentProvider? provider, String? model}) =>
-      scope.net.send(QueueAddCmd(prompt: prompt, title: title, issue: issue, provider: provider, model: model));
+  void queue(String prompt, String title, int issue, {AgentProvider? provider, String? model, AgentEffort? effort}) =>
+      scope.net.send(
+        QueueAddCmd(prompt: prompt, title: title, issue: issue, provider: provider, model: model, effort: effort),
+      );
 }
 
 OfficeSocketLike _sock(OfficeScope s) => (send: s.net.send, messages: s.net.messages);
@@ -2612,7 +2615,9 @@ class _IssueWindowState extends State<_IssueWindow> {
   late final String itemUrl = it.url;
   late final Store store = widget.scope.store;
   late final BoardActions actions = BoardActions(widget.scope);
-  late final _ProviderPicker provider = _ProviderPicker(store.project, 'Queue provider');
+
+  /// Which worker the queue starts for it: the office's default, or another picked with ✏️ Edit.
+  late final ProviderPickerController provider = ProviderPickerController(store.project, office: store.prompts.agent);
   GhIssueDetail? detail;
   String error = '';
   int _generation = 0;
@@ -2688,8 +2693,9 @@ class _IssueWindowState extends State<_IssueWindow> {
       issuePrompt(it),
       '#${it.number} ${it.title}',
       it.number,
-      provider: provider.value,
-      model: provider.model,
+      provider: provider.value(),
+      model: provider.model(),
+      effort: provider.effort(),
     );
   }
 
@@ -2817,7 +2823,11 @@ class _IssueWindowState extends State<_IssueWindow> {
                   tooltip: 'Close this issue on GitHub',
                   onPressed: () => _openClose(widget.scope, GhKind.issue, it.number, it.title, null, _load),
                 ),
-              if (isOpen && !onQueue) _ProviderPickerView(provider),
+              if (isOpen && !onQueue)
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 520),
+                  child: ProviderPicker(controller: provider, label: 'Queue worker', compact: true),
+                ),
               if (isOpen)
                 OfficeButton(
                   label: onQueue
@@ -2850,169 +2860,6 @@ class _IssueWindowState extends State<_IssueWindow> {
 }
 
 // ---- Provider picker ----------------------------------------------------------------------------
-// A small port of provider.ts's providerPicker for the issue window's queue button. It never offers
-// a provider the server's project metadata doesn't list.
-
-const _providerKey = 'agent-office.provider';
-const _providerLabel = {
-  AgentProvider.claude: 'Claude Code',
-  AgentProvider.opencode: 'OpenCode',
-  AgentProvider.codex: 'Codex',
-  AgentProvider.custom: 'Custom',
-};
-
-String _providerNote(AgentProvider p) => switch (p) {
-  AgentProvider.claude => 'Office usage and budget track Claude Code.',
-  AgentProvider.codex => 'Review Office hooks in /hooks to enable tracking. Codex reports root-session tokens; subagents are excluded and cost is unavailable.',
-  AgentProvider.custom => 'Usage is untracked unless compatible Claude Code hooks report it.',
-  _ => 'OpenCode reports model/provider estimates; they are not billing, and arrive after the first report.',
-};
-
-/// Providers the server says this project can start.
-List<AgentProvider> _supportedProviders(ProjectInfo? project) {
-  final values = project?.agentProviders.toSet().toList() ?? const [];
-  if (values.isNotEmpty) return values;
-  return project != null ? [project.defaultProvider] : const [AgentProvider.claude];
-}
 
 /// The provider's name, resolving old tasks with no provider to the project's default.
-String providerName(AgentProvider? provider, ProjectInfo? project) =>
-    _providerLabel[provider ?? project?.defaultProvider ?? _supportedProviders(project).first]!;
-
-bool _validModel(String v) {
-  if (v.isEmpty || v.length > 256 || RegExp(r'[\s\x00-\x1f\x7f]').hasMatch(v)) return false;
-  final parts = v.split('/');
-  return parts.length >= 2 &&
-      RegExp(r'^[A-Za-z0-9_.][A-Za-z0-9_.-]*$').hasMatch(parts.first) &&
-      parts.skip(1).every((p) => p.isNotEmpty);
-}
-
-class _ProviderPicker extends ChangeNotifier {
-  _ProviderPicker(ProjectInfo? project, this.label) : options = _supportedProviders(project) {
-    final fallback = project != null && options.contains(project.defaultProvider)
-        ? project.defaultProvider
-        : options.first;
-    final saved = AgentProvider.tryParse(storageGet(_providerKey));
-    selected = saved != null && options.contains(saved) ? saved : fallback;
-  }
-
-  final String label;
-  final List<AgentProvider> options;
-  late AgentProvider selected;
-  final modelCtl = TextEditingController();
-  String? modelError;
-
-  AgentProvider get value => selected;
-
-  /// The optional initial OpenCode model override. Empty or invalid input is omitted.
-  String? get model => selected == AgentProvider.opencode && _validModel(modelCtl.text) ? modelCtl.text : null;
-
-  void pick(AgentProvider p) {
-    selected = p;
-    storageSet(_providerKey, p.wire);
-    notifyListeners();
-  }
-
-  /// Reports a visible field error for an invalid nonempty OpenCode model.
-  bool valid() {
-    if (selected != AgentProvider.opencode || modelCtl.text.isEmpty) {
-      modelError = null;
-      return true;
-    }
-    final ok = _validModel(modelCtl.text);
-    modelError = ok
-        ? null
-        : 'Use provider/model format without whitespace or control characters (up to 256 characters).';
-    notifyListeners();
-    return ok;
-  }
-
-  @override
-  void dispose() {
-    modelCtl.dispose();
-    super.dispose();
-  }
-}
-
-class _ProviderPickerView extends StatelessWidget {
-  const _ProviderPickerView(this.p);
-  final _ProviderPicker p;
-
-  @override
-  Widget build(BuildContext context) => Row(
-    mainAxisSize: MainAxisSize.min,
-    crossAxisAlignment: CrossAxisAlignment.center,
-    children: [
-      Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(p.label, style: heavy(12)),
-          const SizedBox(height: 2),
-          Container(
-            height: 30,
-            padding: const EdgeInsets.symmetric(horizontal: 9),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(9),
-              border: Border.all(color: Swatch.ink, width: 2),
-            ),
-            child: DropdownButtonHideUnderline(
-              child: DropdownButton<AgentProvider>(
-                value: p.selected,
-                isDense: true,
-                style: heavy(13),
-                items: [for (final o in p.options) DropdownMenuItem(value: o, child: Text(_providerLabel[o]!))],
-                onChanged: (v) => v == null ? null : p.pick(v),
-              ),
-            ),
-          ),
-        ],
-      ),
-      const SizedBox(width: 8),
-      ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 150),
-        child: Text(
-          _providerNote(p.selected),
-          style: heavy(11, color: Swatch.muted, weight: FontWeight.w700),
-        ),
-      ),
-      if (p.selected == AgentProvider.opencode) ...[
-        const SizedBox(width: 8),
-        SizedBox(
-          width: 190,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('OpenCode model', style: heavy(12)),
-              const SizedBox(height: 3),
-              SizedBox(
-                height: 30,
-                child: TextField(
-                  controller: p.modelCtl,
-                  maxLength: 256,
-                  style: heavy(13, weight: FontWeight.w500),
-                  decoration: InputDecoration(
-                    counterText: '',
-                    hintText: 'Default (OpenCode settings)',
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(9),
-                      borderSide: BorderSide(color: p.modelError != null ? Swatch.bad : Swatch.ink, width: 2),
-                    ),
-                  ),
-                ),
-              ),
-              if (p.modelError != null)
-                Text(
-                  p.modelError!,
-                  style: heavy(11, color: Swatch.bad, weight: FontWeight.w700),
-                ),
-            ],
-          ),
-        ),
-      ],
-    ],
-  );
-}
+String providerName(AgentProvider? provider, ProjectInfo? project) => providerLabel(provider, project);

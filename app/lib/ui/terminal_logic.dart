@@ -62,7 +62,7 @@ class TermSizePolicy {
 
 /// The header title: provider, name, what it's on, and its worktree branch.
 String terminalTitle(WorkerInfo w, ProjectInfo? project) => [
-  if (w.kind == WorkerKind.agent) providerLabel(w.provider, project),
+  if (w.kind == WorkerKind.agent) engineLabel(w, project),
   w.name,
   if (w.title != null && w.title!.isNotEmpty) w.title!,
   if (w.worktree != null) '🌿 ${w.worktree!.branch}',

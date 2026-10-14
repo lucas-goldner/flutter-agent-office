@@ -1,5 +1,7 @@
-// Which agent a new worker runs (Claude Code, OpenCode, Codex or a custom command): the provider
-// helpers and the picker from ui/provider.ts.
+// Which agent a new worker runs, and on what model and effort (ui/provider.ts, #79 #88 #272 and the new
+// harnesses): the provider helpers, each provider's models as its CLI lists them, and the picker. What each
+// provider takes, and how its model is asked for, is its row in office_shared's provider table
+// (providers.dart), so a provider added there gets its fields here.
 
 import 'dart:async';
 
@@ -10,7 +12,7 @@ import 'window_parts.dart' show SmallButton;
 import '../net/api.dart';
 
 import 'package:office_shared/protocol.dart';
-import 'package:office_shared/providers.dart' show providerMetaTable;
+import 'package:office_shared/providers.dart';
 
 import 'theme.dart';
 
@@ -36,7 +38,8 @@ AgentProvider resolvedProvider(AgentProvider? provider, ProjectInfo? project) {
 String providerLabel(AgentProvider? provider, ProjectInfo? project) =>
     kProviderLabel[resolvedProvider(provider, project)]!;
 
-const Map<String, String> kClaudeModelLabel = {'fable': 'Fable', 'opus': 'Opus', 'sonnet': 'Sonnet', 'haiku': 'Haiku'};
+/// Claude Code's aliases by name: "Opus 5.5".
+const Map<String, String> kClaudeModelLabel = claudeModelNames;
 
 const Map<AgentEffort, String> kEffortLabel = {
   AgentEffort.low: 'Low',
@@ -46,14 +49,34 @@ const Map<AgentEffort, String> kEffortLabel = {
   AgentEffort.max: 'Max',
 };
 
-/// A short badge for the task card / sidebar: "Opus", "Opus · High", or the raw OpenCode model id.
-String? modelBadge(AgentProvider? provider, String? model, AgentEffort? effort) {
-  if (model == null && effort == null) return null;
-  if (provider == AgentProvider.claude) {
-    final parts = [?kClaudeModelLabel[model], if (effort != null) kEffortLabel[effort]!];
-    return parts.isEmpty ? null : parts.join(' · ');
-  }
-  return model;
+/// Claude Code's models go by their names, and so does a custom --agent's, which is read the same way.
+bool _namesClaude(AgentProvider? provider) => provider == AgentProvider.claude || provider == AgentProvider.custom;
+
+/// What a model is called: "Opus 5.5" for Claude Code's `opus` or `claude-opus-5-5`, and the id itself for
+/// the others.
+String modelName(AgentProvider? provider, String model) {
+  if (!_namesClaude(provider)) return model;
+  return claudeModelNames[model] ?? claudeModelName(model) ?? model;
+}
+
+/// A short badge for the task card / sidebar: "Opus 5.5", "Opus 5.5 · High", "gpt-5.5 · High". [runs] is the
+/// model its session says it's on (Usage.model): for Claude Code that's surer than what an alias stands for,
+/// and it's there for a worker left on the default too.
+String? modelBadge(AgentProvider? provider, String? model, AgentEffort? effort, [String? runs]) {
+  final id = _namesClaude(provider) ? (runs ?? model) : (model ?? runs);
+  final parts = [
+    if (id != null && id.isNotEmpty) modelName(provider, id),
+    if (effort != null && takesEffort(provider)) kEffortLabel[effort]!,
+  ];
+  return parts.isEmpty ? null : parts.join(' · ');
+}
+
+/// What a worker runs, in a line: "Claude Code · Opus 5.5 · High", or only "Codex" for one on its defaults
+/// that hasn't said.
+String engineLabel(WorkerInfo w, ProjectInfo? project) {
+  final badge = modelBadge(w.provider, w.model, w.effort, w.usage?.model);
+  final label = providerLabel(w.provider, project);
+  return badge != null ? '$label · $badge' : label;
 }
 
 /// The worker a new one starts on unless someone picks another: the one set in ⚙️ Settings
@@ -65,29 +88,31 @@ AgentChoice officeChoice(ProjectInfo? project, PromptsAgent? picked) {
   return AgentChoice(provider: resolvedProvider(project?.defaultProvider, project));
 }
 
-/// "Claude Code · Opus · High", "Claude Code", "OpenCode · anthropic/claude-sonnet-4".
+/// "Claude Code · Opus 5.5 · High", "Claude Code", "OpenCode · anthropic/claude-sonnet-4", "Grok · grok-4.6".
 String choiceLabel(AgentChoice c) {
   final badge = modelBadge(c.provider, c.model, c.effort);
   return badge == null ? kProviderLabel[c.provider]! : '${kProviderLabel[c.provider]} · $badge';
 }
 
 /// The same names, under the HUD's older spelling.
-final Map<AgentProvider, String> providerNames = kProviderLabel;
+final Map<AgentProvider, String> providerNamesByProvider = kProviderLabel;
 
 bool providerUsageTracked(AgentProvider? provider, ProjectInfo? project, [Usage? usage]) =>
-    resolvedProvider(provider, project) == AgentProvider.claude || usage != null;
+    providerMetaTable[resolvedProvider(provider, project)]!.usage.tracked || usage != null;
 
 enum ProviderUsageState { tracked, waiting, untracked }
 
 /// Distinguishes a provider with no first report from one whose metrics are intentionally unavailable.
-ProviderUsageState providerUsageState(AgentProvider? provider, ProjectInfo? project, [Usage? usage]) =>
-    switch (resolvedProvider(provider, project)) {
-      AgentProvider.claude ||
-      AgentProvider.opencode ||
-      AgentProvider.codex => usage != null ? ProviderUsageState.tracked : ProviderUsageState.waiting,
-      // The providers added upstream after this picker was ported: the client port fills them in.
-      _ => usage != null ? ProviderUsageState.tracked : ProviderUsageState.untracked,
-    };
+ProviderUsageState providerUsageState(AgentProvider? provider, ProjectInfo? project, [Usage? usage]) {
+  final u = providerMetaTable[resolvedProvider(provider, project)]!.usage;
+  if (usage != null) return ProviderUsageState.tracked;
+  return u.tracked || u.reports ? ProviderUsageState.waiting : ProviderUsageState.untracked;
+}
+
+/// The short "no numbers yet" suffix for a tracked-but-silent provider, shared by the terminal, the workers
+/// list and the queue so all three say the same thing.
+String providerWaitingLabel(AgentProvider? provider, ProjectInfo? project) =>
+    providerMetaTable[resolvedProvider(provider, project)]!.usage.waiting ?? '';
 
 String providerUsageNote(AgentProvider provider) => providerMetaTable[provider]!.usage.note;
 
@@ -104,45 +129,79 @@ AgentProvider rememberedProvider(ProjectInfo? project) =>
 
 const _providerKey = 'agent-office.provider';
 
-const kModelMax = 256;
-final _badChars = RegExp(r'[\s\p{Cc}\p{Cf}]', unicode: true);
-final _modelHead = RegExp(r'^[A-Za-z0-9_.][A-Za-z0-9_.-]*$');
+/// The longest OpenCode model id (kept for the older callers).
+const kModelMax = openCodeModelMax;
 
 /// An OpenCode model id: provider/model, no whitespace or control characters.
-bool validModel(String value) {
-  if (value.isEmpty || value.length > kModelMax || _badChars.hasMatch(value)) return false;
-  final parts = value.split('/');
-  return parts.length >= 2 && _modelHead.hasMatch(parts[0]) && parts.skip(1).every((p) => p.isNotEmpty);
+bool validModel(String value) => isValidOpenCodeModel(value);
+
+// ---- Each provider's models, as its CLI lists them ------------------------------------------------
+
+/// A provider's models as its CLI listed them, kept a minute; one that couldn't be listed isn't asked again
+/// for as long.
+class _Catalogue {
+  List<ModelOption>? list;
+  bool failed = false;
+  int at = 0;
+  Future<void>? request;
 }
 
-List<String>? _modelList;
-int _modelListAt = 0;
-Future<List<String>>? _modelRequest;
+final Map<AgentProvider, _Catalogue> _catalogues = {};
+const int _catalogueTtlMs = 60000;
 
-Future<List<String>> fetchOpenCodeModels() {
-  final list = _modelList;
-  if (list != null && DateTime.now().millisecondsSinceEpoch - _modelListAt < 60000) return Future.value(list);
-  return _modelRequest ??= () async {
+/// What the office's `GET /api/agents/<provider>/models` said, as the models [provider] takes (no repeats).
+/// An older office listed OpenCode's as plain ids.
+List<ModelOption> parseModels(AgentProvider provider, Object? body) {
+  final valid = providerMetaTable[provider]!.validModel;
+  final models = body is Map ? body['models'] : null;
+  final seen = <String>{};
+  return [
+    if (models is List)
+      for (final m in models)
+        if (m is String ? ModelOption(id: m) : (m is Map<String, dynamic> ? ModelOption.fromJson(m) : null)
+            case final ModelOption o when valid != null && valid(o.id) && seen.add(o.id))
+          o,
+  ];
+}
+
+/// Asks for [provider]'s models, unless what's here is fresh: then there's nothing to wait for.
+Future<void>? loadCatalogue(AgentProvider provider) {
+  final c = _catalogues.putIfAbsent(provider, _Catalogue.new);
+  if ((c.list != null || c.failed) && DateTime.now().millisecondsSinceEpoch - c.at < _catalogueTtlMs) return null;
+  return c.request ??= () async {
     try {
-      final res = await Api.getJson('/api/agents/opencode/models');
+      final res = await Api.getJson('/api/agents/${provider.wire}/models');
       if (!res.ok) throw Exception('HTTP ${res.status}');
-      final models = res.body['models'];
-      final valid = models is List
-          ? [
-              for (final m in models)
-                if (m is String && validModel(m)) m,
-            ]
-          : <String>[];
-      _modelList = valid.toSet().toList();
-      _modelListAt = DateTime.now().millisecondsSinceEpoch;
-      return _modelList!;
+      c.list = parseModels(provider, res.body);
+      c.failed = false;
+    } catch (_) {
+      c.failed = true;
     } finally {
-      _modelRequest = null;
+      c.at = DateTime.now().millisecondsSinceEpoch;
+      c.request = null;
     }
   }();
 }
 
-const _modelInvalid = 'Use provider/model format without whitespace or control characters (up to 256 characters).';
+/// The models [provider]'s catalogue has now, or null.
+List<ModelOption>? catalogueOf(AgentProvider provider) => _catalogues[provider]?.list;
+
+/// For tests: what [provider]'s CLI listed, or that it couldn't.
+@visibleForTesting
+void setCatalogue(AgentProvider provider, {List<ModelOption>? list, bool failed = false}) {
+  _catalogues[provider] = _Catalogue()
+    ..list = list
+    ..failed = failed
+    ..at = DateTime.now().millisecondsSinceEpoch;
+}
+
+/// OpenCode's models by id, for the older callers.
+Future<List<String>> fetchOpenCodeModels() async {
+  await loadCatalogue(AgentProvider.opencode);
+  return [for (final m in catalogueOf(AgentProvider.opencode) ?? const <ModelOption>[]) m.id];
+}
+
+// ---- The picker ---------------------------------------------------------------------------------
 
 /// The picker's state, read by the window that owns it (providerPicker and agentFields in provider.ts).
 ///
@@ -164,10 +223,13 @@ class ProviderPickerController extends ChangeNotifier {
   late PromptsAgent? _office;
   bool _editing = false;
   late AgentProvider _selected;
+  bool _disposed = false;
 
-  /// Claude's model alias ('' for the --agent-args default) and reasoning effort.
-  String? _claudeModel;
+  /// The model id the fields are on, whichever control is showing ('' for the provider's default).
+  String _chosen = '';
   AgentEffort? _effort;
+
+  /// The typed model, for a provider whose model is typed in (and one whose list couldn't be had).
   final TextEditingController modelText = TextEditingController();
   String? _modelError;
 
@@ -194,37 +256,85 @@ class ProviderPickerController extends ChangeNotifier {
   }
 
   AgentProvider get selected => _selected;
-  String? get claudeModel => _claudeModel;
-  AgentEffort? get effortPicked => _effort;
+  ProviderMeta get meta => providerMetaTable[_selected]!;
   String? get modelError => _modelError;
 
+  /// Its models: the ones it always has, or the ones its CLI listed.
+  List<ModelOption> get known => meta.models?.fixed ?? catalogueOf(_selected) ?? const [];
+
+  /// Its catalogue is being asked for, or couldn't be had.
+  bool get loading => (meta.models?.catalog ?? false) && _catalogues[_selected]?.request != null;
+  bool get listFailed => (meta.models?.catalog ?? false) && (_catalogues[_selected]?.failed ?? false);
+
+  /// Typed in: for a provider whose model is, and for one whose list couldn't be had.
+  bool get typed => meta.models?.pick == ModelPick.typed || listFailed;
+
+  /// The model the fields are on ('' for the default).
+  String get chosen => _chosen;
+
+  /// Another provider: its own defaults, since another's model and effort mean nothing to it.
   set selected(AgentProvider p) {
-    _selected = p;
     _editing = true;
+    set(AgentChoice(provider: p));
     // Remembered for hiring without a picker (rememberedProvider: a card dropped on a desk).
     if (options.contains(p)) storageSet(_providerKey, p.wire);
+  }
+
+  /// Picks a model from the list ('' for the default).
+  set chosen(String id) {
+    _chosen = id;
+    if (modelText.text.trim() != id) modelText.text = id;
+    _modelError = null;
+    _fitEffort();
     notifyListeners();
   }
 
-  set claudeModel(String? m) {
-    _claudeModel = m == null || m.isEmpty || !claudeModels.contains(m) ? null : m;
-    notifyListeners();
-  }
+  /// Claude Code's alias, under the older name.
+  String? get claudeModel => _selected == AgentProvider.claude && _chosen.isNotEmpty ? _chosen : null;
+  set claudeModel(String? m) => chosen = (m != null && isClaudeModel(m)) ? m : '';
 
+  AgentEffort? get effortPicked => _effort;
   set effortPicked(AgentEffort? e) {
     _effort = e;
+    _fitEffort();
     notifyListeners();
+  }
+
+  /// The efforts on offer: the ones the model picked takes, where its catalogue says (null: every one).
+  List<AgentEffort>? get efforts => known.where((o) => o.id == _chosen).firstOrNull?.efforts;
+
+  /// An effort the model picked doesn't take goes back to the default.
+  void _fitEffort() {
+    final e = efforts;
+    if (_effort != null && e != null && !e.contains(_effort)) _effort = null;
   }
 
   /// Puts the fields on this provider, model and effort.
   void set(AgentChoice c) {
     _selected = options.contains(c.provider) ? c.provider : (options.contains(fallback) ? fallback : options.first);
-    final claude = _selected == AgentProvider.claude;
-    _claudeModel = claude && c.model != null && claudeModels.contains(c.model) ? c.model : null;
-    _effort = claude ? c.effort : null;
-    modelText.text = _selected == AgentProvider.opencode ? (c.model ?? '') : '';
+    final mine = _selected == c.provider;
+    final m = c.model;
+    _chosen = mine && m != null && (meta.validModel?.call(m) ?? false) ? m : '';
+    modelText.text = _chosen;
+    _effort = mine && meta.takesEffort ? c.effort : null;
     _modelError = null;
+    _fitEffort();
     notifyListeners();
+    load();
+  }
+
+  /// Asks the provider's CLI for its models (once someone can see the fields: the picker calls it).
+  void load() {
+    if (!editing || !(meta.models?.catalog ?? false)) return;
+    final provider = _selected;
+    final loading = loadCatalogue(provider);
+    if (loading == null) return;
+    notifyListeners();
+    loading.then((_) {
+      if (_disposed || _selected != provider) return;
+      _fitEffort();
+      notifyListeners();
+    });
   }
 
   AgentProvider value() {
@@ -232,32 +342,35 @@ class ProviderPickerController extends ChangeNotifier {
     return options.contains(_selected) ? _selected : fallback;
   }
 
-  /// The optional initial model override: an OpenCode provider/model id (empty or invalid input is
-  /// omitted), or a Claude model alias.
+  String get _id => typed ? modelText.text.trim() : _chosen;
+
+  /// The model picked for it, when one was: an id its provider takes (a Claude Code alias, an OpenCode
+  /// provider/model, a Codex model).
   String? model() {
     if (!editing) return officeDefault.model;
-    if (_selected == AgentProvider.claude) return _claudeModel;
-    if (_selected != AgentProvider.opencode) return null;
-    final v = modelText.text;
-    return validModel(v) ? v : null;
+    final id = _id;
+    return id.isNotEmpty && (meta.validModel?.call(id) ?? false) ? id : null;
   }
 
-  /// The optional Claude reasoning effort.
+  /// The reasoning effort picked for it, when one was (Pi calls it thinking).
   AgentEffort? effort() {
     if (!editing) return officeDefault.effort;
-    return _selected == AgentProvider.claude ? _effort : null;
+    if (!meta.takesEffort || _effort == null) return null;
+    final e = typed ? known.where((o) => o.id == _id).firstOrNull?.efforts : efforts;
+    return e == null || e.contains(_effort) ? _effort : null;
   }
 
   AgentChoice choice() => AgentChoice(provider: value(), model: model(), effort: effort());
 
-  /// Reports a visible field error for an invalid nonempty OpenCode model.
+  /// Reports a visible field error for a typed model its provider doesn't take.
   bool valid() {
-    if (!editing || _selected != AgentProvider.opencode || modelText.text.isEmpty) {
+    final id = _id;
+    if (!editing || id.isEmpty) {
       _setError(null);
       return true;
     }
-    final okay = validModel(modelText.text);
-    _setError(okay ? null : _modelInvalid);
+    final okay = meta.validModel?.call(id) ?? false;
+    _setError(okay ? null : (meta.models?.invalid ?? 'That isn’t a model id this provider takes.'));
     return okay;
   }
 
@@ -271,15 +384,16 @@ class ProviderPickerController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
     modelText.dispose();
     super.dispose();
   }
 }
 
-/// Which worker to start: the office's default as a line with ✏️ Edit, or (editing, or as
-/// Settings' fields) a provider selector that never offers a provider outside the server's
-/// metadata, with the model (and for Claude, the reasoning effort) under it. [compact] lays the
-/// pieces out in one line under a prompt, as the queue's add form does.
+/// Which worker to start: the office's default as a line with ✏️ Edit, or (editing, or as Settings' fields) a
+/// provider selector that never offers a provider outside the server's metadata, with the model and effort
+/// its row in the provider table takes under it. [compact] lays the pieces out in one line under a prompt,
+/// as the queue's add form does.
 class ProviderPicker extends StatefulWidget {
   const ProviderPicker({super.key, required this.controller, this.label = 'Worker', this.compact = false});
 
@@ -292,17 +406,16 @@ class ProviderPicker extends StatefulWidget {
 }
 
 class _ProviderPickerState extends State<ProviderPicker> {
-  List<String> _models = const [];
-  String _hint = 'Optional provider/model override; suggestions load when OpenCode is selected.';
-  AgentProvider? _loadedFor;
-
   ProviderPickerController get c => widget.controller;
 
   @override
   void initState() {
     super.initState();
     c.addListener(_changed);
-    _loadModels();
+    // Fields put on their provider before anyone could see them ask once they're on the page.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) c.load();
+    });
   }
 
   @override
@@ -312,33 +425,19 @@ class _ProviderPickerState extends State<ProviderPicker> {
   }
 
   void _changed() {
-    _loadModels();
     if (mounted) setState(() {});
   }
 
-  void _loadModels() {
-    if (!c.editing || c.selected != AgentProvider.opencode) {
-      _loadedFor = null;
-      return;
+  /// The line under the fields.
+  String _hint() {
+    final m = c.meta;
+    final field = m.models;
+    if (field == null) return m.unpicked ?? '';
+    if (c.loading) return 'Loading ${m.label} models…';
+    if (c.listFailed) {
+      return '${m.label}’s models couldn’t be listed: leave it empty for its default, or type a model id.';
     }
-    if (_loadedFor == AgentProvider.opencode) return;
-    _loadedFor = AgentProvider.opencode;
-    _hint = _modelList != null
-        ? 'Optional provider/model override; choose a suggestion or enter one manually.'
-        : 'Loading OpenCode models… You can enter a provider/model manually.';
-    fetchOpenCodeModels().then(
-      (models) {
-        if (!mounted) return;
-        setState(() {
-          _models = models;
-          _hint = 'Optional provider/model override; choose a suggestion or enter one manually.';
-        });
-      },
-      onError: (Object _) {
-        if (!mounted) return;
-        setState(() => _hint = 'Model suggestions unavailable; enter a provider/model manually if needed.');
-      },
-    );
+    return field.hint;
   }
 
   @override
@@ -375,6 +474,8 @@ class _ProviderPickerState extends State<ProviderPicker> {
             ],
           );
     if (!c.editing) return Padding(padding: const EdgeInsets.only(top: 10), child: summary);
+    final m = c.meta;
+    final field = m.models;
     final label = Text(c.fields ? widget.label : 'Provider', style: heavy(13));
     final select = OfficeSelect<AgentProvider>(
       key: const ValueKey('provider-select'),
@@ -382,41 +483,58 @@ class _ProviderPickerState extends State<ProviderPicker> {
       value: c.selected,
       onChanged: (p) => c.selected = p,
     );
+    final known = c.known;
+    final allowed = c.efforts;
     final pieces = <Widget>[
       label,
       select,
-      if (c.selected == AgentProvider.claude) ...[
+      if (field != null) ...[
         Text('Model', style: heavy(13)),
-        OfficeSelect<String>(
-          key: const ValueKey('claude-model'),
-          options: [('', 'Default (--agent-args)'), for (final m in claudeModels) (m, kClaudeModelLabel[m]!)],
-          value: c.claudeModel ?? '',
-          onChanged: (m) => c.claudeModel = m,
-        ),
-        Text('Effort', style: heavy(13)),
-        OfficeSelect<AgentEffort?>(
-          key: const ValueKey('claude-effort'),
-          options: [(null, 'Default'), for (final e in AgentEffort.values) (e, kEffortLabel[e]!)],
-          value: c.effortPicked,
-          onChanged: (e) => c.effortPicked = e,
-        ),
+        if (c.typed)
+          SizedBox(
+            width: widget.compact ? 220 : 300,
+            child: _ModelField(controller: c, models: known),
+          )
+        else
+          OfficeSelect<String>(
+            key: const ValueKey('provider-model'),
+            options: [
+              ('', field.unset),
+              for (final o in known) (o.id, o.name ?? o.id),
+              // A saved one, or the list is still on its way.
+              if (c.chosen.isNotEmpty && !known.any((o) => o.id == c.chosen)) (c.chosen, c.chosen),
+            ],
+            value: c.chosen,
+            onChanged: (id) => c.chosen = id,
+          ),
       ],
-      if (c.selected == AgentProvider.opencode) ...[
-        Text('OpenCode model', style: heavy(13)),
-        SizedBox(
-          width: widget.compact ? 220 : 300,
-          child: _ModelField(controller: c, models: _models),
+      if (m.takesEffort) ...[
+        Text(m.effortLabel ?? 'Effort', style: heavy(13)),
+        Tooltip(
+          message: allowed != null && allowed.isEmpty ? 'This model has no reasoning effort to pick' : '',
+          child: OfficeSelect<AgentEffort?>(
+            key: const ValueKey('provider-effort'),
+            options: [
+              (null, 'Default'),
+              for (final e in AgentEffort.values)
+                if (allowed == null || allowed.contains(e)) (e, kEffortLabel[e]!),
+            ],
+            value: c.effortPicked,
+            onChanged: (e) => c.effortPicked = e,
+          ),
         ),
       ],
     ];
+    final hint = _hint();
     final notes = <Widget>[
       Text(providerUsageNote(c.selected), style: muted),
-      if (c.selected == AgentProvider.claude) Text('The cost panel tracks each model separately.', style: muted),
-      if (c.selected == AgentProvider.opencode)
+      if (c.modelError != null)
         Text(
-          c.modelError ?? _hint,
-          style: heavy(11, color: c.modelError != null ? Swatch.bad : Swatch.muted, weight: FontWeight.w700),
-        ),
+          c.modelError!,
+          style: heavy(11, color: Swatch.bad, weight: FontWeight.w700),
+        )
+      else if (hint.isNotEmpty)
+        Text(hint, key: const ValueKey('provider-hint'), style: muted),
     ];
     return Padding(
       padding: EdgeInsets.only(top: widget.compact ? 8 : 10),
@@ -494,7 +612,7 @@ class _ModelField extends StatefulWidget {
   const _ModelField({required this.controller, required this.models});
 
   final ProviderPickerController controller;
-  final List<String> models;
+  final List<ModelOption> models;
 
   @override
   State<_ModelField> createState() => _ModelFieldState();
@@ -513,28 +631,34 @@ class _ModelFieldState extends State<_ModelField> {
   Widget build(BuildContext context) {
     final controller = widget.controller;
     final models = widget.models;
+    final field = controller.meta.models;
     OutlineInputBorder box(Color c) => OutlineInputBorder(
       borderRadius: BorderRadius.circular(9),
       borderSide: BorderSide(color: c, width: 2),
     );
     final bad = controller.modelError != null;
-    return RawAutocomplete<String>(
+    return RawAutocomplete<ModelOption>(
+      key: const ValueKey('provider-model-text'),
       textEditingController: controller.modelText,
       focusNode: _focus,
+      displayStringForOption: (o) => o.id,
       optionsBuilder: (v) {
         final q = v.text.toLowerCase();
-        return models.where((m) => m.toLowerCase().contains(q)).take(50);
+        return models
+            .where((m) => m.id.toLowerCase().contains(q) || (m.name?.toLowerCase().contains(q) ?? false))
+            .take(50);
       },
+      onSelected: (o) => controller.chosen = o.id,
       fieldViewBuilder: (context, text, focus, onSubmit) => TextField(
         controller: text,
         focusNode: focus,
-        maxLength: kModelMax,
+        maxLength: field?.max ?? 256,
         autocorrect: false,
         style: heavy(13, weight: FontWeight.w600),
         onChanged: (_) => controller.clearError(),
         decoration: InputDecoration(
           counterText: '',
-          hintText: 'Default (OpenCode settings)',
+          hintText: field?.unset ?? '',
           contentPadding: const EdgeInsets.symmetric(horizontal: 9, vertical: 8),
           border: box(bad ? Swatch.bad : Swatch.ink),
           enabledBorder: box(bad ? Swatch.bad : Swatch.ink),
@@ -557,7 +681,10 @@ class _ModelFieldState extends State<_ModelField> {
                     onTap: () => onSelected(o),
                     child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      child: Text(o, style: heavy(13, weight: FontWeight.w600)),
+                      child: Text(
+                        o.name != null && o.name != o.id ? '${o.name} · ${o.id}' : o.id,
+                        style: heavy(13, weight: FontWeight.w600),
+                      ),
                     ),
                   ),
               ],

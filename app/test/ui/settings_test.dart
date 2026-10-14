@@ -134,7 +134,7 @@ void main() {
     // The default worker: Claude Code on Opus.
     await tap(tester, find.text('Default (--agent-args)'));
     await tester.pumpAndSettle();
-    await tap(tester, find.text('Opus'));
+    await tap(tester, find.text('Opus 5.5'));
     await tester.pumpAndSettle();
     await tap(tester, find.byKey(const ValueKey('agent-save')));
     await tester.pump();

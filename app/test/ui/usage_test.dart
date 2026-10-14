@@ -48,6 +48,24 @@ void main() {
     expect(usageTitle(u(0.42)), startsWith('\$0.42 over 3 API calls\ninput 1.0k · output 500'));
   });
 
+  test('DeepSeek Harness reports its context window', () {
+    final ctx = Usage.fromJson({...u(0.1).toJson(), 'contextSize': 128000, 'costKnown': true});
+    expect(usageLabel(ctx, AgentProvider.dsh), '\$0.10 · 1.5k / 128k context');
+    expect(usageLabel(u(0.1), AgentProvider.dsh), '1.5k context');
+    expect(
+      usageTitle(ctx, AgentProvider.dsh),
+      startsWith('DeepSeek Harness context usage from ACP: 1.5k of 128k context tokens'),
+    );
+    final s = summarizeUsage(UsageState.fromJson(const {}), [
+      w('a', provider: 'dsh', usage: ctx),
+      w('b', provider: 'dsh'),
+    ], project);
+    expect(s.visible, isTrue);
+    final notes = s.rows.whereType<UsageNote>().map((n) => n.text).toList();
+    expect(notes, contains('DeepSeek Harness current desks \$0.10 · 1.5k / 128k context'));
+    expect(notes, contains('DeepSeek Harness metrics waiting for first report'));
+  });
+
   test('provider usage states', () {
     expect(providerUsageState(null, project), ProviderUsageState.waiting);
     expect(providerUsageState(AgentProvider.custom, project), ProviderUsageState.untracked);

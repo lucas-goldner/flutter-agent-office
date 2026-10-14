@@ -807,13 +807,12 @@ String workerSub(WorkerInfo w, ProjectInfo? project) {
   final provider = agent ? providerLabel(w.provider, project) : null;
   final kind = agent ? resolvedProvider(w.provider, project) : null;
   final state = agent ? providerUsageState(w.provider, project, w.usage) : null;
-  final badge = agent ? modelBadge(kind, w.model, w.effort) : null;
+  final badge = agent ? modelBadge(kind, w.model, w.effort, w.usage?.model) : null;
+  final waiting = agent ? providerWaitingLabel(w.provider, project) : '';
   final note = state == ProviderUsageState.untracked
       ? ' · usage untracked'
-      : state == ProviderUsageState.waiting && kind == AgentProvider.opencode
-      ? ' · waiting for metrics'
-      : state == ProviderUsageState.waiting && kind == AgentProvider.codex
-      ? ' · waiting for first report'
+      : state == ProviderUsageState.waiting && waiting.isNotEmpty
+      ? ' · $waiting'
       : '';
   final doing = [w.activity, w.title, w.prompt].firstWhere((s) => s != null && s.isNotEmpty, orElse: () => null);
   return [

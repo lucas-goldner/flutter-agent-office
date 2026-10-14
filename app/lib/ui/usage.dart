@@ -4,6 +4,7 @@
 import 'package:flutter/material.dart';
 
 import 'package:office_shared/protocol.dart';
+
 import 'provider.dart';
 import 'theme.dart';
 
@@ -19,6 +20,12 @@ String usageLabel(Usage u, [AgentProvider provider = AgentProvider.claude]) {
       : u.costKnown == false
       ? 'cost unavailable'
       : '${fmtCost(u.cost)}${provider == AgentProvider.opencode ? ' reported' : ''}';
+  // DeepSeek Harness reports what is in the context window, not a token split.
+  if (provider == AgentProvider.dsh) {
+    final window = u.contextSize != null ? ' / ${fmtTokens(u.contextSize!)}' : '';
+    final spend = u.costKnown == true ? '${fmtCost(u.cost)} · ' : '';
+    return '${u.incomplete == true ? 'Partial: ' : ''}$spend${fmtTokens(tokensOf(u))}$window context';
+  }
   return '${u.incomplete == true ? 'Partial: ' : ''}$money · ${fmtTokens(tokensOf(u))} tokens';
 }
 
@@ -34,12 +41,17 @@ String usageTitle(Usage u, [AgentProvider provider = AgentProvider.claude]) {
       : provider == AgentProvider.opencode
       ? '${u.calls} reported call${u.calls == 1 ? '' : 's'}'
       : '${u.calls} API call${u.calls == 1 ? '' : 's'}';
+  final dshContext = u.contextSize != null
+      ? '${fmtTokens(tokensOf(u))} of ${fmtTokens(u.contextSize!)} context tokens'
+      : '${fmtTokens(tokensOf(u))} context tokens';
   return [
     if (u.incomplete == true) 'Partial metrics: some session history is still loading or unavailable.',
     provider == AgentProvider.codex
         ? 'Codex root-session metrics; subagent usage is not included; $money; $calls'
         : provider == AgentProvider.opencode
         ? 'OpenCode reported estimate $money; model/provider estimate, not billing; $calls'
+        : provider == AgentProvider.dsh
+        ? 'DeepSeek Harness context usage from ACP: $dshContext; session cost ${u.costKnown == true ? money : 'unavailable'}; $calls'
         : '$money over $calls',
     'input ${fmtTokens(u.input)} · output ${fmtTokens(u.output)}',
     'reasoning ${fmtTokens(u.reasoning ?? 0)}',
@@ -94,7 +106,7 @@ class UsageSummary {
   final List<UsageRow> rows;
 
   static const headTitle =
-      'Current desks: tracked Claude Code costs plus reported OpenCode estimates; Codex root-session tokens appear below; sessions with unavailable cost or partial history are excluded.';
+      'Current desks: tracked Claude Code costs plus reported OpenCode and DeepSeek Harness estimates; Codex root-session tokens appear below; sessions with unavailable cost or partial history are excluded.';
 }
 
 /// Sums one provider's current desks.
@@ -132,6 +144,8 @@ UsageSummary summarizeUsage(UsageState s, Iterable<WorkerInfo> workers, ProjectI
   var now = 0.0;
   final openCode = _Tally();
   final codex = _Tally();
+  final dsh = _Tally();
+  var dshContext = 0;
   var untracked = false;
   for (final w in workers) {
     if (w.kind != WorkerKind.agent) continue;
@@ -153,13 +167,29 @@ UsageSummary summarizeUsage(UsageState s, Iterable<WorkerInfo> workers, ProjectI
       }
       codex.add(u, costKnown: u.costKnown == true);
     }
+    if (provider == AgentProvider.dsh) {
+      if (u == null) {
+        dsh.waiting = true;
+        continue;
+      }
+      dsh.add(u, costKnown: u.costKnown == true);
+      if (u.contextSize != null && u.contextSize! > dshContext) dshContext = u.contextSize!;
+    }
     if (providerUsageTracked(provider, project, u) && u?.costKnown != false && u?.incomplete != true) {
       now += u?.cost ?? 0;
     }
   }
   final head = now > 0 ? fmtCost(now) : '';
   final claude = s.total.calls > 0 || s.budget != null;
-  final any = claude || untracked || openCode.reports > 0 || openCode.waiting || codex.reports > 0 || codex.waiting;
+  final any =
+      claude ||
+      untracked ||
+      openCode.reports > 0 ||
+      openCode.waiting ||
+      codex.reports > 0 ||
+      codex.waiting ||
+      dsh.reports > 0 ||
+      dsh.waiting;
   if (!any) return UsageSummary(headCost: head, visible: false, over: false, rows: const []);
   final over = overBudget(s);
   final rows = <UsageRow>[];
@@ -231,6 +261,28 @@ UsageSummary summarizeUsage(UsageState s, Iterable<WorkerInfo> workers, ProjectI
       const UsageNote(
         'Codex metrics waiting for first report',
         'Codex usage appears after its first root-session metrics report; subagent usage is not included.',
+      ),
+    );
+  }
+  if (dsh.reports > 0) {
+    final context = dshContext > 0 ? ' / ${fmtTokens(dshContext)}' : '';
+    // Only the ones whose cost the harness supplied add up to a figure.
+    final spend = dsh.cost > 0 ? '${fmtCost(dsh.cost)} · ' : '';
+    rows.add(
+      UsageNote(
+        'DeepSeek Harness current desks $spend${fmtTokens(dsh.tokens)}$context context',
+        [
+          'DeepSeek Harness reports what is in each session’s context window over ACP after a turn; cost appears only when the harness supplies it, and is never billing.',
+          '${dsh.reports} worker${dsh.reports == 1 ? '' : 's'} · ${fmtTokens(dsh.tokens)}$context context tokens',
+        ].join('\n'),
+      ),
+    );
+  }
+  if (dsh.waiting) {
+    rows.add(
+      const UsageNote(
+        'DeepSeek Harness metrics waiting for first report',
+        'DeepSeek Harness usage appears after its first ACP usage update.',
       ),
     );
   }

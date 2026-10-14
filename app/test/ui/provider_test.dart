@@ -7,6 +7,7 @@ import 'package:agent_office/ui/queue_logic.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:office_shared/protocol.dart';
+import 'package:office_shared/providers.dart' show ModelOption;
 
 import 'harness.dart';
 
@@ -24,15 +25,20 @@ PromptsAgent picked(String provider, {String? model, String? effort}) =>
 
 void main() {
   test('badges and labels', () {
-    expect(modelBadge(AgentProvider.claude, 'opus', AgentEffort.high), 'Opus · High');
-    expect(modelBadge(AgentProvider.claude, 'fable', null), 'Fable');
+    expect(modelBadge(AgentProvider.claude, 'opus', AgentEffort.high), 'Opus 5.5 · High');
+    expect(modelBadge(AgentProvider.claude, 'fable', null), 'Fable 5.1');
+    // What its session says it runs is surer than what an alias stands for.
+    expect(modelBadge(AgentProvider.claude, 'opus', null, 'claude-sonnet-5-5'), 'Sonnet 5.5');
+    expect(modelBadge(AgentProvider.claude, null, null, 'claude-haiku-4-5-20251001'), 'Haiku 4.5');
+    expect(modelBadge(AgentProvider.codex, 'gpt-5.5', AgentEffort.high), 'gpt-5.5 · High');
+    expect(modelBadge(AgentProvider.cursor, 'gpt-5', AgentEffort.high), 'gpt-5', reason: 'Cursor takes no effort');
     expect(modelBadge(AgentProvider.claude, null, AgentEffort.xhigh), 'Extra high');
     expect(modelBadge(AgentProvider.opencode, 'anthropic/claude-sonnet-4', null), 'anthropic/claude-sonnet-4');
     expect(modelBadge(AgentProvider.claude, null, null), isNull);
     expect(choiceLabel(const AgentChoice(provider: AgentProvider.claude)), 'Claude Code');
     expect(
       choiceLabel(const AgentChoice(provider: AgentProvider.claude, model: 'opus', effort: AgentEffort.max)),
-      'Claude Code · Opus · Max',
+      'Claude Code · Opus 5.5 · Max',
     );
   });
 
@@ -59,7 +65,7 @@ void main() {
     c.effortPicked = null;
     expect((c.model(), c.effort()), ('haiku', null));
     c.selected = AgentProvider.opencode;
-    expect(c.effort(), isNull, reason: 'effort is Claude only');
+    expect(c.effort(), isNull, reason: 'another provider starts on its own defaults');
     c.modelText.text = 'openrouter/x';
     expect(c.choice().model, 'openrouter/x');
     c.toggleEdit();
@@ -92,7 +98,7 @@ void main() {
       'model': 'opus',
       'effort': 'high',
     });
-    expect(taskMeta(t), contains('initial: Opus · High'));
+    expect(taskMeta(t), contains('initial: Opus 5.5 · High'));
   });
 
   testWidgets('the queue adds a task on the default, or on what ✏️ Edit picked', (tester) async {
@@ -110,7 +116,7 @@ void main() {
     openQueue(office.scope());
     await tester.pump();
     await tester.pump();
-    expect(find.text('Claude Code · Sonnet'), findsOneWidget);
+    expect(find.text('Claude Code · Sonnet 5.5'), findsOneWidget);
     await tester.enterText(find.byType(TextField).first, 'Write the docs');
     await tester.tap(find.text('Add to queue'));
     await tester.pump();
@@ -119,8 +125,8 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('provider-edit')));
     await tester.pump();
-    expect(find.byKey(const ValueKey('claude-effort')), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('claude-effort')));
+    expect(find.byKey(const ValueKey('provider-effort')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('provider-effort')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Max'));
     await tester.pumpAndSettle();
@@ -129,5 +135,77 @@ void main() {
     await tester.pump();
     add = office.net.sent.whereType<QueueAddCmd>().last;
     expect((add.model, add.effort), ('sonnet', AgentEffort.max));
+  });
+
+  test('every provider’s fields come from its row in the table', () {
+    final p = project(providers: ['claude', 'opencode', 'codex', 'grok', 'muse', 'dsh', 'pi', 'cursor', 'custom']);
+    final c = ProviderPickerController(p, fields: true);
+    // Codex lists its models with the efforts each takes.
+    setCatalogue(
+      AgentProvider.codex,
+      list: [
+        const ModelOption(id: 'gpt-5.5', name: 'GPT-5.5', efforts: [AgentEffort.low, AgentEffort.high]),
+        const ModelOption(id: 'gpt-5-mini', efforts: []),
+      ],
+    );
+    c.selected = AgentProvider.codex;
+    expect(c.typed, isFalse);
+    c.chosen = 'gpt-5.5';
+    c.effortPicked = AgentEffort.high;
+    expect(c.choice().model, 'gpt-5.5');
+    expect(c.choice().effort, AgentEffort.high);
+    c.chosen = 'gpt-5-mini';
+    expect(c.effortPicked, isNull, reason: 'that model takes no effort');
+    // A list that couldn't be had: typed in.
+    setCatalogue(AgentProvider.grok, failed: true);
+    c.selected = AgentProvider.grok;
+    expect(c.typed, isTrue);
+    c.modelText.text = 'grok 4';
+    expect(c.valid(), isFalse);
+    expect(c.modelError, 'Use a Grok model id without whitespace (up to 64 characters).');
+    // Pi's effort is its thinking; Cursor has none to pick; a custom --agent has neither.
+    c.selected = AgentProvider.pi;
+    expect(c.meta.effortLabel, 'Thinking');
+    c.selected = AgentProvider.cursor;
+    c.effortPicked = AgentEffort.high;
+    expect(c.effort(), isNull);
+    c.selected = AgentProvider.custom;
+    expect(c.meta.models, isNull);
+    expect(c.choice().model, isNull);
+    c.dispose();
+  });
+
+  test('the office lists a provider’s models, valid ones once each; an older office sent plain ids', () {
+    final models = parseModels(AgentProvider.codex, {
+      'models': [
+        {
+          'id': 'gpt-5.5',
+          'name': 'GPT-5.5',
+          'efforts': ['low', 'nope'],
+        },
+        {'id': 'gpt-5.5'},
+        {'id': 'has space'},
+        'gpt-4.1',
+      ],
+    });
+    expect([for (final m in models) m.id], ['gpt-5.5', 'gpt-4.1']);
+    expect(models.first.efforts, [AgentEffort.low]);
+    expect(parseModels(AgentProvider.opencode, {'models': 'x'}), isEmpty);
+  });
+
+  test('usage: tracked, waiting for a first report, or untracked, by provider', () {
+    final p = project();
+    expect(providerUsageState(AgentProvider.claude, p), ProviderUsageState.waiting);
+    expect(providerUsageState(AgentProvider.dsh, p), ProviderUsageState.waiting);
+    expect(providerWaitingLabel(AgentProvider.dsh, p), 'waiting for first report');
+    expect(providerUsageState(AgentProvider.grok, p), ProviderUsageState.untracked);
+    expect(
+      providerUsageState(
+        AgentProvider.pi,
+        p,
+        const Usage(input: 1, output: 0, cacheWrite: 0, cacheRead: 0, cost: 0, calls: 1),
+      ),
+      ProviderUsageState.tracked,
+    );
   });
 }
