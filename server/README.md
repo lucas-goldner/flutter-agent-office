@@ -9,8 +9,10 @@ office that ran on the Node server carries on with its data, sessions and worker
 
 - `bin/agent_office.dart` is the one executable, compiled with `dart compile exe` by
   `tool/build.dart`. It is the server, and its subcommands are the PTY host (`__ptyhost`), the
-  agents' status hooks (`hook claude|codex|grok|muse|cursor`, in place of upstream's Node helpers), `setup` (the first-start walkthrough, `setup.dart`), `prune` and
-  `accounts`.
+  agents' status hooks (`hook claude|codex|grok|muse|cursor`, in place of upstream's Node helpers), `setup` (the first-start walkthrough, `setup.dart`), `prune`,
+  `accounts`, `queue` (the board agents' task queue) and `workers` (the `office-workers` command on
+  every worker's PATH, and with `mcp` the office's MCP server for the agents: `workers_cmd.dart`, talking to
+  `/office/workers` on the hook port, `office_workers.dart`).
 - `lib/src/server.dart` is the HTTP and WebSocket server (on `package:relic`); the other modules
   in `lib/src` are the pieces it wires together: `workers.dart` and `ptys.dart`/`ptyhost.dart` the
   workers and their terminals (each agent provider an adapter in `providers/`, the manager never

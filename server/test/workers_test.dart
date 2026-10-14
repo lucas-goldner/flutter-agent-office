@@ -5,6 +5,7 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:agent_office_server/src/hook.dart' show officeCommand;
 import 'package:agent_office_server/src/prompts.dart';
 import 'package:agent_office_server/src/usage.dart';
 import 'package:agent_office_server/src/workers.dart';
@@ -287,6 +288,9 @@ void main() {
       expect(firstWorker.workerId, worker.id);
       expect(token, isNotEmpty);
       expect(firstWorker.opencodeConfig, contains('agent-office-opencode'));
+      // The office's MCP server, which OpenCode runs with the worker's environment.
+      final mcp = ((jsonDecode(firstWorker.opencodeConfig!) as Map)['mcp'] as Map?)?['agent-office'] as Map?;
+      expect((mcp?['command'] as List?)?.sublist((mcp!['command'] as List).length - 2), ['workers', 'mcp']);
       expect(first.where((r) => r.kind == 'claude'), isEmpty, reason: 'OpenCode must not launch the Claude task namer');
 
       final transcript = p.join(f.root, 'must-not-be-read.jsonl');
@@ -611,6 +615,17 @@ void main() {
       final token = first.hookToken!;
       expect(workers.get(worker.id)?.status, WorkerStatus.starting);
       expect(first.args, contains('--no-alt-screen'));
+      // The office's MCP server, with the office's variables passed on to it, which Codex doesn't do unasked.
+      expect(
+        first.args,
+        contains('mcp_servers.agent-office.args=${jsonEncode([...officeCommand().sublist(1), 'workers', 'mcp'])}'),
+      );
+      expect(
+        first.args,
+        contains(
+          'mcp_servers.agent-office.env_vars=["AGENT_OFFICE_HOOK_URL","AGENT_OFFICE_WORKER_ID","AGENT_OFFICE_HOOK_TOKEN"]',
+        ),
+      );
       expect(first.args.sublist(first.args.length - 2), ['--', '- fix the login']);
       expect(first.args.any(RegExp(r'bypass|--yolo|--claude-only|--settings').hasMatch), isFalse);
       expect(first.args.where((a) => a.startsWith('hooks.')).length, 7);
@@ -991,7 +1006,7 @@ void main() {
       expect(second.args.last, 'Also bump the version');
       expect(onPath(second), isTrue);
 
-      // The other board agents keep their tools but get the command; a desk worker gets neither.
+      // The other board agents keep their tools; they, and a desk worker, get the commands all the same.
       final pulls = workers.station('station-pulls', 'Ada', 'Sum up the open PRs');
       final desk = spawned(workers.spawn('desk-2', 'Ada', 'Fix login'));
       final pullsLaunch = (await waitFor(() => launches(pulls.info!.id), (l) => l.length == 1)).first;
@@ -999,7 +1014,7 @@ void main() {
       expect(denied(pullsLaunch.args), isNull);
       expect(onPath(pullsLaunch), isTrue);
       expect(denied(deskLaunch.args), isNull);
-      expect((deskLaunch.path ?? '').split(':'), isNot(contains(bin)));
+      expect(onPath(deskLaunch), isTrue, reason: "office-workers is first on a desk worker's PATH");
     },
   );
 

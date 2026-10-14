@@ -4,6 +4,7 @@
 
 import 'package:office_shared/shared.dart';
 
+import '../office_workers.dart' show openCodeMcp;
 import '../opencode.dart';
 import '../reported_usage.dart';
 import 'provider.dart';
@@ -15,9 +16,12 @@ class StatusState {
 }
 
 class OpenCodeSetup {
-  const OpenCodeSetup({required this.plugin});
+  const OpenCodeSetup({required this.plugin, this.mcp});
 
   final String plugin;
+
+  /// The office's MCP server's command line (see office_workers.dart).
+  final List<String>? mcp;
 }
 
 /// [args] without any `--model`/`-m` option, for an OpenCode launch that picks its own model (or
@@ -135,7 +139,7 @@ class OpenCodeAdapter extends ProviderAdapter {
   Object? createState() => StatusState();
 
   @override
-  Object? prepare(ProviderFloor floor) => OpenCodeSetup(plugin: writeOpenCodePlugin(floor.dataDir));
+  Object? prepare(ProviderFloor floor) => OpenCodeSetup(plugin: writeOpenCodePlugin(floor.dataDir), mcp: floor.mcp);
 
   @override
   LaunchPlan launch(LaunchInput input) {
@@ -161,6 +165,7 @@ class OpenCodeAdapter extends ProviderAdapter {
         env['OPENCODE_CONFIG_CONTENT'] = mergeOpenCodeConfigContent(
           env['OPENCODE_CONFIG_CONTENT'],
           openCodePluginSpecifier(setup.plugin),
+          setup.mcp != null ? openCodeMcp(setup.mcp!) : null,
         );
       },
     );

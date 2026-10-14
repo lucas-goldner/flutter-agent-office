@@ -15,7 +15,7 @@ import 'docs.dart';
 import 'dog.dart';
 import 'github.dart';
 import 'jukebox.dart';
-import 'leave_on_merge.dart' show landedWorkers;
+import 'leave_on_merge.dart' show Landed, landedWork, landedWorkers;
 import 'machine.dart' show Capacity;
 import 'meetings.dart';
 import 'prompts.dart';
@@ -23,7 +23,7 @@ import 'queue.dart';
 import 'usage.dart' show Ledger;
 import 'whiteboard.dart';
 import 'workers.dart';
-import 'worktrees.dart' show Worktrees;
+import 'worktrees.dart' show WorktreeCleanup, Worktrees;
 
 /// What a floor needs from the building around it.
 abstract interface class FloorContext {
@@ -353,6 +353,20 @@ class Floor {
         );
       }
     });
+  }
+
+  /// Whether a worker's work landed: a pull request of its merged and none is open, on this floor
+  /// and, for a worker across repositories, on the others too (see landedWork).
+  Landed? landed(WorkerInfo worker) =>
+      landedWork(worker, github.pulls.items, queue.state().tasks, (id) => _ctx.floor(id)?.github.pulls.items);
+
+  /// Sends a worker home as someone asked (not by itself, see [sendLandedHome]): with no [cleanup],
+  /// its worktree and branch go unless they hold work, where what its merged pull requests delivered
+  /// doesn't count. Resolves with the line about its worktree.
+  Future<({String? note, String? error})> sendHome(String workerId, [WorktreeCleanup? cleanup]) {
+    final info = workers.get(workerId);
+    final l = info != null ? landed(info) : null;
+    return workers.kill(workerId, cleanup, l?.head, l?.heads);
   }
 
   /// Workers across repositories whose worktrees are being checked before they go home.

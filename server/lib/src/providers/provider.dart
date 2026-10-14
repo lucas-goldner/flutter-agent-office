@@ -15,7 +15,13 @@ export '../worker_handle.dart';
 
 /// What a provider is set up with on one floor (see [ProviderAdapter.prepare]).
 class ProviderFloor {
-  const ProviderFloor({required this.dataDir, required this.office, this.dshProfile = 'acp', this.env = const {}});
+  const ProviderFloor({
+    required this.dataDir,
+    required this.office,
+    this.dshProfile = 'acp',
+    this.env = const {},
+    this.mcp,
+  });
 
   /// The floor's data dir, where hook settings, homes and plugins go.
   final String dataDir;
@@ -28,6 +34,10 @@ class ProviderFloor {
 
   /// The office's own environment (tests stand one in), to find the person's own sign-ins in.
   final Map<String, String> env;
+
+  /// The office's MCP server, `office-workers mcp` (see office_workers.dart), for the agents that
+  /// take one: the command line that runs it.
+  final List<String>? mcp;
 }
 
 /// One run of a worker, for its adapter to turn into a command line.

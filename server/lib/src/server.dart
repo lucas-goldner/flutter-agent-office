@@ -36,6 +36,7 @@ import 'upgrade.dart';
 import 'usage.dart';
 import 'webhook.dart';
 import 'providers/providers.dart' show providerHook;
+import 'office_workers.dart';
 import 'workers.dart';
 
 /// Content types by extension, with the charset the text ones are sent in.
@@ -600,10 +601,40 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     });
   }
 
+  /// What the /office/workers endpoint needs of the office: set once the ledger and the settings are up.
+  late final OfficeWorkersContext officeWorkersContext;
+
+  /// The floor's workers, for every worker on it (see office_workers.dart and `office-workers`).
+  Future<Response> officeWorkersRequest(Request req) async {
+    final url = req.url;
+    final token = (headerValue(req.headers, 'authorization') ?? '').replaceFirst(
+      RegExp(r'^Bearer\s+', caseSensitive: false),
+      '',
+    );
+    String body = '';
+    if (req.method == Method.post) {
+      try {
+        body = await req.readAsString(encoding: utf8, maxLength: 1024 * 1024);
+      } catch (_) {
+        return _send(400, {'error': 'Send JSON'});
+      }
+    }
+    final r = await officeWorkers(
+      officeWorkersContext,
+      method: req.method.value.toUpperCase(),
+      action: url.path.substring('/office/workers'.length),
+      workerId: _query(url, 'worker') ?? '',
+      token: token,
+      body: body,
+    );
+    return _send(r.status, r.body);
+  }
+
   // --- Loopback-only endpoint for authenticated agent events -------------------------------
   Future<Response> hookHandler(Request req) async {
     final url = req.url;
     if (url.path == '/office/queue') return officeQueue(req);
+    if (url.path == '/office/workers' || url.path.startsWith('/office/workers/')) return officeWorkersRequest(req);
     // Each provider with hooks has its route, /hooks/<provider> (see providers/).
     final route = url.path.startsWith('/hooks/') ? url.path.substring('/hooks/'.length) : '';
     final hook = providerHook(route);
@@ -771,6 +802,13 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
           }
         })
         ..onLent = ((floor) => floors.values.any((f) => f != floor && _worksIn(f, floor)));
+  officeWorkersContext = _OfficeWorkersContext(
+    workerFloor: workerFloor,
+    floor: (id) => floors[id],
+    leaveOnMerge: () => leaveOnMerge.on,
+    hiringPaused: () => ledger.hiringPaused,
+    toastFloor: toastFloor,
+  );
 
   Floor? openFloor(FloorDef def) {
     if (!Directory(def.dir).existsSync()) {
@@ -2787,6 +2825,38 @@ class _FloorContext implements FloorContext {
 String? _repoOf(Object? v) {
   final s = _str(v, 64);
   return s.isEmpty ? null : s;
+}
+
+/// What the /office/workers endpoint needs of the office (see office_workers.dart).
+class _OfficeWorkersContext implements OfficeWorkersContext {
+  _OfficeWorkersContext({
+    required Floor? Function(String) workerFloor,
+    required Floor? Function(String) floor,
+    required bool Function() leaveOnMerge,
+    required String? Function() hiringPaused,
+    required void Function(Floor? floor, String text, [ToastLevel? level]) toastFloor,
+  }) : _workerFloor = workerFloor,
+       _floor = floor,
+       _leaveOnMerge = leaveOnMerge,
+       _hiringPaused = hiringPaused,
+       _toastFloor = toastFloor;
+
+  final Floor? Function(String) _workerFloor;
+  final Floor? Function(String) _floor;
+  final bool Function() _leaveOnMerge;
+  final String? Function() _hiringPaused;
+  final void Function(Floor? floor, String text, [ToastLevel? level]) _toastFloor;
+
+  @override
+  Floor? workerFloor(String workerId) => _workerFloor(workerId);
+  @override
+  Floor? floor(String id) => _floor(id);
+  @override
+  bool get leaveOnMerge => _leaveOnMerge();
+  @override
+  String? get hiringPaused => _hiringPaused();
+  @override
+  void toastFloor(Floor floor, String text, [ToastLevel? level]) => _toastFloor(floor, text, level);
 }
 
 /// Whether a worker on [from] works in [on]'s project too (see WorkerInfo.repos).

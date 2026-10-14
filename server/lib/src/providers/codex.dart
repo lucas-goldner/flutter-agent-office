@@ -11,6 +11,7 @@ import 'package:path/path.dart' as p;
 import '../codex.dart';
 import '../codex_usage.dart';
 import '../lifecycle.dart';
+import '../office_workers.dart' show codexMcpArgs;
 import 'provider.dart';
 
 class CodexState {
@@ -29,7 +30,10 @@ class CodexState {
 }
 
 class CodexSetup {
-  const CodexSetup({required this.office});
+  const CodexSetup({required this.office, this.mcp});
+
+  /// The office's MCP server's command line (see office_workers.dart).
+  final List<String>? mcp;
 
   /// How its hooks run the office's own executable.
   final List<String> office;
@@ -150,14 +154,14 @@ class CodexAdapter extends ProviderAdapter {
   Object? createState() => CodexState();
 
   @override
-  Object? prepare(ProviderFloor floor) => CodexSetup(office: floor.office);
+  Object? prepare(ProviderFloor floor) => CodexSetup(office: floor.office, mcp: floor.mcp);
 
   @override
   LaunchPlan launch(LaunchInput input) {
     final setup = input.setup as CodexSetup;
     // Resumed too: Codex resumes on whatever its config says now, not on the model the session ran on.
     final args = codexModelArgs(input.args, input.h.info.model, input.h.info.effort)
-      ..addAll([...codexHookArgs(setup.office), '--no-alt-screen']);
+      ..addAll([...codexHookArgs(setup.office), if (setup.mcp != null) ...codexMcpArgs(setup.mcp!), '--no-alt-screen']);
     if (input.resumeSessionId != null) args.addAll(['resume', input.resumeSessionId!]);
     final prompt = input.prompt;
     if (prompt != null && prompt.isNotEmpty) args.addAll(['--', prompt]);

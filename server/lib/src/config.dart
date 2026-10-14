@@ -132,6 +132,7 @@ Usage:
   agent-office prune [dir] [--dry-run] [--force]
   agent-office accounts [list|invite|revoke|role|password] ...
   agent-office queue [list|add|remove] ...
+  agent-office workers [list|hire|home|tell|pr|mcp] ...   (office-workers, in a worker's terminal)
 
 Runs the office. Every project is a floor of the building: ride the elevator,
 pick one of the repositories your `gh` login can see, and the office clones it

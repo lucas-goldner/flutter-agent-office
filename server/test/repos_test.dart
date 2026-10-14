@@ -26,7 +26,7 @@ String git(String cwd, List<String> args) {
   return '${r.stdout}'.trim();
 }
 
-/// A checkout of github.com/acme/<name> whose pushes land in a local bare repository instead.
+/// A checkout of `github.com/acme/<name>` whose pushes land in a local bare repository instead.
 String project(String root, String name) {
   final bare = p.join(root, 'remotes', '$name.git');
   Directory(bare).createSync(recursive: true);

@@ -234,8 +234,9 @@ extension _WorkerTrees on WorkerManager {
       }
       cleanup = WorktreeCleanup.all;
     }
-    if (cleanup == WorktreeCleanup.keep)
+    if (cleanup == WorktreeCleanup.keep) {
       return (note: "Kept $name's worktrees and branch $branch in $where", error: null);
+    }
     final how = cleanup;
     final errors = [
       for (final e in await Future.wait([

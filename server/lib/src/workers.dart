@@ -235,6 +235,8 @@ class _Handle implements WorkerHandle {
   @override
   void noteTool(String tool) => _m._noteTool(_w, tool);
   @override
+  void notePr(Object? command, String output) => _m._noteOwnPr(_w, command, output);
+  @override
   void clearTask() => _m._clearTask(_w);
   @override
   void scheduleScan() => _m._scheduleScan(_w);
@@ -269,11 +271,18 @@ class WorkerManager implements QueueWorkers {
     _trees = Worktrees(_dir);
     _statePath = p.join(_dataDir, 'workers.json');
     _office = officeCommand();
-    final floor = ProviderFloor(dataDir: _dataDir, office: _office, env: _env, dshProfile: dshProfile);
+    // `agent-office workers mcp` is the office's MCP server, for the agents that take one.
+    final floor = ProviderFloor(
+      dataDir: _dataDir,
+      office: _office,
+      env: _env,
+      dshProfile: dshProfile,
+      mcp: [..._office, 'workers', 'mcp'],
+    );
     for (final a in providerAdapters.values) {
       _setups[a.id] = a.prepare(floor);
     }
-    _queueBin = _writeQueueCommand();
+    _officeBin = _writeOfficeCommands();
     _agentPath = resolveCommand(_agentCmd, _env);
     final claude = defaultProvider == AgentProvider.claude ? _agentPath : resolveCommand('claude', _env);
     _namer = TaskNamer(claude, childEnv(_env), (id, task, ctx) {
@@ -319,8 +328,8 @@ class WorkerManager implements QueueWorkers {
   final Capacity? _capacity;
   final PromptSource? _prompts;
 
-  /// Where the `agent-office` command is, for the board agents' PATH (see [_writeQueueCommand]).
-  String? _queueBin;
+  /// Where the `agent-office` and `office-workers` commands are, for the workers' PATH (see [_writeOfficeCommands]).
+  String? _officeBin;
 
   final _workers = <String, _Worker>{};
   late final String _statePath;
@@ -873,6 +882,58 @@ class WorkerManager implements QueueWorkers {
     List<RepoSource> repos,
   ) => _makeWorkspace(slug, repos);
 
+  /// Says which pull request is a worker's, or with none that it has none: for one the office couldn't
+  /// tell by itself (opened by hand, or by an agent whose hooks don't say what it ran). A message when
+  /// there's no such worker.
+  String? linkPr(String id, PrRef? pr) {
+    final w = _workers[id];
+    if (w == null) return 'No such worker';
+    w.info.pr = pr;
+    // Whoever says so knows better than what the office gathered.
+    w.info.pastPrs = const [];
+    _persist();
+    _emitUpdate(w);
+    return null;
+  }
+
+  /// owner/name of the floor's project on GitHub, looked up the first time a worker opens a pull request itself.
+  ({String? repo})? _origin;
+
+  /// A worker ran `gh pr create` itself (see ownPr): that pull request is its own from then on, as
+  /// one opened from its desk is. A worker in the main checkout works on a branch the office never
+  /// made, so this is how the office knows which pull request is whose. For a worker across
+  /// repositories, one in another of its repositories is kept with that repository.
+  void _noteOwnPr(_Worker w, Object? command, String output) {
+    final pr = ownPr(command, output);
+    if (pr == null) return;
+    final info = w.info;
+    bool same(String? repo) => repo != null && repo.toLowerCase() == pr.repo.toLowerCase();
+    final origin = _origin ??= (repo: originRepo(_dir));
+    final repos = info.repos ?? const <WorkerRepo>[];
+    final other = same(origin.repo) ? -1 : repos.indexWhere((r) => same(r.repo));
+    if (!same(origin.repo) && other < 0) return;
+    final ref = PrRef(number: pr.number, url: pr.url);
+    if (other >= 0) {
+      if (repos[other].pr?.number == pr.number) return;
+      info.repos = [...repos]..[other] = _withPr(repos[other], ref);
+    } else {
+      if (info.pr?.number == pr.number) return;
+      // The one it had may still be open (a second task, a follow-up): it stays its own too.
+      final had = info.pr;
+      if (had != null) {
+        final past = {...info.pastPrs, had.number}.where((n) => n != pr.number).toList();
+        info.pastPrs = past.length > maxPastPrs ? past.sublist(past.length - maxPastPrs) : past;
+      }
+      info.pr = ref;
+    }
+    _persist();
+    _emitUpdate(w);
+    _events.toast(
+      '${info.name} opened PR #${pr.number}${other >= 0 ? ' in ${repos[other].name}' : ''}',
+      ToastLevel.info,
+    );
+  }
+
   /// Whether any worktree of a worker across repositories holds work its merged pull requests didn't
   /// deliver ([landed] and [landedRepos], as for kill): then it doesn't go home by itself yet.
   Future<bool> holdsWork(String id, [String? landed, Map<String, String?>? landedRepos]) =>
@@ -1100,11 +1161,12 @@ class WorkerManager implements QueueWorkers {
         if (env['GIT_CEILING_DIRECTORIES']?.isNotEmpty ?? false) env['GIT_CEILING_DIRECTORIES']!,
       ].join(':');
     }
-    // A board agent reaches the queue with the `agent-office queue` command, whichever agent it runs.
-    final queueBin = _queueBin;
-    if (station != null && queueBin != null) {
+    // Whichever agent it runs, a worker reaches the office's workers with `office-workers`, and a
+    // board agent the queue with `agent-office queue`.
+    final officeBin = _officeBin;
+    if (officeBin != null) {
       final path = env['PATH'];
-      env['PATH'] = path != null && path.isNotEmpty ? '$queueBin:$path' : queueBin;
+      env['PATH'] = path != null && path.isNotEmpty ? '$officeBin:$path' : officeBin;
     }
     adapter?.usage?.locate?.call(_handleOf(w), cwd, env);
 
@@ -1543,23 +1605,27 @@ class WorkerManager implements QueueWorkers {
     }
   }
 
-  /// Writes the `agent-office` command into the data dir's bin/, running the office's own executable,
-  /// and returns that directory: on a board agent's PATH, `agent-office queue …` reaches the queue.
-  /// Rewritten on every start, so after an upgrade it runs the new install.
-  String? _writeQueueCommand() {
+  /// Writes the `agent-office` and `office-workers` commands into the data dir's bin/, each running
+  /// the office's own executable, and returns that directory: on a board agent's PATH,
+  /// `agent-office queue …` reaches the queue, and on every worker's, `office-workers …` the office's
+  /// workers (see workers_cmd.dart). Rewritten on every start, so after an upgrade they run the new install.
+  String? _writeOfficeCommands() {
     if (Platform.isWindows) return null;
     try {
       final dir = p.join(_dataDir, 'bin');
       Directory(dir).createSync(recursive: true);
       chmodSync(dir, 0x1c0); // 0700
-      final file = p.join(dir, 'agent-office');
-      final tmp = '$file.tmp';
-      File(tmp).writeAsStringSync(
-        "#!/bin/sh\n# Agent Office, for the board agents: agent-office queue list|add|remove.\n"
-        'exec ${_office.map(shellQuote).join(' ')} "\$@"\n',
-      );
-      chmodSync(tmp, 0x1c0); // 0700
-      File(tmp).renameSync(file);
+      final office = _office.map(shellQuote).join(' ');
+      for (final (name, what, exec) in [
+        ('agent-office', 'Agent Office, for the board agents: agent-office queue list|add|remove.', office),
+        ('office-workers', "Agent Office's workers, for every worker: office-workers --help.", '$office workers'),
+      ]) {
+        final file = p.join(dir, name);
+        final tmp = '$file.tmp';
+        File(tmp).writeAsStringSync('#!/bin/sh\n# $what\nexec $exec "\$@"\n');
+        chmodSync(tmp, 0x1c0); // 0700
+        File(tmp).renameSync(file);
+      }
       return dir;
     } catch (_) {
       return null;
@@ -1671,11 +1737,12 @@ class WorkerManager implements QueueWorkers {
           repos: worktree is Map ? validRepos(s['repos']) : null,
         );
         final past = s['pastPrs'];
-        if (past is List)
+        if (past is List) {
           info.pastPrs = [
             for (final n in past)
               if (n is num) n.toInt(),
           ];
+        }
         final token = s['hookToken'];
         final w = _Worker(info, tracker, token is String && token.isNotEmpty ? token : null);
         usage?.restore?.call(w.state, s);

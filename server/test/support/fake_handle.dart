@@ -41,6 +41,11 @@ class FakeHandle implements WorkerHandle {
   void notePrompt(String prompt) {}
   @override
   void noteTool(String tool) {}
+
+  /// The shell commands and their output it was told about (see WorkerHandle.notePr).
+  final notedPrs = <(Object?, String)>[];
+  @override
+  void notePr(Object? command, String output) => notedPrs.add((command, output));
   @override
   void clearTask() {}
   @override

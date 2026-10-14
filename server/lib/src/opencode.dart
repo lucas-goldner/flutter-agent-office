@@ -69,7 +69,9 @@ class OpenCodeUsageEvent extends OpenCodeHookEvent {
 
 /// Merge the per-process plugin into inline OpenCode config without touching user config files.
 /// Throws a [FormatException] when [existing] is not a JSON object with an array `plugin`.
-String mergeOpenCodeConfigContent(String? existing, String plugin) {
+///
+/// The office's MCP server goes in too when there is one ([mcp], see openCodeMcp).
+String mergeOpenCodeConfigContent(String? existing, String plugin, [Map<String, Object?>? mcp]) {
   var config = <String, dynamic>{};
   if (existing != null && existing.isNotEmpty) {
     try {
@@ -85,6 +87,10 @@ String mergeOpenCodeConfigContent(String? existing, String plugin) {
   final plugins = current is List ? [...current] : <Object?>[];
   if (!plugins.contains(plugin)) plugins.add(plugin);
   config['plugin'] = plugins;
+  if (mcp != null) {
+    final theirs = config['mcp'];
+    config['mcp'] = {if (theirs is Map) ...theirs, ...mcp};
+  }
   return jsonEncode(config);
 }
 

@@ -9,6 +9,7 @@ import 'package:path/path.dart' as p;
 
 import '../hook.dart';
 import '../lifecycle.dart';
+import '../office_workers.dart' show mcpReadOnly, writeClaudeMcpConfig;
 import '../stations.dart';
 import 'provider.dart';
 
@@ -33,10 +34,13 @@ final _notLoggedIn = RegExp(r'Not logged in\s*·\s*Run /login|Invalid API key|Pl
 
 /// What Claude is set up with on a floor.
 class ClaudeSetup {
-  const ClaudeSetup({required this.settings});
+  const ClaudeSetup({required this.settings, this.mcp});
 
   /// Its --settings: the office's hooks.
   final String settings;
+
+  /// Its --mcp-config: the office's MCP server.
+  final String? mcp;
 }
 
 /// Claude Code's --settings for every worker: each hook event posted to the office (see hook.dart).
@@ -52,7 +56,9 @@ String writeClaudeHookSettings(String dataDir, List<String> office) {
         },
       ],
   };
-  writePrivate(settingsPath, const JsonEncoder.withIndent('  ').convert({'hooks': hooks}));
+  // Looking at the office's workers doesn't need anyone's say-so; hiring and sending home still asks.
+  final permissions = {'allow': mcpReadOnly};
+  writePrivate(settingsPath, const JsonEncoder.withIndent('  ').convert({'hooks': hooks, 'permissions': permissions}));
   return settingsPath;
 }
 
@@ -66,6 +72,17 @@ String describeTool(Map payload) {
   return truncateLine(hasDetail ? '$name: $detail' : '$name', 80);
 }
 
+/// What a finished tool call printed, and why it failed when it did.
+String toolOutput(Map payload) {
+  final res = payload['tool_response'];
+  return [
+    payload['error'],
+    res,
+    if (res is Map) res['stdout'],
+    if (res is Map) res['stderr'],
+  ].whereType<String>().join('\n');
+}
+
 /// A tool call finished. Tests or a build that failed again (by exit code, or by the summary it
 /// printed when the exit code was piped away) and the worker puts its head in its hands, until its
 /// next tool call; a passing run ends the streak.
@@ -73,13 +90,7 @@ void _noteOutcome(WorkerHandle h, Map payload, bool failed) {
   if (payload['is_interrupt'] == true || toolAction(payload['tool_name'], payload['tool_input']) != WorkerAction.test) {
     return;
   }
-  final res = payload['tool_response'];
-  final output = [
-    payload['error'],
-    if (res is Map) res['stdout'],
-    if (res is Map) res['stderr'],
-  ].whereType<String>().join('\n');
-  if (!failed && !outputFailed(output)) {
+  if (!failed && !outputFailed(toolOutput(payload))) {
     h.failStreak = 0;
     return;
   }
@@ -146,6 +157,9 @@ bool claudeHook(WorkerHandle h, String event, Object? payload) {
     case 'PostToolUse':
     case 'PostToolUseFailure':
       _noteOutcome(h, m, event == 'PostToolUseFailure');
+      // It opened a pull request itself (`gh pr create`): that one is its own.
+      final input = m['tool_input'];
+      h.notePr(input is Map ? input['command'] : null, toolOutput(m));
       answered(h, now);
     case 'PermissionRequest':
       wantsPermission(h, describeTool(m));
@@ -185,13 +199,20 @@ class ClaudeAdapter extends ProviderAdapter {
   List<String> get scrubPrefixes => const ['CLAUDE_CODE_SESSION', 'CLAUDE_CODE_CHILD', 'CLAUDE_CODE_MESSAGING'];
 
   @override
-  Object? prepare(ProviderFloor floor) => ClaudeSetup(settings: writeClaudeHookSettings(floor.dataDir, floor.office));
+  Object? prepare(ProviderFloor floor) => ClaudeSetup(
+    settings: writeClaudeHookSettings(floor.dataDir, floor.office),
+    mcp: floor.mcp != null ? writeClaudeMcpConfig(floor.dataDir, floor.mcp!) : null,
+  );
 
   @override
   LaunchPlan launch(LaunchInput input) {
     final info = input.h.info;
     final setup = input.setup as ClaudeSetup;
     final args = input.args..insertAll(0, ['--settings', setup.settings]);
+    // The office's MCP server: its workers, to list, hire, send home and tell (see office_workers.dart).
+    // Ahead of --settings, which ends the list --mcp-config takes.
+    final mcp = setup.mcp;
+    if (mcp != null) args.insertAll(0, ['--mcp-config', mcp]);
     // A model/effort chosen for this worker overrides whatever --agent-args set office-wide.
     if (info.model != null) args.addAll(['--model', info.model!]);
     if (info.effort != null) args.addAll(['--effort', info.effort!.wire]);

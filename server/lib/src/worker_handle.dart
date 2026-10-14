@@ -158,6 +158,10 @@ abstract interface class WorkerHandle {
   /// A tool call it made, for naming its task.
   void noteTool(String tool);
 
+  /// A shell command it ran and what that printed: a pull request it opened that way is its own (see
+  /// WorkerManager's noteOwn).
+  void notePr(Object? command, String output);
+
   /// A new conversation, so a new task.
   void clearTask();
 

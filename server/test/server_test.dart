@@ -123,6 +123,9 @@ void main() {
     expect(await post('/hooks/elsewhere'), 404);
     // The board agents' queue: only for a worker that proves who it is.
     expect(await post('/office/queue?worker=nobody'), 401);
+    // The office's workers, for every worker (office-workers): the same.
+    expect(await post('/office/workers?worker=nobody'), 401);
+    expect(await post('/office/workers/home?worker=nobody'), 401);
   });
 
   test('WebSocket: welcome, a shell worker typed into, and sent home', () async {
