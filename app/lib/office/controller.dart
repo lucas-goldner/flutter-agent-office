@@ -256,6 +256,7 @@ class OfficeController implements OfficeActions {
 
   /// The games and rooms: board agents, the arcade cabinet, the machine monitor…
   late final RoomsHub rooms = RoomsHub(this);
+
   /// The rooftop bar: up there and back, drinks and the DJ (roof.dart).
   late final RoofHub roofHub;
   final SkyModel skyModel = SkyModel();
@@ -1641,7 +1642,14 @@ class OfficeController implements OfficeActions {
     AgentEffort? effort,
   }) {
     net.send(
-      WorkerSpawnCmd(deskId: deskId, prompt: prompt, worktree: worktree, provider: provider, model: model, effort: effort),
+      WorkerSpawnCmd(
+        deskId: deskId,
+        prompt: prompt,
+        worktree: worktree,
+        provider: provider,
+        model: model,
+        effort: effort,
+      ),
     );
     // The moment notifications start to matter: ask once (it has to come from a key press or click).
     if (settings.notify && notifier.permission == NotifyPermission.ask && !_askedToNotify) {
@@ -1934,8 +1942,9 @@ class OfficeController implements OfficeActions {
   }
 
   @override
-  void showSettings() => openSettings(
+  void showSettings([SettingsPane? first]) => openSettings(
     scope,
+    first: first,
     settings: settings,
     onChange: (s) {
       // Switching to push to talk mutes you now; back to an open mic turns it on.
@@ -1948,6 +1957,8 @@ class OfficeController implements OfficeActions {
         ..music = s.music
         ..musicMuted = s.musicMuted
         ..notify = s.notify
+        ..pageTurns = s.pageTurns
+        ..needsYouSound = s.needsYouSound
         ..save();
       if (talkChanged) {
         voiceRoom.setMuted(settings.pushToTalk);
@@ -2037,7 +2048,7 @@ class OfficeController implements OfficeActions {
       case InteractKind.queue:
         showQueue();
       case InteractKind.jukebox:
-        openJukebox(scope, openVolume: showSettings);
+        openJukebox(scope, openVolume: () => showSettings(SettingsPane.sound));
       case InteractKind.seat when target.seatId != null:
         _useSeat(target.seatId!);
       case InteractKind.dog:
@@ -2184,7 +2195,9 @@ class OfficeController implements OfficeActions {
   Interactable? _mySeat() {
     final id = player.seat?.seatId;
     if (id == null) return null;
-    return (roofHub.usable ?? office.interactables).where((it) => it.kind == InteractKind.seat && it.seatId == id).firstOrNull;
+    return (roofHub.usable ?? office.interactables)
+        .where((it) => it.kind == InteractKind.seat && it.seatId == id)
+        .firstOrNull;
   }
 
   // ---- The gong -----------------------------------------------------------------------------------
@@ -2509,9 +2522,14 @@ class OfficeController implements OfficeActions {
             [
               HintTitle(seat.label),
               const HintAside('sitting'),
-              if (seat.game) ...[const HintKey('E', 'Play Minesweeper'), const HintKey('W A S D', 'Get up')]
-              else if (seat.bar) ...[const HintKey('E', 'Order a drink'), const HintKey('W A S D', 'Get up')]
-              else const HintKey('E', 'Get up'),
+              if (seat.game) ...[
+                const HintKey('E', 'Play Minesweeper'),
+                const HintKey('W A S D', 'Get up'),
+              ] else if (seat.bar) ...[
+                const HintKey('E', 'Order a drink'),
+                const HintKey('W A S D', 'Get up'),
+              ] else
+                const HintKey('E', 'Get up'),
             ],
           );
         }

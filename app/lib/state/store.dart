@@ -6,12 +6,14 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 
 import '../interop/browser.dart';
+
 import 'package:office_shared/avatar.dart';
 import 'package:office_shared/decor.dart';
 import 'package:office_shared/dog.dart';
 import 'package:office_shared/jukebox.dart';
 import 'package:office_shared/protocol.dart';
 import 'package:office_shared/whiteboard.dart';
+
 import '../world/player.dart' show ViewMode;
 import 'rooms.dart';
 import 'screen_state.dart';
@@ -20,13 +22,39 @@ export 'rooms.dart';
 export 'screen_state.dart';
 
 enum Topic {
-  peers, workers, issues, pulls, chat, project, screens, team, upgrade, services, decor, usage, limits,
-  queue, me, accounts, notify, floors, floor, repos, dog, jukebox, sky, whiteboard, drawing,
+  peers,
+  workers,
+  issues,
+  pulls,
+  chat,
+  project,
+  screens,
+  team,
+  upgrade,
+  services,
+  decor,
+  usage,
+  limits,
+  queue,
+  me,
+  accounts,
+  notify,
+  floors,
+  floor,
+  repos,
+  dog,
+  jukebox,
+  sky,
+  whiteboard,
+  drawing,
   // The building-wide settings (⚙️ Settings): the workspace folder, the holiday theme, the office's
   // prompts and default worker, leave-on-merge, and the machine with its worker limit.
-  projectsDir, theme, prompts, leaveOnMerge, machine,
+  projectsDir,
+  theme,
+  prompts,
+  leaveOnMerge,
+  machine,
 }
-
 
 /// Where someone is right now. peer.move updates it in place; the frame loop eases toward it.
 class PeerPose {
@@ -83,6 +111,10 @@ const Map<HudPanel, bool> kHudDefaults = {
   HudPanel.floor: false,
 };
 
+/// How the office rings when a worker needs you: not at all, once, or again and again until someone's at its
+/// terminal (persist.ts NEEDS_YOU_SOUNDS).
+enum NeedsYouSound { off, once, remind }
+
 class Settings {
   ViewMode view = ViewMode.first;
 
@@ -96,6 +128,13 @@ class Settings {
 
   /// Desktop notifications when a worker needs you while you're in another tab.
   bool notify = true;
+
+  /// The swish of a page turning as you read at the bookshelf.
+  bool pageTurns = true;
+
+  /// The alarm when a worker stops to ask you something: not at all, once, or again every half minute until
+  /// someone's at its terminal.
+  NeedsYouSound needsYouSound = NeedsYouSound.once;
 
   /// Voice chat starts muted and V is held down to talk, instead of an open mic.
   bool pushToTalk = false;
@@ -114,6 +153,8 @@ class Settings {
     ..music = music
     ..musicMuted = musicMuted
     ..notify = notify
+    ..pageTurns = pageTurns
+    ..needsYouSound = needsYouSound
     ..pushToTalk = pushToTalk
     ..hud = {...hud}
     ..pins = [...pins];
@@ -140,6 +181,9 @@ class Settings {
         if (saved['musicMuted'] is bool) s.musicMuted = saved['musicMuted'] as bool;
         if (saved['notify'] is bool) s.notify = saved['notify'] as bool;
         if (saved['pushToTalk'] is bool) s.pushToTalk = saved['pushToTalk'] as bool;
+        if (saved['pageTurns'] is bool) s.pageTurns = saved['pageTurns'] as bool;
+        final alarm = NeedsYouSound.values.where((v) => v.name == saved['needsYouSound']).firstOrNull;
+        if (alarm != null) s.needsYouSound = alarm;
         final hud = saved['hud'];
         if (hud is Map) {
           for (final k in HudPanel.values) {
@@ -163,6 +207,8 @@ class Settings {
     'musicMuted': musicMuted,
     'notify': notify,
     'pushToTalk': pushToTalk,
+    'pageTurns': pageTurns,
+    'needsYouSound': needsYouSound.name,
     'hud': {for (final e in hud.entries) e.key.name: e.value},
     'pins': pins,
   };
@@ -198,9 +244,15 @@ class Store {
   /// Every floor of the building, and the one you're on (null while there are none).
   List<FloorInfo> floors = [];
   String? floor;
+
   /// Where the elevator clones new projects, and who moved it there.
   ProjectsDirState projectsDir = const ProjectsDirState(dir: '');
-  ({List<RepoChoice> list, String? error, bool loading, int at}) repos = (list: const [], error: null, loading: false, at: 0);
+  ({List<RepoChoice> list, String? error, bool loading, int at}) repos = (
+    list: const [],
+    error: null,
+    loading: false,
+    at: 0,
+  );
   GhState<GhIssue> issues = GhState(items: const [], fetchedAt: 0, loading: true);
   GhState<GhPull> pulls = GhState(items: const [], fetchedAt: 0, loading: true);
   List<IceServer> ice = [];
@@ -325,8 +377,18 @@ class Store {
     _setDog(v.dog);
     _setJukebox(v.jukebox);
     for (final t in [
-      Topic.floor, Topic.project, Topic.workers, Topic.issues, Topic.pulls, Topic.queue, Topic.decor,
-      Topic.services, Topic.dog, Topic.jukebox, Topic.whiteboard, Topic.drawing,
+      Topic.floor,
+      Topic.project,
+      Topic.workers,
+      Topic.issues,
+      Topic.pulls,
+      Topic.queue,
+      Topic.decor,
+      Topic.services,
+      Topic.dog,
+      Topic.jukebox,
+      Topic.whiteboard,
+      Topic.drawing,
     ]) {
       emit(t);
     }
@@ -370,7 +432,17 @@ class Store {
         _clockSync = null; // compared again, in case it's another office (or the same one, restarted)
         sky = m.sky;
         _enter(m.view);
-        for (final t in [Topic.peers, Topic.chat, Topic.upgrade, Topic.usage, Topic.limits, Topic.me, Topic.notify, Topic.floors, Topic.sky]) {
+        for (final t in [
+          Topic.peers,
+          Topic.chat,
+          Topic.upgrade,
+          Topic.usage,
+          Topic.limits,
+          Topic.me,
+          Topic.notify,
+          Topic.floors,
+          Topic.sky,
+        ]) {
           emit(t);
         }
         for (final t in [Topic.projectsDir, Topic.theme, Topic.prompts, Topic.leaveOnMerge, Topic.machine]) {

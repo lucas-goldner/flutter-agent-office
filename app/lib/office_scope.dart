@@ -5,8 +5,11 @@
 import 'package:flutter/widgets.dart';
 
 import 'net/office_socket.dart';
+
 import 'package:office_shared/protocol.dart';
+
 import 'state/store.dart';
+import 'ui/settings_rows.dart' show SettingsPane;
 
 /// Office-level actions that windows call back into. Implemented by the office controller; each
 /// one is the old main.ts function of the same name.
@@ -32,7 +35,9 @@ abstract class OfficeActions {
   void sendToWorker(String title, {String? context, String? initial});
   void showSearch();
   void showQueue();
-  void showSettings();
+
+  /// ⚙️ Settings, on [first]'s category or the one it was last on.
+  void showSettings([SettingsPane? first]);
   void showElevator();
   void editProfile();
   void ride(String floorId);

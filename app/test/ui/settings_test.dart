@@ -7,6 +7,7 @@ import 'package:agent_office/ui/prompts.dart';
 import 'package:agent_office/ui/settings.dart';
 import 'package:agent_office/ui/worker_limit.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:office_shared/prompts.dart';
 import 'package:office_shared/protocol.dart';
@@ -92,19 +93,37 @@ void main() {
     return office;
   }
 
+  /// Scrolls the pane to [f] and taps it.
+  Future<void> tap(WidgetTester tester, Finder f) async {
+    await tester.ensureVisible(f);
+    await tester.pump();
+    await tester.tap(f);
+  }
+
+  Future<void> pane(WidgetTester tester, SettingsPane p) async {
+    await tester.tap(find.byKey(ValueKey('settings-tab-${p.name}')));
+    await tester.pump();
+  }
+
   testWidgets('an admin sets the building’s settings', (tester) async {
     final changes = <Settings>[];
     final office = await openIt(tester, changes: changes);
-    await tester.tap(find.text('✋ Push to talk'));
+    await pane(tester, SettingsPane.sound);
+    await tap(tester, find.text('✋ Push to talk'));
     await tester.pump();
     expect(changes.last.pushToTalk, isTrue);
 
-    await tester.tap(find.text('🎄 Christmas'));
-    await tester.tap(find.text('🏠 Go home by themselves'));
-    await tester.enterText(find.byKey(const ValueKey('limit-input')), '5');
-    await tester.tap(find.text('Set limit'));
+    await pane(tester, SettingsPane.building);
+    await tap(tester, find.text('🎄 Christmas'));
+    await tester.ensureVisible(find.byKey(const ValueKey('dir-input')));
     await tester.enterText(find.byKey(const ValueKey('dir-input')), '~/code');
     await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
+    await pane(tester, SettingsPane.workers);
+    await tap(tester, find.text('🏠 Go home by themselves'));
+    await tester.ensureVisible(find.byKey(const ValueKey('limit-input')));
+    await tester.enterText(find.byKey(const ValueKey('limit-input')), '5');
+    await tap(tester, find.text('Set limit'));
     await tester.pump();
     final sent = office.net.sent;
     expect(sent.whereType<ThemeSetCmd>().single.pick, ThemePick.christmas);
@@ -113,11 +132,11 @@ void main() {
     expect(sent.whereType<FloorProjectsDirCmd>().single.dir, '~/code');
 
     // The default worker: Claude Code on Opus.
-    await tester.tap(find.text('Default (--agent-args)'));
+    await tap(tester, find.text('Default (--agent-args)'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Opus'));
+    await tap(tester, find.text('Opus'));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('agent-save')));
+    await tap(tester, find.byKey(const ValueKey('agent-save')));
     await tester.pump();
     final agent = sent.whereType<PromptsAgentCmd>().single.choice!;
     expect((agent.provider, agent.model), (AgentProvider.claude, 'opus'));
@@ -125,6 +144,7 @@ void main() {
 
   testWidgets('everyone else reads them', (tester) async {
     await openIt(tester, admin: false);
+    await pane(tester, SettingsPane.workers);
     expect(find.byKey(const ValueKey('limit-input')), findsNothing);
     expect(find.text('Claude Code'), findsOneWidget);
     expect(find.text('📝 Read the prompts…'), findsOneWidget);
@@ -132,16 +152,17 @@ void main() {
 
   testWidgets('the prompt editor: rewrite one, put in a placeholder, save', (tester) async {
     final office = await openIt(tester);
-    await tester.tap(find.byKey(const ValueKey('open-prompts')));
+    await pane(tester, SettingsPane.workers);
+    await tap(tester, find.byKey(const ValueKey('open-prompts')));
     await tester.pump();
     await tester.pump();
     expect(find.text('🤖 Hand to a worker'), findsWidgets);
     await tester.enterText(find.byKey(const ValueKey('prompt-text')), 'Fix #');
     await tester.pump();
     expect(find.text('● Not saved yet'), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('var-number')));
+    await tap(tester, find.byKey(const ValueKey('var-number')));
     await tester.pump();
-    await tester.tap(find.text('Save').last);
+    await tap(tester, find.text('Save').last);
     await tester.pump();
     final set = office.net.sent.whereType<PromptsSetCmd>().single;
     expect((set.id, set.text), ('issue.work', 'Fix #{{number}}'));
@@ -159,5 +180,50 @@ void main() {
     await tester.pump();
     expect(find.text('✎ Rewritten by Ada just now'), findsOneWidget);
     expect(officePrompt(office.store, 'issue.work', {'number': 7}), 'Fix #7');
+  });
+
+  testWidgets('categories down the side: arrow keys, who each card is for, back where it was', (tester) async {
+    lastSettingsPane = SettingsPane.you;
+    final changes = <Settings>[];
+    await openIt(tester, changes: changes);
+    expect(find.text('🧍 You'), findsOneWidget);
+    expect(find.text('Camera view'), findsOneWidget);
+    expect(find.text('Just you'), findsOneWidget);
+    await pane(tester, SettingsPane.you);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    expect(find.text('🔊 Sound & voice'), findsOneWidget);
+    await tester.tap(find.text('🔁 Keep reminding me'));
+    await tester.tap(find.text('Off').first);
+    await tester.pump();
+    expect(changes.map((s) => s.needsYouSound).toList(), contains(NeedsYouSound.remind));
+    expect(changes.last.pageTurns, isFalse);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pump();
+    expect(find.text('🤖 Workers'), findsWidgets, reason: 'up from the top goes round to the bottom');
+    expect(lastSettingsPane, SettingsPane.workers);
+    expect(find.text('Everyone'), findsWidgets);
+  });
+
+  test('a card of your own goes in among the office’s', () {
+    final cards = SettingsCards()
+      ..add(SettingsPane.building, id: 'theme', order: 20, (_) => const SizedBox())
+      ..add(SettingsPane.building, id: 'map', order: 5, (_) => const SizedBox(), topics: const [Topic.floor])
+      ..add(SettingsPane.you, id: 'x', (_) => null);
+    expect(cards.of(SettingsPane.building).map((c) => c.id), ['map', 'theme']);
+    cards.add(SettingsPane.building, id: 'theme', order: 1, (_) => const SizedBox());
+    expect(cards.of(SettingsPane.building).map((c) => c.id), ['theme', 'map'], reason: 'the same id replaces');
+    expect(cards.topics, {Topic.floor});
+    expect(stepPane(SettingsPane.you, -1), SettingsPane.workers);
+    expect(stepPane(SettingsPane.workers, 1), SettingsPane.you);
+  });
+
+  test('the new settings are remembered', () {
+    final s = Settings.fromJson({'pageTurns': false, 'needsYouSound': 'remind'});
+    expect((s.pageTurns, s.needsYouSound), (false, NeedsYouSound.remind));
+    final back = Settings.fromJson(s.toJson());
+    expect((back.pageTurns, back.needsYouSound), (false, NeedsYouSound.remind));
+    expect(Settings.fromJson({'needsYouSound': 'loud'}).needsYouSound, NeedsYouSound.once);
   });
 }
