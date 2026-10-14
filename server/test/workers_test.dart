@@ -41,7 +41,7 @@ class Fixture {
     final f = Fixture._(Directory.systemTemp.createTempSync('agent-office-workers-').path);
     Directory(f.data).createSync(recursive: true);
     Directory(f.bin).createSync(recursive: true);
-    for (final name in ['claude', 'opencode', 'custom-agent', 'codex']) {
+    for (final name in ['claude', 'opencode', 'custom-agent', 'codex', 'grok', 'muse', 'cursor-agent']) {
       final file = p.join(f.bin, name);
       File(file).writeAsStringSync(_fakeAgent);
       Process.runSync('chmod', ['700', file]);
@@ -106,6 +106,10 @@ envjson() {
   [ -n "${AGENT_OFFICE_HOOK_URL+x}" ] && out+=",\"hookUrl\":\"$(esc "$AGENT_OFFICE_HOOK_URL")\""
   [ -n "${OPENCODE_CONFIG_CONTENT+x}" ] && out+=",\"opencodeConfig\":\"$(esc "$OPENCODE_CONFIG_CONTENT")\""
   [ -n "${PATH+x}" ] && out+=",\"path\":\"$(esc "$PATH")\""
+  [ -n "${GROK_HOME+x}" ] && out+=",\"grokHome\":\"$(esc "$GROK_HOME")\""
+  [ -n "${XDG_CONFIG_HOME+x}" ] && out+=",\"xdgConfig\":\"$(esc "$XDG_CONFIG_HOME")\""
+  [ -n "${XDG_DATA_HOME+x}" ] && out+=",\"xdgData\":\"$(esc "$XDG_DATA_HOME")\""
+  [ -n "${XDG_STATE_HOME+x}" ] && out+=",\"xdgState\":\"$(esc "$XDG_STATE_HOME")\""
   printf '{%s}' "${out#,}"
 }
 record() {
@@ -1307,6 +1311,284 @@ void main() {
     expect(after.get(gone.id)?.lost, isNull);
     expect(toasts, isEmpty);
   });
+
+  // --- #187 #271: Grok, Muse and Cursor workers --------------------------------------------------
+
+  test('Grok workers isolate GROK_HOME, follow authenticated hooks, and resume their session', () async {
+    final f = Fixture();
+    addTearDown(f.close);
+    final env = isolatedEnv(f, {'FAKE_AGENT_LOG': f.log});
+    final book = ledger(f.data);
+    final workers = manager(f, f.claude, [], env, args: const ['--claude-only'], book: book);
+    var closed = false;
+    addTearDown(() => closed ? null : workers.shutdown());
+    final worker = spawned(
+      workers.spawn(
+        'desk-1',
+        'test',
+        '- fix the login',
+        false,
+        WorkerKind.agent,
+        AgentProvider.grok,
+        'grok-4.6',
+        AgentEffort.high,
+      ),
+    );
+    final calls = await waitFor(f.read, (x) => x.any((r) => r.kind == 'grok'));
+    final first = calls.firstWhere((r) => r.kind == 'grok');
+    final token = first.hookToken!;
+    WorkerInfo now() => workers.get(worker.id)!;
+    expect(worker.status, WorkerStatus.starting);
+    expect(worker.model, 'grok-4.6');
+    expect(worker.effort, AgentEffort.high);
+    expect(
+      first.args,
+      containsAll(['--no-alt-screen', '--trust', '--session-id', '--model', 'grok-4.6', '--effort', 'high']),
+    );
+    expect(first.args.sublist(first.args.length - 2), ['--', '- fix the login']);
+    expect(first.args, isNot(contains('--claude-only')));
+    expect(first.env['grokHome'], p.join(f.data, 'grok-home'));
+    expect(calls.any((r) => r.kind == 'claude' && !r.args.contains('--output-format')), isFalse);
+    final sessionId = worker.sessionId!;
+    expect(sessionId, matches(RegExp(r'^[0-9a-f-]{36}$')));
+    bool hook(String event, [Map<String, Object> extra = const {}]) =>
+        workers.handleProviderHook(AgentProvider.grok, worker.id, token, event, {'sessionId': sessionId, ...extra});
+    expect(
+      workers.handleProviderHook(AgentProvider.grok, worker.id, 'wrong', 'SessionStart', {'sessionId': sessionId}),
+      isFalse,
+    );
+    expect(hook('SessionStart', {'source': 'startup'}), isTrue);
+    expect(now().status, WorkerStatus.idle);
+    expect(hook('UserPromptSubmit', {'prompt': 'Implement the actual task'}), isTrue);
+    expect(now().status, WorkerStatus.working);
+    expect(hook('PreToolUse', {'toolName': 'run_terminal_command'}), isTrue);
+    expect(hook('Notification', {'notificationType': 'permission_prompt'}), isTrue);
+    expect(now().status, WorkerStatus.needsInput);
+    expect(hook('Stop', {'subagentType': 'explore'}), isFalse);
+    expect(now().status, WorkerStatus.needsInput);
+    expect(hook('Stop'), isTrue);
+    expect(now().status, WorkerStatus.done);
+    expect(workers.handleHook(worker.id, token, 'Stop', {'session_id': 'claude'}), isFalse);
+    expect(workers.handleCodexHook(worker.id, token, 'Stop', {'session_id': sessionId}), isFalse);
+    expect(now().usage, isNull);
+    await workers.shutdown();
+    closed = true;
+
+    final restored = manager(f, f.claude, [], env, args: const ['--claude-only']);
+    addTearDown(restored.shutdown);
+    await restored.start();
+    final nextCalls = await waitFor(f.read, (x) => x.where((r) => r.kind == 'grok' && r.stdin == null).length >= 2);
+    final next = nextCalls.where((r) => r.kind == 'grok' && r.stdin == null).last;
+    expect(next.args, containsAll(['--resume', sessionId]));
+    expect(next.args, isNot(contains('--session-id')));
+    expect(next.args, isNot(contains('--model')));
+    expect(next.hookToken, isNot(token));
+    expect(restored.get(worker.id)?.provider, AgentProvider.grok);
+    expect(restored.get(worker.id)?.model, 'grok-4.6');
+    expect(restored.get(worker.id)?.effort, AgentEffort.high);
+    expect(
+      restored.handleProviderHook(AgentProvider.grok, worker.id, token, 'Stop', {'sessionId': sessionId}),
+      isFalse,
+    );
+    expect(
+      restored.handleProviderHook(AgentProvider.grok, worker.id, next.hookToken!, 'SessionStart', {
+        'sessionId': sessionId,
+        'source': 'resume',
+      }),
+      isTrue,
+    );
+    expect(restored.get(worker.id)?.status, WorkerStatus.idle);
+  });
+
+  test('Muse workers isolate XDG, follow authenticated hooks, resume by id, and paste a follow-up prompt', () async {
+    final f = Fixture();
+    addTearDown(f.close);
+    final env = isolatedEnv(f, {'FAKE_AGENT_LOG': f.log});
+    final workers = manager(f, f.claude, [], env, args: const ['--claude-only']);
+    var closed = false;
+    addTearDown(() => closed ? null : workers.shutdown());
+    final worker = spawned(
+      workers.spawn(
+        'desk-1',
+        'test',
+        '- fix the login',
+        false,
+        WorkerKind.agent,
+        AgentProvider.muse,
+        'muse-spark-1.3-contributor',
+        AgentEffort.high,
+      ),
+    );
+    final first = (await waitFor(f.read, (x) => x.any((r) => r.kind == 'muse'))).firstWhere((r) => r.kind == 'muse');
+    final token = first.hookToken!;
+    WorkerInfo now() => workers.get(worker.id)!;
+    expect(worker.status, WorkerStatus.starting);
+    expect(worker.sessionId, isNull);
+    expect(
+      first.args,
+      containsAll(['--trust-workspace', '--model', 'muse-spark-1.3-contributor', '--reasoning-effort', 'high']),
+    );
+    expect(first.args.sublist(first.args.length - 2), ['--', '- fix the login']);
+    expect(first.args, isNot(contains('resume')));
+    expect(first.args, isNot(contains('--claude-only')));
+    expect(first.env['xdgConfig'], p.join(f.data, 'muse-home', 'config'));
+    expect(first.env['xdgData'], p.join(f.data, 'muse-home', 'share'));
+    expect(first.env['xdgState'], p.join(f.data, 'muse-home', 'state'));
+    const sessionId = 'muse-root';
+    bool hook(String event, [Map<String, Object> extra = const {}]) =>
+        workers.handleProviderHook(AgentProvider.muse, worker.id, token, event, {'session_id': sessionId, ...extra});
+    expect(hook('SessionStart', {'source': 'startup'}), isTrue);
+    expect(now().status, WorkerStatus.idle);
+    expect(now().sessionId, sessionId);
+    expect(hook('UserPromptSubmit', {'prompt': 'Implement the actual task'}), isTrue);
+    expect(now().status, WorkerStatus.working);
+    expect(hook('PreToolUse', {'tool_name': 'run_terminal_command'}), isTrue);
+    expect(hook('PermissionRequest', {'tool_name': 'shell'}), isTrue);
+    expect(now().status, WorkerStatus.needsInput);
+    expect(hook('PostToolUseFailure', {'tool_name': 'shell'}), isTrue);
+    expect(now().status, WorkerStatus.working);
+    expect(hook('Stop', {'subagent_type': 'explore'}), isFalse);
+    expect(hook('Stop'), isTrue);
+    expect(now().status, WorkerStatus.done);
+    expect(workers.handleProviderHook(AgentProvider.grok, worker.id, token, 'Stop', {'sessionId': sessionId}), isFalse);
+    await workers.shutdown();
+    closed = true;
+
+    final restored = manager(f, f.claude, [], {...env, 'FAKE_AGENT_EXIT_MS': '1500'}, args: const ['--claude-only']);
+    addTearDown(restored.shutdown);
+    await restored.start();
+    final next = (await waitFor(
+      f.read,
+      (x) => x.where((r) => r.kind == 'muse' && r.stdin == null).length >= 2,
+    )).where((r) => r.kind == 'muse' && r.stdin == null).last;
+    expect(next.args, containsAll(['--trust-workspace', 'resume', sessionId]));
+    expect(next.args, isNot(contains('--model')));
+    expect(next.args, isNot(contains('- fix the login')));
+    expect(next.hookToken, isNot(token));
+    expect(
+      restored.handleProviderHook(AgentProvider.muse, worker.id, next.hookToken!, 'SessionStart', {
+        'session_id': sessionId,
+        'source': 'resume',
+      }),
+      isTrue,
+    );
+    expect(restored.get(worker.id)?.status, WorkerStatus.idle);
+    await waitFor(() => restored.get(worker.id)?.status, (s) => s == WorkerStatus.exited);
+    expect(restored.resume(worker.id, 'follow-up from the queue'), isNull);
+    final launched = (await waitFor(
+      f.read,
+      (x) => x.where((r) => r.kind == 'muse' && r.stdin == null).length >= 3,
+    )).where((r) => r.kind == 'muse' && r.stdin == null).last;
+    expect(launched.args, containsAll(['resume', sessionId]));
+    expect(launched.args, isNot(contains('follow-up from the queue')));
+    expect(
+      restored.handleProviderHook(AgentProvider.muse, worker.id, launched.hookToken!, 'SessionStart', {
+        'session_id': sessionId,
+        'source': 'resume',
+      }),
+      isTrue,
+    );
+    await waitFor(
+      f.read,
+      (x) => x.any((r) => r.kind == 'muse' && (r.stdin?.contains('follow-up from the queue') ?? false)),
+    );
+  });
+
+  test(
+    'Cursor workers keep their hooks in their folder, follow them, and resume their chat with a follow-up prompt',
+    () async {
+      final f = Fixture();
+      addTearDown(f.close);
+      final env = isolatedEnv(f, {'FAKE_AGENT_LOG': f.log});
+      final hooksFile = p.join(f.root, '.cursor', 'hooks.json');
+      Map? entries() =>
+          File(hooksFile).existsSync() ? (jsonDecode(File(hooksFile).readAsStringSync()) as Map)['hooks'] as Map : null;
+      final workers = manager(f, f.claude, [], env, args: const ['--claude-only']);
+      var closed = false;
+      addTearDown(() => closed ? null : workers.shutdown());
+      expect(
+        workers.spawn('desk-2', 'test', 'bad', false, WorkerKind.agent, AgentProvider.cursor, '--force').error,
+        contains('Invalid Cursor model'),
+      );
+      expect(
+        workers
+            .spawn('desk-2', 'test', 'bad', false, WorkerKind.agent, AgentProvider.cursor, 'gpt-5', AgentEffort.high)
+            .error,
+        matches(RegExp('effort', caseSensitive: false)),
+      );
+      final worker = spawned(
+        workers.spawn('desk-1', 'test', '- fix the login', false, WorkerKind.agent, AgentProvider.cursor, 'gpt-5'),
+      );
+      // The provider is "cursor"; its executable is cursor-agent.
+      final first = (await waitFor(
+        f.read,
+        (x) => x.any((r) => r.kind == 'cursor-agent'),
+      )).firstWhere((r) => r.kind == 'cursor-agent');
+      final token = first.hookToken!;
+      WorkerInfo now() => workers.get(worker.id)!;
+      // A resumed chat fires no sessionStart, so it never waits for one: it's idle as soon as it runs.
+      expect(now().status, WorkerStatus.idle);
+      expect(first.args, ['--trust', '--model', 'gpt-5', '--', '- fix the login']);
+      // Its hooks are in the folder it runs in, one entry an event, each naming this worker.
+      expect(entries()!.keys, [
+        'sessionStart',
+        'beforeSubmitPrompt',
+        'preToolUse',
+        'postToolUse',
+        'postToolUseFailure',
+        'stop',
+      ]);
+      expect(((entries()!['stop'] as List)[0] as Map)['command'] as String, endsWith(" 'stop' '${worker.id}'"));
+      const sessionId = '0b9a7d0e-5c1f-4a57-9d55-3a1d2f6f0c11';
+      bool hook(String event, [Map<String, Object> extra = const {}]) => workers.handleProviderHook(
+        AgentProvider.cursor,
+        worker.id,
+        token,
+        event,
+        {'conversation_id': sessionId, ...extra},
+      );
+      expect(hook('sessionStart', {'composer_mode': 'agent'}), isTrue);
+      expect(now().sessionId, sessionId);
+      expect(hook('beforeSubmitPrompt', {'prompt': 'Implement the actual task'}), isTrue);
+      expect(now().status, WorkerStatus.working);
+      expect(now().activity, 'Implement the actual task');
+      expect(hook('preToolUse', {'tool_name': 'Read', 'tool_use_id': 'tool-1'}), isTrue);
+      expect(now().activity, 'Read');
+      expect(now().action, WorkerAction.read);
+      expect(hook('stop', {'subagent_id': 'child-1'}), isFalse);
+      expect(hook('afterAgentResponse', {'text': 'private'}), isFalse);
+      expect(hook('stop', {'status': 'completed'}), isTrue);
+      expect(now().status, WorkerStatus.done);
+      // A chat started over inside the terminal fires no sessionStart: its first prompt takes the desk to it.
+      expect(
+        workers.handleProviderHook(AgentProvider.cursor, worker.id, token, 'beforeSubmitPrompt', {
+          'conversation_id': 'second-chat',
+          'prompt': 'Something else',
+        }),
+        isTrue,
+      );
+      expect(now().sessionId, 'second-chat');
+      expect(now().status, WorkerStatus.working);
+      // The office stops, and the worker with it: nothing of its hooks is left in the project.
+      await workers.shutdown();
+      closed = true;
+      expect(File(hooksFile).existsSync(), isFalse);
+
+      final restored = manager(f, f.claude, [], {...env, 'FAKE_AGENT_EXIT_MS': '1500'}, args: const ['--claude-only']);
+      addTearDown(restored.shutdown);
+      await restored.start();
+      final next = (await waitFor(
+        f.read,
+        (x) => x.where((r) => r.kind == 'cursor-agent' && r.stdin == null).length >= 2,
+      )).where((r) => r.kind == 'cursor-agent' && r.stdin == null).last;
+      expect(next.args, ['--trust', '--resume=second-chat']);
+      expect(next.hookToken, isNot(token));
+      expect((entries()!['stop'] as List).length, 1);
+      // Its process ends: its entries go, and the file with them.
+      await waitFor(() => restored.get(worker.id)?.status, (s) => s == WorkerStatus.exited);
+      expect(File(hooksFile).existsSync(), isFalse);
+    },
+  );
 }
 
 bool _claudeLaunch(Invocation r) => r.kind == 'claude' && r.args.contains('--settings');
