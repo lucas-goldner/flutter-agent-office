@@ -54,7 +54,12 @@ DeskView _buildSeat(DeskDef def, int index) {
   final group = Node(name: def.id);
   group.position = vm.Vector3(def.x, 0, def.z);
   group.rotation = yaw(def.rotY);
-  final laptopAnchor = place(Node(name: 'laptop-anchor'), y: MeetingTable.height, scale: 1.15);
+  final laptopAnchor = place(
+    Node(name: 'laptop-anchor'),
+    y: MeetingTable.height,
+    z: MeetingLaptop.z,
+    scale: MeetingLaptop.scale,
+  );
   group.add(laptopAnchor);
   final seatAnchor = place(Node(name: 'seat-anchor'), y: 0.4, z: 0.85, rot: yaw(math.pi), scale: 0.82);
   group.add(seatAnchor);
@@ -171,11 +176,11 @@ DeskView _buildSeat(DeskDef def, int index) {
         0,
       ),
     );
-    table.add(mesh(roundedBox(0.9, 0.05, 0.6, 0.05), tc(Palette.deskLeg), sx * (top.width / 2 - 0.7), 0.025, 0));
+    table.add(mesh(roundedBox(0.9, 0.05, 0.8, 0.05), tc(Palette.deskLeg), sx * (top.width / 2 - 0.7), 0.025, 0));
   }
   final tableNode = place(mergeByMaterial(table), x: MeetingTable.x, z: MeetingTable.z);
   group.add(tableNode);
-  final talk = Interactable(kind: InteractKind.meeting, x: MeetingTable.x, z: MeetingTable.z, radius: 2.6);
+  final talk = Interactable(kind: InteractKind.meeting, x: MeetingTable.x, z: MeetingTable.z, radius: 2.9);
   office.interactables.add(talk);
   tagInteract(tableNode, talk);
   for (var i = 0; i < meetingSeats.length; i++) {
