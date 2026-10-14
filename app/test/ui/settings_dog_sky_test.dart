@@ -2,7 +2,6 @@
 
 import 'package:agent_office/notify.dart';
 import 'package:agent_office/ui/settings.dart';
-import 'package:agent_office/ui/settings_rows.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:office_shared/protocol.dart';

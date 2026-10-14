@@ -26,6 +26,7 @@ import 'drinks.dart' show drinkGlass;
 import 'character.dart'
     show cigarette, coffeeMug, dragCurve, emoteEnvelope, kReachTime, kSmokeCycle, reachCurve, setEmissive;
 import 'costumes.dart';
+
 import 'package:office_shared/protocol.dart' show CarriedIssue;
 
 import 'card.dart';
@@ -65,7 +66,7 @@ class _Arm {
   /// The white cuff at the wrist.
   final Node cuff;
 
-  /// The cartoon hand: palm, thumb, and on the right hand the pointing finger.
+  /// The hand: a round one like your character's, and on the right a pointing finger, out only to point.
   final List<Node> mitten;
   final Node? finger;
 
@@ -124,6 +125,8 @@ class Hands {
     _emote = e;
     _emoteT = 0;
     _thumbUp.visible = e == Emote.thumbs;
+    _right.finger?.visible =
+        e == Emote.point && _costume != HolidayTheme.halloween && _costume != HolidayTheme.christmas;
   }
 
   Emote? get emoting => _emote;
@@ -143,11 +146,11 @@ class Hands {
       arm.dressed = null;
       arm.fire = const [];
       for (final m in arm.mitten) {
-        m.visible = !warlock && !(xmas && m == arm.finger);
+        m.visible = !warlock;
       }
-      arm.cuff.visible = !warlock;
-      // A mitten's fluffy cuff.
-      arm.cuff.scale = xmas ? vm.Vector3(1.3, 1.3, 1.9) : vm.Vector3.all(1);
+      // A mitten's fluffy cuff, only at Christmas.
+      arm.cuff.visible = xmas;
+      arm.cuff.scale = vm.Vector3(1.3, 1.3, 1.9);
       if (!warlock) continue;
       final g = Node(name: 'warlock');
       g.add(warlockHand(arm.side, _skin));
@@ -243,7 +246,14 @@ class Hands {
     final ahead = pointIn(null, root, vm.Vector3(0, 0, -1));
     final up = pointIn(null, root, vm.Vector3(0, 1, 0)) - eye;
     return RenderView(
-      camera: PerspectiveCamera(fovRadiansY: fovRadiansY, position: eye, target: ahead, up: up, fovNear: 0.01, fovFar: 5),
+      camera: PerspectiveCamera(
+        fovRadiansY: fovRadiansY,
+        position: eye,
+        target: ahead,
+        up: up,
+        fovNear: 0.01,
+        fovFar: 5,
+      ),
       layerMask: layer,
       order: order,
     );
@@ -338,7 +348,8 @@ class Hands {
   _Arm _arm(int side) {
     final group = Node(name: side == 1 ? 'right-hand' : 'left-hand');
     // Sleeve runs from the wrist back past the camera, so its far end is always off screen.
-    group.add(mesh(capsuleData(0.058, 0.42, 6, 14).rotateX(math.pi / 2).build(), _sleeve, 0, 0, 0.34, false));
+    group.add(mesh(capsuleData(0.058, 0.42, 6, 14).rotateX(math.pi / 2).build(), _sleeve, 0, 0, 0.29, false));
+    // A mitten's fluffy cuff, only at Christmas (see setCostume).
     final cuff = mesh(
       cylinderData(0.068, 0.068, 0.045, 18).rotateX(math.pi / 2).build(),
       toon(hex('#fffaf3')),
@@ -346,31 +357,25 @@ class Hands {
       0,
       0.075,
       false,
-    );
+    )..visible = false;
     group.add(cuff);
-    // Cartoon mitten: a chunky palm, a thumb on the inside, and a pointing finger on the right hand.
-    final palm = mesh(sphere(0.062, 18, 14), _skin, 0, 0, 0, false)..scale = vm.Vector3(1, 0.78, 1.18);
+    // A round hand at the end of the sleeve, as your character has (see character.dart), a little
+    // bigger round than the sleeve; the right one points a finger only to point (see emote, #223).
+    final palm = mesh(sphere(0.056, 20, 16), _skin, 0, 0, -0.012, false)..scale = vm.Vector3(1, 0.94, 1.04);
     group.add(palm);
-    final thumb = mesh(
-      capsuleData(0.02, 0.03, 4, 10).rotateX(math.pi / 2).build(),
-      _skin,
-      -side * 0.05,
-      0.014,
-      -0.02,
-      false,
-    )..rotation = euler(0, side * 0.55);
-    group.add(thumb);
     final finger = side == 1
-        ? mesh(capsuleData(0.019, 0.05, 4, 10).rotateX(math.pi / 2).build(), _skin, -0.016, 0.022, -0.085, false)
+        ? (mesh(capsuleData(0.017, 0.045, 4, 10).rotateX(math.pi / 2).build(), _skin, -0.01, 0.01, -0.08, false)
+            ..visible = false)
         : null;
     if (finger != null) group.add(finger);
-    final base = vm.Vector3(side * 0.25, -0.185, -0.44);
-    final baseRot = vm.Vector3(0.2, side * 0.22, side * -0.25);
+    // Out from the bottom corners of the view, the sleeves angled in toward the hands.
+    final base = vm.Vector3(side * 0.18, -0.17, -0.5);
+    final baseRot = vm.Vector3(0.45, side * 0.55, side * -0.2);
     group
       ..position = base
       ..rotation = euler(baseRot.x, baseRot.y, baseRot.z);
     root.add(group);
-    return _Arm(group, base, baseRot, side, cuff, [palm, thumb, ?finger], finger);
+    return _Arm(group, base, baseRot, side, cuff, [palm], finger);
   }
 
   void update(double dt, double t, HandsInput s) {
@@ -418,6 +423,7 @@ class Hands {
       final r = arm.baseRot.clone();
       r.x += _air * 0.2;
       // Holding the card: both hands in on its bottom corners, palms turned toward it, so the title shows.
+      _classic(arm, p, r, carry);
       p.x -= side * 0.08 * carry;
       p.z -= 0.03 * carry;
       r.z += side * 0.35 * carry;
@@ -449,6 +455,7 @@ class Hands {
     if (_smokeT >= 0) {
       _smokeT += dt;
       final d = s.walking || s.airborne ? 0.0 : dragCurve(_smokeT % kSmokeCycle);
+      _classic(_right, rp, rr, d);
       rp.x -= 0.2 * d;
       rp.y += 0.02 * d;
       rp.z += 0.3 * d;
@@ -466,6 +473,21 @@ class Hands {
       ..rotation = euler(lr.x, lr.y, lr.z);
   }
 
+  /// Where the hands rested before #223, out wider and higher: what holding, a drag and the emotes were
+  /// shaped from. Eases [arm]'s pose this frame ([p], [r]) toward it by [w].
+  void _classic(_Arm arm, vm.Vector3 p, vm.Vector3 r, double w) {
+    if (w <= 0) return;
+    final side = arm.side;
+    p
+      ..x += (side * 0.25 - arm.base.x) * w
+      ..y += (-0.185 - arm.base.y) * w
+      ..z += (-0.44 - arm.base.z) * w;
+    r
+      ..x += (0.2 - arm.baseRot.x) * w
+      ..y += (side * 0.22 - arm.baseRot.y) * w
+      ..z += (side * -0.25 - arm.baseRot.z) * w;
+  }
+
   /// Moves the hands (already posed for this frame: position and rotation of each) through the emote.
   void _emoteStep(double dt, vm.Vector3 rp, vm.Vector3 rr, vm.Vector3 lp, vm.Vector3 lr) {
     final e = _emote!;
@@ -474,9 +496,12 @@ class Hands {
     if (u >= e.seconds) {
       _emote = null;
       _thumbUp.visible = false;
+      _right.finger?.visible = false;
       return;
     }
     final k = emoteEnvelope(u, e.seconds);
+    _classic(_right, rp, rr, k);
+    _classic(_left, lp, lr, k);
     switch (e) {
       case Emote.wave:
         // Up in front of your shoulder (in from the edge, clear of the sidebar), rocking side to side.

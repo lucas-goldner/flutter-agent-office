@@ -177,10 +177,16 @@ void main() {
     expect((ding.left, ding.right), (1, 1));
 
     final before = e.started.length;
-    s.step();
-    s.step(StepKind.land);
+    // A heel and then the ball of the foot, on the office's planks: yours, both feet landing a jump (and
+    // your weight), and someone else's.
+    s.step(const Pos(0, 0, 0));
+    s.land(const Pos(0, 0, 0));
     s.stepAt(gongAt.x - 3, gongAt.z + 5);
-    expect(e.started.skip(before).where((n) => n.startsWith('step.')), hasLength(3));
+    await wait(150);
+    final feet = e.started.skip(before);
+    expect(feet.where((n) => n.startsWith('feet.wood.heel.')), hasLength(4));
+    expect(feet.where((n) => n.startsWith('feet.wood.toe.')), hasLength(4));
+    expect(feet.where((n) => n.startsWith('step.')), hasLength(1));
     expect(s.played, containsPair('step', 1));
     expect(s.played, containsPair('land', 1));
 
@@ -188,7 +194,8 @@ void main() {
     s.setVolume(1, true);
     await wait(400);
     s.update(SoundListener(x: gongAt.x - 3, y: 1.4, z: gongAt.z, fx: 0, fz: -1));
-    expect(e.voices.values.where((v) => v.volume > 0.001), isEmpty);
+    // (The footfalls are over by now: an engine would have let them go.)
+    expect(e.voices.values.where((v) => !e.sources[v.source]!.$1.startsWith('feet.') && v.volume > 0.001), isEmpty);
     s.dispose();
     expect(e.down, isTrue);
   });

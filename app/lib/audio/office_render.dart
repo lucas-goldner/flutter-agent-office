@@ -10,6 +10,7 @@
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'feet.dart';
 import 'samples.dart';
 import 'sound_model.dart';
 import 'synth.dart';
@@ -863,6 +864,14 @@ Map<String, Float32List> renderBank(int sr, Bank bank, [int seed = 0]) {
       }
       out['rustle'] = s.rustle;
       out['drop'] = s.drop;
+      // Footsteps on each kind of ground: a heel and a ball of the foot, a few of each (feet.dart).
+      for (final g in Ground.values) {
+        final f = footfalls(sr, g, r.rng);
+        for (var i = 0; i < f.heel.length; i++) {
+          out['feet.${g.name}.heel.$i'] = f.heel[i];
+          out['feet.${g.name}.toe.$i'] = f.toe[i];
+        }
+      }
     case Bank.room:
       out['room'] = r.roomTone();
       out['fridge'] = r.fridgeHum();

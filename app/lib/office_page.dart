@@ -10,6 +10,7 @@ import 'package:flutter_scene/scene.dart' hide Material;
 import 'interop/pointer_lock.dart';
 import 'office/controller.dart';
 import 'ui/loading.dart';
+import 'world/character.dart' show Person;
 import 'office_scope.dart';
 import 'ui/arcade.dart';
 import 'ui/compass.dart';
@@ -258,7 +259,10 @@ class _OfficePageState extends State<OfficePage> {
                             every: () => 1,
                             onTick: (elapsed, dt) => c.tick(dt, _view),
                             viewsBuilder: (_) => [
-                              RenderView(camera: c.camera, layerMask: kRenderLayerAll & ~Hands.layer),
+                              RenderView(
+                                camera: c.camera,
+                                layerMask: kRenderLayerAll & ~Hands.layer & ~Person.firstPersonHidden,
+                              ),
                               if (c.player.view == ViewMode.first &&
                                   c.devHands &&
                                   !c.arcade.zoomed &&

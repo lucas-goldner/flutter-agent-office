@@ -47,8 +47,6 @@ abstract interface class DogSounds {
   void yip(double x, double z);
 }
 
-enum StepKind { walk, land }
-
 /// Two notes up when a worker is done, a three-note nudge when it needs input.
 enum Ding {
   done,

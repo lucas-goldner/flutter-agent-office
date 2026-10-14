@@ -47,7 +47,7 @@ Future<Map<String, double>> runAudioChecks() async {
   out['steps x6'] = await renderRms(2, (ctx) {
     final s = office(ctx);
     for (var i = 0; i < 6; i++) {
-      s.step();
+      s.step(const Pos(0, 0, 0));
     }
   });
   out['thunder'] = await renderRms(7, (ctx) => office(ctx).thunder(0.2, 1));

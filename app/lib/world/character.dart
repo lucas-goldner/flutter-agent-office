@@ -29,6 +29,7 @@ import 'label_widgets.dart';
 import 'card.dart';
 import 'labels.dart';
 import 'worker_pr.dart';
+import 'person_outfit.dart';
 import 'person_throw.dart';
 import 'player.dart' show kHips;
 import 'toon.dart';
@@ -188,6 +189,23 @@ enum Puff { wisp, exhale }
 final math.Random _rng = math.Random();
 
 /// A chibi cartoon person — used for every human in the office. Forward is +z.
+/// How far behind the camera your body stands in first person, so looking down you see it, not its
+/// inside; how slim the torso gets (across, front to back), so it doesn't hide your legs; and how far
+/// forward of it your legs come, so you see your feet.
+const double _fpBack = 0.22;
+const (double, double) _fpSlim = (0.8, 0.6);
+const double _fpLegs = 0.08;
+
+/// [node] and everything under it on [layers], and picked by a click or not.
+void setPersonLayers(Node node, int layers, {required bool raycastable}) {
+  node
+    ..layers = layers
+    ..raycastable = raycastable;
+  for (final c in node.children) {
+    setPersonLayers(c, layers, raycastable: raycastable);
+  }
+}
+
 class Person {
   Person(this._name, String color, Look look, this._labels) : _look = look, _shirtHex = color {
     shirt = toonUnique(hex(color));
@@ -199,7 +217,8 @@ class Person {
 
     root.add(_body.node);
     // Torso
-    _body.add(mesh(capsule(0.26, 0.28, 6, 12), shirt, 0, 0.72, 0));
+    _torso = mesh(capsule(0.26, 0.28, 6, 12), shirt, 0, 0.72, 0);
+    _body.add(_torso);
     // Head
     _head.position = vm.Vector3(0, 1.32, 0);
     _head.add(mesh(sphere(0.34, 20, 16), skin));
@@ -275,6 +294,58 @@ class Person {
   final Node root = Node(name: 'person');
   final LabelHub _labels;
   final Pivot _body = Pivot();
+
+  /// The torso's own mesh, on the body.
+  late final Node _torso;
+
+  /// The render layer your own head, arms and whatever floats over you go on in first person: the view
+  /// leaves it out, so looking down you see your shirt, legs and feet (#223).
+  static const int firstPersonHidden = 1 << 6;
+
+  bool _firstPerson = false;
+
+  /// You in first person (#223): your own character with its head and arms off (your hands are drawn on
+  /// their own, see hands.dart) and whatever floats over it, stood a little back from where you look
+  /// ([look], in the office's space), its torso slimmer so it doesn't hide your legs and the legs a little
+  /// forward, so you see your feet. Call it every frame after [update], on or off.
+  void firstPerson(bool on, [vm.Vector3? look]) {
+    if (on && look != null) {
+      // The camera's heading, turned into the body's own frame.
+      final f = root.rotation.rotated(vm.Vector3(0, 0, 1));
+      final facing = math.atan2(f.x, f.z);
+      final c = math.cos(facing), s = math.sin(facing);
+      final h = math.sqrt(look.x * look.x + look.z * look.z);
+      if (h > 1e-6) {
+        final dx = look.x / h, dz = look.z / h;
+        final lx = dx * c - dz * s, lz = dx * s + dz * c;
+        final b = _body.node.position;
+        _body.node.position = vm.Vector3(b.x - lx * _fpBack, b.y, b.z - lz * _fpBack);
+      }
+    }
+    if (on) {
+      // Every frame: whatever's been put on you since (a hat, the mic, a card) goes out of view too.
+      setPersonLayers(root, kRenderLayerDefault, raycastable: false);
+      for (final n in [
+        _head.node,
+        _armL.node,
+        _armR.node,
+        for (final c in root.children)
+          if (c != _body.node) c,
+      ]) {
+        setPersonLayers(n, firstPersonHidden, raycastable: false);
+      }
+    }
+    if (on == _firstPerson) return;
+    _firstPerson = on;
+    if (!on) setPersonLayers(root, kRenderLayerDefault, raycastable: true);
+    _torso.scale = on ? vm.Vector3(_fpSlim.$1, 1, _fpSlim.$2) : vm.Vector3.all(1);
+    for (final leg in [_legL, _legR]) {
+      final p = leg.node.position;
+      leg.node.position = vm.Vector3(p.x, p.y, on ? _fpLegs : 0);
+    }
+    _torso.castsShadows = !on;
+  }
+
   final Pivot _head = Pivot();
   final Node _hair = Node(name: 'hair');
 
@@ -327,7 +398,7 @@ class Person {
 
   /// Dressed up for a holiday (see [setCostume]): a warlock's hat and undead skin, or a Santa hat.
   HolidayTheme? _costume;
-  Node? _hat;
+  HolidayOutfit? _outfit;
 
   /// Hips this high above the feet while sitting (on the seat), or null on their feet.
   double? _hips;
@@ -422,18 +493,19 @@ class Person {
 
   HolidayTheme? get costume => _costume;
 
-  /// Dresses up for a holiday: a crooked warlock's hat and undead skin for Halloween, a Santa hat for
-  /// Christmas. Null takes it off.
+  /// Dresses up for a holiday, head to toe (see person_outfit.dart, #228), with undead skin for
+  /// Halloween. Null takes it off.
   void setCostume(HolidayTheme? theme) {
     if (theme == _costume) return;
     _costume = theme;
-    _hat?.detach();
-    _hat = switch (theme) {
-      HolidayTheme.halloween => warlockHat(),
-      HolidayTheme.christmas => santaHat(),
-      null => null,
-    };
-    if (_hat != null) _head.add(_hat!);
+    (_outfit ??= HolidayOutfit(
+      head: _head.node,
+      torso: _torso,
+      armL: _armL.node,
+      armR: _armR.node,
+      legL: _legL.node,
+      legR: _legR.node,
+    )).set(theme);
     _dress();
   }
 

@@ -13,8 +13,10 @@ import 'package:flutter/scheduler.dart';
 
 import '../audio/audio_check.dart';
 import '../audio/sound.dart';
+
 import 'package:office_shared/layout.dart';
 import 'package:office_shared/protocol.dart' show GongWhy;
+
 import '../state/store.dart' show nowMs;
 import '../ui/theme.dart';
 
@@ -71,17 +73,23 @@ class _AudioPreviewState extends State<_AudioPreview> with SingleTickerProviderS
   late final List<(String, void Function())> _steps = [
     ('ding: done', () => _sound.ding(Ding.done)),
     ('ding: needs input', () => _sound.ding(Ding.needsInput)),
-    ('footsteps', () {
-      for (var i = 0; i < 4; i++) {
-        Timer(Duration(milliseconds: 380 * i), _sound.step);
-      }
-    }),
-    ('landing a jump', () => _sound.step(StepKind.land)),
-    ("someone else's steps", () {
-      for (var i = 0; i < 4; i++) {
-        Timer(Duration(milliseconds: 400 * i), () => _sound.stepAt(8 + i * 0.6, 2));
-      }
-    }),
+    (
+      'footsteps',
+      () {
+        for (var i = 0; i < 4; i++) {
+          Timer(Duration(milliseconds: 380 * i), () => _sound.step(const Pos(0, 0, 0)));
+        }
+      },
+    ),
+    ('landing a jump', () => _sound.land(const Pos(0, 0, 0))),
+    (
+      "someone else's steps",
+      () {
+        for (var i = 0; i < 4; i++) {
+          Timer(Duration(milliseconds: 400 * i), () => _sound.stepAt(8 + i * 0.6, 2));
+        }
+      },
+    ),
     ('a worker typing', () => _sound.setTyping('w1', desks.first.x, desks.first.z, true)),
     ('the coffee machine', _sound.coffee),
     ('the dog barks', () => _sound.bark(10, 6, 3)),
@@ -91,14 +99,20 @@ class _AudioPreviewState extends State<_AudioPreview> with SingleTickerProviderS
     ('the gong: queue', () => _sound.gong(GongWhy.queue)),
     ('rain', () => _sound.setWeather(0.8, 0)),
     ('thunder', () => _sound.thunder(0.3, 1)),
-    ('night: crickets', () {
-      _sound.removeTypist('w1');
-      _sound.setWeather(0, 1);
-    }),
-    ('the jukebox: rainy-window', () {
-      _sound.setWeather(0, 0);
-      _sound.setJukebox(JukeboxPlay(track: 'rainy-window', startedAt: 1, since: nowMs()));
-    }),
+    (
+      'night: crickets',
+      () {
+        _sound.removeTypist('w1');
+        _sound.setWeather(0, 1);
+      },
+    ),
+    (
+      'the jukebox: rainy-window',
+      () {
+        _sound.setWeather(0, 0);
+        _sound.setJukebox(JukeboxPlay(track: 'rainy-window', startedAt: 1, since: nowMs()));
+      },
+    ),
   ];
 
   void _playAll() {
@@ -110,7 +124,10 @@ class _AudioPreviewState extends State<_AudioPreview> with SingleTickerProviderS
       final (name, play) = _steps[i++];
       setState(() => _now = name);
       play();
-      _script = Timer(Duration(milliseconds: name.startsWith('the coffee') || name.startsWith('the gong: queue') ? 6000 : 2500), next);
+      _script = Timer(
+        Duration(milliseconds: name.startsWith('the coffee') || name.startsWith('the gong: queue') ? 6000 : 2500),
+        next,
+      );
     }
 
     next();
@@ -143,10 +160,15 @@ class _AudioPreviewState extends State<_AudioPreview> with SingleTickerProviderS
                 const SizedBox(height: 12),
                 Text('Audio: ${_sound.state} · now: ${_now.isEmpty ? '–' : _now}', style: heavy(14)),
                 const SizedBox(height: 6),
-                Text('Level ${_sound.level().toStringAsFixed(3)} · music ${_sound.musicLevel().toStringAsFixed(3)} · beat ${_sound.beat().toStringAsFixed(2)}',
-                    style: heavy(13, color: Swatch.muted)),
+                Text(
+                  'Level ${_sound.level().toStringAsFixed(3)} · music ${_sound.musicLevel().toStringAsFixed(3)} · beat ${_sound.beat().toStringAsFixed(2)}',
+                  style: heavy(13, color: Swatch.muted),
+                ),
                 const SizedBox(height: 6),
-                Text(played.isEmpty ? 'Nothing yet' : played, style: heavy(12, color: Swatch.muted, weight: FontWeight.w600)),
+                Text(
+                  played.isEmpty ? 'Nothing yet' : played,
+                  style: heavy(12, color: Swatch.muted, weight: FontWeight.w600),
+                ),
               ],
             ),
           ),

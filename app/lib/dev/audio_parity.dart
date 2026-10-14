@@ -173,7 +173,7 @@ Future<void> _run() async {
       'steps6',
       (s) {
         for (var i = 0; i < 6; i++) {
-          s.step();
+          s.step(const Pos(0, 0, 0), i > 2 ? 1 : 0);
         }
       },
     ),

@@ -143,6 +143,9 @@ class PlayerController {
   double _stuckFor = 0;
   bool _pathRun = false;
 
+  /// At a run: holding Shift, or on the long stretch of a walk along a path (your feet say so, #269).
+  bool running = false;
+
   /// A walk along a path ended: at its end, by a key of yours, or up against something.
   void Function(PathEnd why)? onPathEnd;
 
@@ -370,7 +373,8 @@ class PlayerController {
     }
     stepOffset *= math.exp(-dt * 16);
     final walking = moving && grounded;
-    walkPhase += dt * (walking ? ((_path != null ? _pathRun : k.run) ? 14 : 11) * speedBoost : 0);
+    running = moving && (_path != null ? _pathRun : k.run);
+    walkPhase += dt * (walking ? (running ? 14 : 11) * speedBoost : 0);
     final bob = walking ? math.sin(walkPhase).abs() * 0.035 : 0.0;
     _bob += (bob - _bob) * math.min(1, dt * 18);
     _jitterT += dt;

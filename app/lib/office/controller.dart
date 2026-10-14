@@ -94,6 +94,7 @@ import '../world/office/office.dart';
 import '../world/player.dart';
 import '../world/sky_model.dart';
 import '../ui/loading.dart';
+import '../audio/feet.dart' show landing, runSpeed, stepHeard;
 import '../world/lamplight.dart';
 import '../world/models.dart' show Models;
 import '../world/sky_view.dart';
@@ -175,6 +176,9 @@ class _Remote {
   Look look;
   String label = '';
   double stepT = 0;
+
+  /// How fast they're going (m/s), evened out: at a run, their feet say so.
+  double speed = 0;
   WorldLabel? bubble;
   double bubbleUntil = 0;
 }
@@ -400,6 +404,9 @@ class OfficeController implements OfficeActions {
   double _lastSentAt = -1e9;
   ({double x, double y, double z, double rotY, bool moving}) _lastSent = (x: 0, y: 0, z: 0, rotY: 0, moving: false);
   int _stride = 0;
+
+  /// Where you were last frame, and how far and how long you've walked since your last footstep.
+  ({double far, double time, double x, double z}) _walked = (far: 0, time: 0, x: 0, z: 0);
   double _fallV = 0;
   double _smokeBreakUntil = 0;
   double _lastHit = 0;
@@ -1377,11 +1384,11 @@ class OfficeController implements OfficeActions {
   void _climbSound(String kind, double speed) {
     switch (kind) {
       case 'grab' || 'rung':
-        sound.step();
+        sound.step(Pos(player.pos.x, player.pos.y, player.pos.z));
       case 'bonk':
         toast("🔝 ${store.currentFloor()?.name ?? 'This'} is the top floor — the hatch won't budge");
       case 'land':
-        sound.step(StepKind.land);
+        sound.land(Pos(player.pos.x, player.pos.y, player.pos.z), 0.6);
         _landed(speed);
     }
   }
@@ -3881,9 +3888,14 @@ class OfficeController implements OfficeActions {
     me.root.rotation = vm.Quaternion.axisAngle(vm.Vector3(0, 1, 0), player.facing);
     me.update(dt, t, player.moving && player.grounded, !player.grounded && !places.cars.active, player.speedBoost);
     final firstPerson = player.view == ViewMode.first;
-    // In first person you are the camera; in third, hide yourself when it's zoomed in right behind your head.
+    // In first person your body's there below you, its head and arms left out of the view (see
+    // Person.firstPerson, #223), unless your hands are busy elsewhere (a car's wheel). In third, hide
+    // yourself when it's zoomed in right behind your head.
+    final ownBody = firstPerson && !places.cars.active;
+    me.firstPerson(ownBody, player.camTarget - player.camPos);
     me.root.visible =
-        !firstPerson && player.camPos.distanceTo(vm.Vector3(player.pos.x, player.pos.y + 1.3, player.pos.z)) > 1.5;
+        ownBody ||
+        (!firstPerson && player.camPos.distanceTo(vm.Vector3(player.pos.x, player.pos.y + 1.3, player.pos.z)) > 1.5);
     blast.update(dt);
     flash.value = blast.flash;
     final jolt = blast.shake();
@@ -3919,15 +3931,29 @@ class OfficeController implements OfficeActions {
 
     // Your ears are in your head, facing wherever the camera looks.
     sound.update(SoundListener(x: player.pos.x, y: player.pos.y + kEyeHeight, z: player.pos.z, fx: look.x, fz: look.z));
+    final walking = player.moving && player.grounded;
+    _walked = (
+      far: walking
+          ? _walked.far + math.sqrt(math.pow(player.pos.x - _walked.x, 2) + math.pow(player.pos.z - _walked.z, 2))
+          : 0,
+      time: walking ? _walked.time + dt : 0,
+      x: player.pos.x,
+      z: player.pos.z,
+    );
+    final feet = Pos(player.pos.x, player.pos.y, player.pos.z);
     final s = (player.walkPhase / math.pi).floor();
     if (s != _stride) {
       _stride = s;
-      if (player.moving && player.grounded) sound.step();
+      // Only for ground you've covered: walking into a wall, your feet go nowhere and make no sound (#269).
+      if (walking && stepHeard(_walked.far, _walked.time)) sound.step(feet, player.running ? 1 : 0);
+      _walked = (far: 0, time: 0, x: _walked.x, z: _walked.z);
     }
     if (!player.grounded) {
       _fallV = math.min(_fallV, player.vy);
     } else {
-      if (_fallV < -4) sound.step(StepKind.land);
+      // A hop lands at about 6 m/s, a drop from the loft at 10.
+      final hard = landing(_fallV);
+      if (hard != null) sound.land(feet, hard);
       _fallV = 0;
     }
 
@@ -3961,6 +3987,7 @@ class OfficeController implements OfficeActions {
       final target = sat != null ? vm.Vector3(sat.x, sat.y, sat.z) : vm.Vector3(pose.x, pose.y, pose.z);
       final rotY = sat?.rotY ?? pose.rotY;
       final pos = r.person.root.position;
+      final from = (x: pos.x, z: pos.z);
       final k = math.min(1.0, dt * 12);
       if (ride != null) {
         r.person.root.position = target;
@@ -3976,11 +4003,18 @@ class OfficeController implements OfficeActions {
       final airborne = sat == null && pose.y > groundAt(player.colliders, pose.x, pose.z, pose.y) + 0.05;
       final walking = sat == null && pose.moving && !airborne;
       r.person.update(dt, t, walking, airborne && (pos.y - target.y).abs() > 0.01);
-      // Their walk cycle takes a step every pi/11 seconds.
+      // Their walk cycle takes a step every pi/11 seconds, and every pi/14 at a run, as yours does.
+      final now2 = r.person.root.position;
+      if (dt > 0) {
+        final v = math.sqrt(math.pow(now2.x - from.x, 2) + math.pow(now2.z - from.z, 2)) / dt;
+        r.speed += (math.min(runSpeed * 2, v) - r.speed) * math.min(1, dt * 5);
+      }
+      final running = r.speed > runSpeed;
+      final stride = math.pi / (running ? 14 : 11);
       r.stepT = walking ? r.stepT + dt : 0.2;
-      if (r.stepT >= math.pi / 11) {
-        r.stepT -= math.pi / 11;
-        sound.stepAt(pos.x, pos.z);
+      if (r.stepT >= stride) {
+        r.stepT -= stride;
+        sound.stepAt(now2.x, now2.z, now2.y, running ? 1 : 0);
       }
       r.person.emojiLift = r.bubble != null ? 0.45 : 0;
       if (r.bubble != null && now > r.bubbleUntil) {

@@ -25,12 +25,13 @@ import 'package:office_shared/protocol.dart' show GongWhy;
 
 import '../state/store.dart' show nowMs;
 import 'dnb.dart';
+import 'feet.dart';
 import 'music.dart';
 import 'samples.dart';
 import 'sound_model.dart';
 import 'web_audio.dart';
 
-export 'sound_model.dart' show Ding, DogSounds, Engine, JukeboxPlay, SoundListener, StepKind, TossSound;
+export 'sound_model.dart' show Ding, DogSounds, Engine, JukeboxPlay, Pos, SoundListener, TossSound;
 
 final math.Random _rng = math.Random();
 double _rand(double a, double b) => a + _rng.nextDouble() * (b - a);
@@ -355,16 +356,70 @@ class OfficeSound implements DogSounds {
 
   // ---- Footsteps --------------------------------------------------------------------------------
 
-  /// One of your own footsteps, or the thump of landing a jump.
-  void step([StepKind kind = StepKind.walk]) {
-    if (_ctx == null) return;
-    if (kind == StepKind.land) {
-      _play(_pick(_buf.steps), gain: 0.5, rate: 0.75);
-    } else {
-      _play(_pick(_buf.steps), gain: _rand(0.16, 0.21), rate: _rand(0.9, 1.1));
-    }
-    _count(kind == StepKind.land ? 'land' : 'step');
+  // A step is a heel and then the ball of the foot (see feet.dart), never the same pair twice running,
+  // on whatever the ground is there; at a run the two land almost together, harder and brighter (#269).
+  final Map<Ground, ({List<web.AudioBuffer> heel, List<web.AudioBuffer> toe})> _feet = {};
+  final Map<List<web.AudioBuffer>, web.AudioBuffer> _lastFall = {};
+
+  /// Which of your feet is coming down: -1 your left, 1 your right.
+  int _foot = 1;
+  final Map<double, web.AudioNode> _sides = {};
+
+  Ground _groundAt(Pos feet) => groundAt(feet, roof: _outdoors, hall: _hall != null, wing: wing);
+
+  /// One of your own footsteps, with your feet at [feet]: [pace] is 0 at a walk, 1 at a run.
+  void step(Pos feet, [double pace = 0]) {
+    final ctx = _ctx;
+    if (ctx == null) return;
+    _foot = -_foot;
+    // Your left foot a little to your left, and a touch lower than your right: no two shoes sound the same.
+    _fall(_groundAt(feet), pace, 1, ctx.currentTime, 1 + _foot * 0.015, dest: _side(_foot * 0.14));
+    _count('step');
   }
+
+  /// Landing a jump on both feet, [hard] from 0 (a hop) to 1 (off the loft).
+  void land(Pos feet, [double hard = 0.5]) {
+    final ctx = _ctx;
+    if (ctx == null) return;
+    final ground = _groundAt(feet);
+    final now = ctx.currentTime;
+    final gap = _rand(0.012, 0.03);
+    _fall(ground, 0.4, 0.9 + hard * 0.6, now, 0.88, dest: _side(-0.14));
+    _fall(ground, 0.4, 0.9 + hard * 0.6, now + gap, 0.84, dest: _side(0.14));
+    // Your weight coming down on them.
+    _play(_pick(_buf.steps), gain: 0.12 + hard * 0.2, rate: 0.75);
+    _count('land');
+  }
+
+  /// A foot coming down at [when]: the heel, then the ball of the foot.
+  void _fall(Ground ground, double pace, double gain, double when, double pitch, {web.AudioNode? dest, Pos? at}) {
+    final f = _feet[ground] ??= () {
+      final ff = footfalls(_ctx!.sampleRate.round(), ground, _rng);
+      web.AudioBuffer b(Float32List d) => audioBuffer(_ctx!, [d]);
+      return (heel: ff.heel.map(b).toList(), toe: ff.toe.map(b).toList());
+    }();
+    final p = fall(ground, pace, gain, pitch, _rng);
+    web.AudioBuffer pick(List<web.AudioBuffer> xs) => _lastFall[xs] = another(xs, _lastFall[xs], _rng);
+    _play(pick(f.heel), when: when, gain: p.heelLevel, rate: p.heelRate, dest: dest, at: at, ref: 1.5, rolloff: 1.4);
+    _play(
+      pick(f.toe),
+      when: when + p.toeAfter,
+      gain: p.toeLevel,
+      rate: p.toeRate,
+      dest: dest,
+      at: at,
+      ref: 1.5,
+      rolloff: 1.4,
+    );
+  }
+
+  /// Out to the room from [pan] to one side of you (-1 hard left, 1 hard right).
+  web.AudioNode _side(double pan) => _sides[pan] ??= () {
+    final node = _ctx!.createStereoPanner();
+    node.pan.value = pan;
+    node.connect(_ambience);
+    return node;
+  }();
 
   /// An issue card in your hands: taken off the board, or put down on a desk.
   void paper() {
@@ -395,17 +450,12 @@ class OfficeSound implements DogSounds {
     _play(_pick(_buf.steps), gain: 0.08, rate: _rand(2.4, 2.8), when: t0 + len * 0.85);
   }
 
-  /// Someone else's footstep, on the office floor unless `y` says where else.
-  void stepAt(double x, double z, [double y = 0]) {
-    if (_ctx == null) return;
-    _play(
-      _pick(_buf.steps),
-      at: Pos(x, y + 0.1, z),
-      gain: _rand(0.3, 0.38),
-      rate: _rand(0.9, 1.1),
-      ref: 1.5,
-      rolloff: 1.4,
-    );
+  /// Someone else's footstep, on the office floor unless [y] says where else: [pace] is 0 at a walk, 1 at a run.
+  void stepAt(double x, double z, [double y = 0, double pace = 0]) {
+    final ctx = _ctx;
+    if (ctx == null) return;
+    final feet = Pos(x, y, z);
+    _fall(_groundAt(feet), pace, 1.8, ctx.currentTime, 1, at: Pos(x, y + 0.1, z));
     _count('peerStep');
   }
 

@@ -2,7 +2,7 @@
 //   flutter build web --release --no-web-resources-cdn -t lib/dev/preview_characters.dart -o build/preview_characters
 // Query: ?cam=x,y,z&at=x,y,z picks the camera; ?hands=1 looks through your own eyes at a wall
 // close up (with &overlay=0 to draw the hands in the world instead of as an overlay); ?only=people,
-// workers or dogs builds one row; ?t=seconds runs the animation that long before the first frame.
+// workers or dogs builds one row; ?costume=halloween|christmas dresses the people up; ?t=seconds runs the animation that long before the first frame.
 
 import 'dart:math' as math;
 
@@ -13,6 +13,7 @@ import 'package:vector_math/vector_math.dart' as vm;
 import 'package:office_shared/avatar.dart';
 import 'package:office_shared/dog.dart';
 import 'package:office_shared/protocol.dart';
+
 import '../ui/theme.dart';
 import '../world/character.dart';
 import '../audio/sound_model.dart' show DogSounds;
@@ -133,6 +134,13 @@ class _PreviewState extends State<_Preview> {
     at('smoking', 1, 3, '#8338ec').setSmoking(true);
     talker = at('talking', 3, 4, '#ffd166');
     reacher = at('reach', 5, 5, '#ff8a5b');
+    // ?costume=halloween|christmas dresses everyone up, head to toe.
+    final c = q['costume'];
+    if (c != null) {
+      for (final p in people) {
+        p.setCostume(HolidayTheme.values.byName(c));
+      }
+    }
   }
 
   void _workers() {
@@ -143,7 +151,13 @@ class _PreviewState extends State<_Preview> {
       w.root.position = vm.Vector3(-6 + i * 2.0, 0, -1.5);
       final s = statuses[i];
       w.setStatus(s, s == WorkerStatus.needsInput || s == WorkerStatus.done);
-      if (i.isEven) w.setTask(WorkerTask(name: 'Fix the ${s.wire} flow', summary: 'Reading the logs and patching the retry loop in the queue worker'));
+      if (i.isEven)
+        w.setTask(
+          WorkerTask(
+            name: 'Fix the ${s.wire} flow',
+            summary: 'Reading the logs and patching the retry loop in the queue worker',
+          ),
+        );
       world.add(w.root);
       workers.add(w);
     }
@@ -160,7 +174,10 @@ class _PreviewState extends State<_Preview> {
     for (var i = 0; i < acts.length; i++) {
       final d = Dog(_Quiet(), (_) => false, hub);
       final x = -5 + i * 2.0;
-      d.sync(DogState(name: acts[i].wire, coat: i, path: [(x, -4.0)], speed: 1, elapsed: 0, act: acts[i], face: 0.6), performanceNow() - 5000);
+      d.sync(
+        DogState(name: acts[i].wire, coat: i, path: [(x, -4.0)], speed: 1, elapsed: 0, act: acts[i], face: 0.6),
+        performanceNow() - 5000,
+      );
       world.add(d.root);
       dogs.add(d);
     }
@@ -191,7 +208,10 @@ class _PreviewState extends State<_Preview> {
     trotter ??= (Dog(_Quiet(), (_) => false, hub)..root.position = vm.Vector3(7, 0, -4));
     if (trotter!.root.parent == null) world.add(trotter!.root);
     final path = trotBack ? [(9.0, -4.0), (7.0, -4.0)] : [(7.0, -4.0), (9.0, -4.0)];
-    trotter!.sync(DogState(name: 'trotting', coat: 2, path: path, speed: 1.2, elapsed: 0, act: DogAct.stand), performanceNow());
+    trotter!.sync(
+      DogState(name: 'trotting', coat: 2, path: path, speed: 1.2, elapsed: 0, act: DogAct.stand),
+      performanceNow(),
+    );
     trotAt = t + 2 / 1.2 + 0.4;
     trotBack = !trotBack;
   }
@@ -235,7 +255,10 @@ class _PreviewState extends State<_Preview> {
                 )
               : SceneView(scene, camera: camera, onTick: _tick),
         ),
-      if (ready) Positioned.fill(child: LabelLayer(hub: hub, camera: () => camera)),
+      if (ready)
+        Positioned.fill(
+          child: LabelLayer(hub: hub, camera: () => camera),
+        ),
     ],
   );
 }
