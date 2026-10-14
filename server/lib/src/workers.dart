@@ -13,15 +13,14 @@ import 'package:office_shared/shared.dart';
 import 'package:path/path.dart' as p;
 
 import 'agents.dart';
-import 'codex.dart';
-import 'codex_usage.dart';
 import 'github.dart' show gh;
 import 'headless.dart';
 import 'history.dart';
 import 'hook.dart';
+import 'lifecycle.dart';
 import 'machine.dart' show Capacity;
-import 'opencode.dart';
 import 'prompts.dart';
+import 'providers/providers.dart';
 import 'ptys.dart';
 import 'queue.dart' show QueueWorkers;
 import 'reported_usage.dart';
@@ -31,6 +30,9 @@ import 'tasks.dart';
 import 'usage.dart';
 import 'worktrees.dart';
 
+export 'providers/providers.dart' show childEnv;
+export 'providers/opencode.dart' show withoutOpenCodeModel;
+
 const _names = [
   'Pixel', 'Byte', 'Nibble', 'Sprocket', 'Widget', 'Gizmo', 'Bolt', 'Cosmo', 'Dot', 'Echo', //
   'Fizz', 'Glitch', 'Hopper', 'Jinx', 'Kilo', 'Lumen', 'Mochi', 'Noodle', 'Orbit', 'Pip', //
@@ -39,23 +41,6 @@ const _names = [
 const _colors = [
   '#ff8a5b', '#5bc0eb', '#9bc53d', '#fde74c', '#c3423f', '#b388eb', '#f7aef8', '#72ddf7', '#ffb400', '#00a6a6', //
 ];
-
-// Env vars from a parent agent session (e.g. starting the office from inside Claude Code) that
-// would make a worker think it is a child session — that silently turns off transcript saving,
-// which breaks resume.
-const _scrubEnv = {
-  'CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SSE_PORT', 'CLAUDE_CODE_EXECPATH', 'CLAUDE_PID', //
-  'CLAUDE_EFFORT', 'CODEX_THREAD_ID', 'CODEX_INTERNAL_ORIGINATOR_OVERRIDE', //
-  'NO_COLOR', 'FORCE_COLOR', 'VSCODE_INJECTION', 'TERM_PROGRAM', 'TERM_PROGRAM_VERSION',
-};
-const _scrubPrefixes = [
-  'CLAUDE_CODE_SESSION',
-  'CLAUDE_CODE_CHILD',
-  'CLAUDE_CODE_MESSAGING',
-  'NEBULA_',
-  'AGENT_OFFICE_',
-];
-bool _scrubbed(String k) => _scrubEnv.contains(k) || _scrubPrefixes.any(k.startsWith);
 
 const _screenInterval = Duration(milliseconds: 250);
 
@@ -67,7 +52,6 @@ const _running = {
   WorkerStatus.done,
   WorkerStatus.needsInput,
 };
-const _latePromptGraceMs = 5000;
 const _keyframeMs = 8000;
 
 /// How often a steady typist's "last typed" time is refreshed for everyone.
@@ -100,18 +84,6 @@ const _restoredNote = '\x1b[2m──── the office restarted · earlier outpu
 /// by itself instead of waiting at every desk for someone to type "continue".
 const carryOnPrompt =
     'continue — the office restarted and interrupted you. Pick up where you left off; if you were waiting on an answer or a permission, ask again.';
-
-/// The Claude Code hooks the office listens to (see [WorkerManager.handleHook]).
-const _claudeHookEvents = [
-  'SessionStart',
-  'UserPromptSubmit',
-  'Stop',
-  'Notification',
-  'PermissionRequest',
-  'PreToolUse',
-  'PostToolUse',
-  'PostToolUseFailure',
-];
 
 /// Where the workers' hooks reach the office.
 class HookEnv {
@@ -156,103 +128,6 @@ class OpenedPr {
   final bool dirty;
 }
 
-/// A worker's [WorkerInfo], as it changes. The wire type is immutable; this is copied into one for
-/// every update.
-class _Info {
-  _Info({
-    required this.id,
-    required this.kind,
-    this.provider,
-    this.model,
-    this.effort,
-    required this.deskId,
-    required this.name,
-    required this.color,
-    required this.status,
-    required this.createdBy,
-    required this.createdAt,
-    this.prompt,
-    this.worktree,
-    this.title,
-    this.sessionId,
-    this.activity,
-    this.task,
-    this.pr,
-    this.usage,
-    this.meeting,
-  });
-
-  final String id;
-  final WorkerKind kind;
-  final AgentProvider? provider;
-  final String? model;
-  final AgentEffort? effort;
-  final String deskId;
-  final String name;
-  final String color;
-  WorkerStatus status;
-  bool acked = true;
-
-  /// When it last went to done or needs_input (ms), so N goes to whoever has waited longest first.
-  int? waitingSince;
-  final String createdBy;
-  final int createdAt;
-  final String? prompt;
-  final WorkerWorktree? worktree;
-  PrRef? pr;
-  bool? prOpening;
-  String? title;
-  String? sessionId;
-  int? exitCode;
-  int cols = 100;
-  int rows = 30;
-  List<String> viewers = const [];
-  List<String> viewerIds = const [];
-  String? activity;
-
-  /// What its latest tool call is, for the worker to act out while it works.
-  WorkerAction? action;
-  WorkerTask? task;
-  Usage? usage;
-  LastInput? lastInput;
-
-  /// The meeting it was called to, for a worker at the meeting room's table.
-  final String? meeting;
-
-  WorkerInfo get view => WorkerInfo(
-    id: id,
-    kind: kind,
-    provider: provider,
-    model: model,
-    effort: effort,
-    deskId: deskId,
-    name: name,
-    color: color,
-    status: status,
-    acked: acked,
-    waitingSince: waitingSince,
-    createdBy: createdBy,
-    createdAt: createdAt,
-    prompt: prompt,
-    worktree: worktree,
-    pr: pr,
-    prOpening: prOpening,
-    title: title,
-    sessionId: sessionId,
-    exitCode: exitCode,
-    cols: cols,
-    rows: rows,
-    viewers: List.unmodifiable(viewers),
-    viewerIds: List.unmodifiable(viewerIds),
-    activity: activity,
-    action: action,
-    task: task,
-    usage: usage,
-    lastInput: lastInput,
-    meeting: meeting,
-  );
-}
-
 /// Its terminal in the host as of the last save, and how it was doing, to pick back up after a restart.
 class _Saved {
   const _Saved(this.ptyId, this.status, this.acked, [this.waitingSince]);
@@ -263,9 +138,11 @@ class _Saved {
 }
 
 class _Worker {
-  _Worker(this.info, this.tracker, [String? hookToken]) : hookToken = hookToken ?? _randomHex(16);
+  _Worker(this.info, this.tracker, [String? hookToken])
+    : hookToken = hookToken ?? _randomHex(16),
+      state = info.kind == WorkerKind.agent ? providerAdapter(info.provider)?.createState() : null;
 
-  final _Info info;
+  final LiveInfo info;
   Pty? pty;
   HeadlessTerminal? term;
 
@@ -280,14 +157,14 @@ class _Worker {
   /// Claude never reported SessionStart: it's stuck on a trust/login/onboarding screen.
   bool bootBlocked = false;
 
-  /// OpenCode errors keep the desk visibly actionable until a new turn starts.
-  bool openCodeError = false;
-  CodexUsageReader codexUsage = CodexUsageReader();
-  String? codexHome;
-  String? codexTranscript;
-  final codexTools = <String, String>{};
-  final codexPending = <String>{};
-  bool codexPermissionUnknown = false;
+  /// Its provider's own state on it (see ProviderAdapter.createState).
+  final Object? state;
+
+  /// What its provider's adapter is handed of it (see WorkerHandle), once asked for.
+  _Handle? handle;
+
+  /// A prompt its start couldn't pass on the command line (a Muse resume): typed into its session after SessionStart.
+  String? pendingPrompt;
 
   /// Test runs and builds that have failed in a row (see failsToDespair).
   int failStreak = 0;
@@ -317,6 +194,55 @@ class _Worker {
   TermMarker? fresh;
 }
 
+/// What a worker's provider adapter is handed of it (see WorkerHandle).
+class _Handle implements WorkerHandle {
+  _Handle(this._m, this._w);
+
+  final WorkerManager _m;
+  final _Worker _w;
+
+  @override
+  LiveInfo get info => _w.info;
+  @override
+  Object? get state => _w.state;
+  @override
+  bool get running => _w.pty != null;
+  @override
+  bool get bootBlocked => _w.bootBlocked;
+  @override
+  set bootBlocked(bool v) => _w.bootBlocked = v;
+  @override
+  int get leftNeedsInputAt => _w.leftNeedsInputAt;
+  @override
+  set leftNeedsInputAt(int v) => _w.leftNeedsInputAt = v;
+  @override
+  int get failStreak => _w.failStreak;
+  @override
+  set failStreak(int v) => _w.failStreak = v;
+  @override
+  UsageTracker get tracker => _w.tracker;
+  @override
+  String? get pendingPrompt => _w.pendingPrompt;
+  @override
+  set pendingPrompt(String? v) => _w.pendingPrompt = v;
+  @override
+  void setStatus(WorkerStatus status) => _m._setStatus(_w, status);
+  @override
+  void emit() => _m._emitUpdate(_w);
+  @override
+  void persist() => _m._persist();
+  @override
+  void notePrompt(String prompt) => _m._notePrompt(_w, prompt);
+  @override
+  void noteTool(String tool) => _m._noteTool(_w, tool);
+  @override
+  void clearTask() => _m._clearTask(_w);
+  @override
+  void scheduleScan() => _m._scheduleScan(_w);
+  @override
+  String? prompt(String text) => _m.prompt(_w.info.id, text);
+}
+
 class WorkerManager implements QueueWorkers {
   /// [env] stands in for the office's own environment (tests isolate the workers with it).
   WorkerManager(
@@ -340,10 +266,11 @@ class WorkerManager implements QueueWorkers {
        defaultProvider = configuredProvider(_agentCmd) {
     _trees = Worktrees(_dir);
     _statePath = p.join(_dataDir, 'workers.json');
-    _settingsPath = p.join(_dataDir, 'claude-hooks.json');
     _office = officeCommand();
-    _writeHookSettings();
-    _openCodePlugin = writeOpenCodePlugin(_dataDir);
+    final floor = ProviderFloor(dataDir: _dataDir, office: _office);
+    for (final a in providerAdapters.values) {
+      _setups[a.id] = a.prepare(floor);
+    }
     _queueBin = _writeQueueCommand();
     _agentPath = resolveCommand(_agentCmd, _env);
     final claude = defaultProvider == AgentProvider.claude ? _agentPath : resolveCommand('claude', _env);
@@ -394,12 +321,13 @@ class WorkerManager implements QueueWorkers {
 
   final _workers = <String, _Worker>{};
   late final String _statePath;
-  late final String _settingsPath;
+
+  /// What each provider set up on this floor, for its launches (see ProviderAdapter.prepare).
+  final _setups = <AgentProvider, Object?>{};
   late final Worktrees _trees;
   String? _agentPath;
   @override
   final AgentProvider defaultProvider;
-  late final String _openCodePlugin;
 
   /// How hooks run the office's own executable (see hook.dart).
   late final List<String> _office;
@@ -552,7 +480,7 @@ class WorkerManager implements QueueWorkers {
       wt = made.worktree;
     }
     final trimmed = prompt?.trim();
-    final info = _Info(
+    final info = LiveInfo(
       id: id,
       kind: kind,
       provider: selectedProvider,
@@ -887,253 +815,45 @@ class WorkerManager implements QueueWorkers {
     _emitUpdate(w);
   }
 
-  /// Claude Code hook callback.
-  bool handleHook(String workerId, String token, String event, Object? payload) {
-    final w = _workers[workerId];
-    if (w == null ||
-        w.pty == null ||
-        w.info.kind != WorkerKind.agent ||
-        (w.info.provider != AgentProvider.claude && w.info.provider != AgentProvider.custom) ||
-        !_safeEq(token, w.hookToken)) {
-      return false;
-    }
-    final m = payload is Map ? payload : const {};
-    final now = _now();
-    final sessionId = m['session_id'];
-    if (sessionId is String && sessionId.isNotEmpty && sessionId != w.info.sessionId) {
-      w.info.sessionId = sessionId;
-      _persist();
-    }
-    final transcript = m['transcript_path'];
-    if (transcript is String && transcript != w.tracker.transcript) {
-      w.tracker.transcript = transcript;
-      _persist();
-    }
-    _scheduleScan(w);
-    switch (event) {
-      case 'SessionStart':
-        if (m['source'] == 'clear') {
-          _clearTask(w);
-          w.failStreak = 0;
-        }
-        if (w.info.status == WorkerStatus.starting || (w.bootBlocked && w.info.status == WorkerStatus.needsInput)) {
-          w.bootBlocked = false;
-          _setStatus(w, WorkerStatus.idle);
-        }
-      case 'UserPromptSubmit':
-        w.bootBlocked = false;
-        w.info.action = null;
-        final prompt = m['prompt'];
-        if (prompt is String) {
-          w.info.activity = _truncate(prompt, 80);
-          _notePrompt(w, prompt);
-        }
-        if (w.info.status != WorkerStatus.working) {
-          _setStatus(w, WorkerStatus.working);
-        } else {
-          _emitUpdate(w);
-        }
-      case 'PreToolUse':
-        if (m['tool_name'] == 'AskUserQuestion') {
-          _setStatus(w, WorkerStatus.needsInput);
-        } else {
-          final activity = _describeTool(m);
-          w.info.activity = activity;
-          w.info.action = toolAction(m['tool_name'], m['tool_input']);
-          _noteTool(w, activity);
-          if (w.info.status != WorkerStatus.working) {
-            _setStatus(w, WorkerStatus.working);
-          } else {
-            _emitUpdate(w);
-          }
-        }
-      case 'PostToolUse':
-      case 'PostToolUseFailure':
-        _noteOutcome(w, m, event == 'PostToolUseFailure');
-        if (w.info.status == WorkerStatus.needsInput) {
-          w.leftNeedsInputAt = now;
-          _setStatus(w, WorkerStatus.working);
-        }
-      case 'PermissionRequest':
-        w.info.activity = 'Wants permission: ${_describeTool(m)}';
-        _setStatus(w, WorkerStatus.needsInput);
-      case 'Notification':
-        final type = m['notification_type'];
-        if (type == 'permission_prompt') {
-          if (now - w.leftNeedsInputAt > _latePromptGraceMs) _setStatus(w, WorkerStatus.needsInput);
-        } else if (type == 'idle_prompt') {
-          if (w.info.status == WorkerStatus.working) _setStatus(w, WorkerStatus.done);
-        }
-      case 'Stop':
-        _setStatus(w, WorkerStatus.done);
-    }
-    return true;
-  }
+  /// Claude Code hook callback (a custom --agent that speaks Claude Code's hooks reports here too).
+  bool handleHook(String workerId, String token, String event, Object? payload) =>
+      handleProviderHook(AgentProvider.claude, workerId, token, event, payload);
 
   /// Native Codex lifecycle hooks register the root rollout for bounded metric reads.
-  bool handleCodexHook(String workerId, String token, String event, Object? payload) {
-    final w = _workers[workerId];
-    if (w == null ||
-        w.pty == null ||
-        w.info.kind != WorkerKind.agent ||
-        w.info.provider != AgentProvider.codex ||
-        !_safeEq(token, w.hookToken)) {
-      return false;
-    }
-    final report = normalizeCodexHook(event, payload);
-    if (report == null) return false;
-    final info = w.info;
-    if (info.sessionId != null && info.sessionId != report.sessionId && event != 'SessionStart') return false;
-    if (info.sessionId == null || info.sessionId != report.sessionId) {
-      if (info.sessionId != null) {
-        _clearTask(w);
-        info.usage = null;
-        w.codexTranscript = null;
-        w.codexUsage = CodexUsageReader();
-      }
-      info.sessionId = report.sessionId;
-      _persist();
-    }
-    if (report.transcriptPath != null) w.codexTranscript = report.transcriptPath;
-    _scheduleScan(w);
-    w.bootBlocked = false;
-    void clearPending() {
-      w.codexTools.clear();
-      w.codexPending.clear();
-      w.codexPermissionUnknown = false;
-    }
-
-    void busy() => _setStatus(
-      w,
-      w.codexPending.isNotEmpty || w.codexPermissionUnknown ? WorkerStatus.needsInput : WorkerStatus.working,
-    );
-    switch (report.event) {
-      case 'SessionStart':
-        clearPending();
-        if (report.source == 'clear') _clearTask(w);
-        info.activity = null;
-        if (info.status == WorkerStatus.starting || info.status == WorkerStatus.needsInput) {
-          _setStatus(w, WorkerStatus.idle);
-        }
-      case 'UserPromptSubmit':
-        clearPending();
-        info.action = null;
-        final prompt = report.prompt;
-        if (prompt != null) {
-          info.activity = _truncate(prompt, 80);
-          _notePrompt(w, prompt);
-        }
-        _setStatus(w, WorkerStatus.working);
-      case 'PreToolUse':
-        final tool = report.tool;
-        info.activity = tool != null ? _truncate(tool, 80) : 'Using a tool';
-        info.action = toolAction(tool);
-        final toolUseId = report.toolUseId;
-        if (toolUseId != null && w.codexTools.length < 256) w.codexTools[toolUseId] = tool ?? '';
-        if (RegExp(r'(?:^|[.])(?:AskUserQuestion|request_user_input)$').hasMatch(tool ?? '')) {
-          if (toolUseId != null) {
-            w.codexPending.add(toolUseId);
-          } else {
-            w.codexPermissionUnknown = true;
-          }
-        }
-        busy();
-      case 'PermissionRequest':
-        info.activity = 'Wants permission: ${_truncate(report.tool ?? 'tool', 80)}';
-        // PermissionRequest has no tool_use_id in the native schema. Keep every matching
-        // active call pending so an unrelated parallel tool cannot dismiss the prompt.
-        final candidates = [
-          for (final e in w.codexTools.entries)
-            if (e.value == report.tool) e.key,
-        ];
-        if (candidates.isEmpty) w.codexPermissionUnknown = true;
-        w.codexPending.addAll(candidates);
-        _setStatus(w, WorkerStatus.needsInput);
-      case 'PostToolUse':
-        final toolUseId = report.toolUseId;
-        if (toolUseId != null) {
-          w.codexTools.remove(toolUseId);
-          w.codexPending.remove(toolUseId);
-        }
-        busy();
-      case 'Stop':
-      case 'Interrupt':
-        clearPending();
-        _setStatus(w, WorkerStatus.done);
-    }
-    _emitUpdate(w);
-    _persist();
-    return true;
-  }
+  bool handleCodexHook(String workerId, String token, String event, Object? payload) =>
+      handleProviderHook(AgentProvider.codex, workerId, token, event, payload);
 
   /// OpenCode plugin callback. The plugin has already filtered child sessions before this bridge.
-  bool handleOpenCodeHook(String workerId, String token, Object? payload) {
+  bool handleOpenCodeHook(String workerId, String token, Object? payload) =>
+      handleProviderHook(AgentProvider.opencode, workerId, token, '', payload);
+
+  /// An event on the hook route /hooks/[route] (see ProviderAdapter.hook): taken only from a running
+  /// agent whose provider reports there, with its hook token. Says whether it was taken.
+  bool handleProviderHook(AgentProvider route, String workerId, String token, String event, Object? payload) {
+    final hook = providerAdapter(route)?.hook;
     final w = _workers[workerId];
-    if (w == null ||
+    final own = w != null ? providerAdapter(w.info.provider) : null;
+    if (hook == null ||
+        w == null ||
         w.pty == null ||
         w.info.kind != WorkerKind.agent ||
-        w.info.provider != AgentProvider.opencode ||
+        own == null ||
+        (own.hooksAs ?? own.id) != route ||
         !_safeEq(token, w.hookToken)) {
       return false;
     }
-    final info = w.info;
-    if (payload is Map && payload['type'] == 'usage') {
-      final usage = reportedUsage(payload['usage']);
-      if (usage == null || info.sessionId == null || payload['sessionId'] != info.sessionId) return false;
-      // Full snapshots replace previous totals. They never advance task status or enter the Claude ledger.
-      info.usage = usage;
-      _emitUpdate(w);
-      _persist();
-      return true;
-    }
-    final ev = _openCodeEvent(payload);
-    if (ev == null) return false;
-    final starting = ev.type == 'session' && ev.status == OpenCodeHookStatus.starting;
-    if (info.sessionId != null && info.sessionId != ev.sessionId && !starting) return false;
-    if (info.sessionId == null || (starting && info.sessionId != ev.sessionId)) {
-      final switching = info.sessionId != null;
-      info.sessionId = ev.sessionId;
-      if (switching) {
-        info.usage = null;
-        _clearTask(w);
-        info.activity = null;
-        _setStatus(w, WorkerStatus.idle);
-      }
-      w.openCodeError = false;
-      _persist();
-    }
-    final prompt = ev.prompt;
-    final hasPrompt = prompt != null && prompt.isNotEmpty;
-    if (ev.type == 'error') {
-      w.openCodeError = true;
-    } else if (ev.status == OpenCodeHookStatus.working || hasPrompt) {
-      w.openCodeError = false;
-    }
-    if (hasPrompt) {
-      info.activity = _truncate(prompt, 80);
-      info.action = null;
-      _notePrompt(w, prompt);
-    } else if (ev.tool != null && ev.tool!.isNotEmpty) {
-      info.activity = _truncate(ev.tool!, 80);
-      info.action = toolAction(ev.tool);
-    } else if (ev.detail != null && ev.detail!.isNotEmpty) {
-      info.activity = _truncate(ev.detail!, 80);
-    }
-    if (ev.status == OpenCodeHookStatus.needsInput) {
-      _setStatus(w, WorkerStatus.needsInput);
-    } else if (ev.status == OpenCodeHookStatus.working) {
-      _setStatus(w, WorkerStatus.working);
-    } else if (ev.status == OpenCodeHookStatus.done && w.pty != null) {
-      _setStatus(w, w.openCodeError ? WorkerStatus.needsInput : WorkerStatus.done);
-    } else if (ev.status == OpenCodeHookStatus.starting && info.status == WorkerStatus.starting) {
-      _setStatus(w, WorkerStatus.idle);
-    } else {
-      _emitUpdate(w);
-    }
-    return true;
+    return hook.handle(_handleOf(w), event, payload);
   }
 
-  static bool _claudeLike(_Info info) => info.provider == AgentProvider.claude || info.provider == AgentProvider.custom;
+  /// What a worker's provider adapter is handed of it (see WorkerHandle): made once, kept on the worker.
+  WorkerHandle _handleOf(_Worker w) => w.handle ??= _Handle(this, w);
+
+  /// Its provider's adapter, for an agent.
+  static ProviderAdapter? _adapterOf(LiveInfo info) =>
+      info.kind == WorkerKind.agent ? providerAdapter(info.provider) : null;
+
+  /// The office names its task (see ProviderAdapter.namesTasks).
+  static bool _namesTasks(LiveInfo info) => _adapterOf(info)?.namesTasks ?? false;
 
   /// A new message for the worker: show it right away, and have its task (re)named.
   void _notePrompt(_Worker w, String prompt) {
@@ -1149,14 +869,14 @@ class WorkerManager implements QueueWorkers {
     w.prompts = _lastN([...w.prompts, clean], _taskPrompts);
     final hadTask = w.info.task != null;
     if (!hadTask) w.info.task = fallbackTask(clean);
-    if (!_claudeLike(w.info)) return;
+    if (!_namesTasks(w.info)) return;
     // "yes", "go ahead", "2": a reply within the same task, not worth a new name.
     if (hadTask && clean.length < 16) return;
     _nameTask(w);
   }
 
   void _noteTool(_Worker w, String tool) {
-    if (!_claudeLike(w.info)) return;
+    if (!_namesTasks(w.info)) return;
     w.tools = _lastN([...w.tools, tool], _taskTools);
     w.toolsSinceNamed++;
     if (w.info.task != null && w.toolsSinceNamed >= _taskRefreshTools && _now() - w.namedAt > _taskRefreshMs) {
@@ -1164,31 +884,8 @@ class WorkerManager implements QueueWorkers {
     }
   }
 
-  /// A tool call finished. Tests or a build that failed again (by exit code, or by the summary it
-  /// printed when the exit code was piped away) and the worker puts its head in its hands, until its
-  /// next tool call; a passing run ends the streak.
-  void _noteOutcome(_Worker w, Map payload, bool failed) {
-    if (payload['is_interrupt'] == true ||
-        toolAction(payload['tool_name'], payload['tool_input']) != WorkerAction.test) {
-      return;
-    }
-    final res = payload['tool_response'];
-    final output = [
-      payload['error'],
-      if (res is Map) res['stdout'],
-      if (res is Map) res['stderr'],
-    ].whereType<String>().join('\n');
-    if (!failed && !outputFailed(output)) {
-      w.failStreak = 0;
-      return;
-    }
-    if (++w.failStreak < failsToDespair || w.info.action == WorkerAction.failing) return;
-    w.info.action = WorkerAction.failing;
-    _emitUpdate(w);
-  }
-
   void _nameTask(_Worker w) {
-    if (!_claudeLike(w.info)) return;
+    if (!_namesTasks(w.info)) return;
     w.toolsSinceNamed = 0;
     w.namedAt = _now();
     final previous = w.info.task != null && w.prompts.length > 1 ? w.info.task : null;
@@ -1229,6 +926,8 @@ class WorkerManager implements QueueWorkers {
       if (keep && _midTurn(w)) w.interrupted = true;
       try {
         w.pty?.kill();
+        // Its exit won't be heard.
+        if (w.pty != null) _adapterOf(w.info)?.exited(_handleOf(w), _cwd(w.info));
       } catch (_) {
         // ignore
       }
@@ -1260,44 +959,30 @@ class WorkerManager implements QueueWorkers {
 
     final shell = _env['SHELL'] ?? '/bin/bash';
     final isShell = info.kind == WorkerKind.shell;
-    final provider = info.provider;
-    final isClaude = !isShell && provider == AgentProvider.claude;
-    final isOpenCode = !isShell && provider == AgentProvider.opencode;
-    final isCodex = !isShell && provider == AgentProvider.codex;
-    final configured = !isShell && provider == defaultProvider;
+    final adapter = _adapterOf(info);
+    final configured = !isShell && info.provider == defaultProvider;
     final station = deskById[info.deskId]?.station;
+    final cwd = _cwd(info);
     final command = _command(info);
     final commandPath = isShell ? null : (configured ? _agentPath : resolveCommand(command, _env));
-    var args = isShell ? ['-l'] : (configured ? [..._agentArgs] : <String>[]);
-    if (isClaude) {
-      args.insertAll(0, ['--settings', _settingsPath]);
-      // A model/effort chosen for this worker overrides whatever --agent-args set office-wide.
-      if (info.model != null) args.addAll(['--model', info.model!]);
-      if (info.effort != null) args.addAll(['--effort', info.effort!.wire]);
-      // The queue agent only ever adds to the queue: without these it can't touch the checkout's files.
-      if (station == StationKind.queue) args.addAll(['--disallowedTools', ...queueAgentDisallowedTools]);
-      if (resumeSessionId != null) args.addAll(['--resume', resumeSessionId]);
-      // `--` so a prompt like "- fix login" is never parsed as a CLI option.
-      if (prompt != null && prompt.isNotEmpty) args.addAll(['--', prompt]);
-    } else if (isOpenCode) {
-      if (resumeSessionId != null || info.model != null) args = withoutOpenCodeModel(args);
-      if (resumeSessionId == null && info.model != null) args.addAll(['--model', info.model!]);
-      if (resumeSessionId != null) args.addAll(['--session', resumeSessionId]);
-      if (prompt != null && prompt.isNotEmpty) args.addAll(['--prompt', prompt]);
-    } else if (isCodex) {
-      args.addAll([...codexHookArgs(_office), '--no-alt-screen']);
-      if (resumeSessionId != null) args.addAll(['resume', resumeSessionId]);
-      if (prompt != null && prompt.isNotEmpty) args.addAll(['--', prompt]);
-    }
-    if (isCodex) {
-      w.codexTools.clear();
-      w.codexPending.clear();
-      w.codexPermissionUnknown = false;
-    }
-    if (isOpenCode || isCodex) {
-      w.hookToken = _randomHex(16);
-      w.openCodeError = false;
-    }
+    final base = isShell ? ['-l'] : (configured ? [..._agentArgs] : <String>[]);
+    // Its provider's command line, and anything it sets for this run (see ProviderAdapter.launch).
+    final plan = adapter != null
+        ? adapter.launch(
+            LaunchInput(
+              h: _handleOf(w),
+              args: base,
+              prompt: prompt,
+              resumeSessionId: resumeSessionId,
+              station: station,
+              cwd: cwd,
+              setup: _setups[adapter.id],
+              env: _env,
+            ),
+          )
+        : LaunchPlan(args: base);
+    final args = plan.args;
+    if (plan.rotateToken) w.hookToken = _randomHex(16);
     final env = childEnv(_env)
       ..addAll({
         'TERM': 'xterm-256color',
@@ -1305,26 +990,20 @@ class WorkerManager implements QueueWorkers {
         'AGENT_OFFICE_WORKER_ID': info.id,
         'AGENT_OFFICE_HOOK_URL': _hook.url,
         'AGENT_OFFICE_HOOK_TOKEN': w.hookToken,
-      });
+      })
+      ..addAll(plan.env ?? const {});
     // A board agent reaches the queue with the `agent-office queue` command, whichever agent it runs.
     final queueBin = _queueBin;
     if (station != null && queueBin != null) {
       final path = env['PATH'];
       env['PATH'] = path != null && path.isNotEmpty ? '$queueBin:$path' : queueBin;
     }
+    adapter?.usage?.locate?.call(_handleOf(w), cwd, env);
 
-    final cwd = _cwd(info);
-    if (isCodex) w.codexHome = _codexHome(cwd, env);
     Pty proc;
     try {
       if (!Directory(cwd).existsSync()) throw _RunError('working directory is gone: $cwd');
-      if (isOpenCode) {
-        env['AGENT_OFFICE_SESSION_ID'] = resumeSessionId ?? '';
-        env['OPENCODE_CONFIG_CONTENT'] = mergeOpenCodeConfigContent(
-          env['OPENCODE_CONFIG_CONTENT'],
-          openCodePluginSpecifier(_openCodePlugin),
-        );
-      }
+      plan.finishEnv?.call(env);
       // The host keeps its own copy of the screen for the next office: it starts with the same history.
       SpawnOpts opts(String file, List<String> args) =>
           SpawnOpts(file: file, args: args, cwd: cwd, env: env, cols: info.cols, rows: info.rows, prelude: prelude);
@@ -1341,7 +1020,8 @@ class WorkerManager implements QueueWorkers {
       _startFailed(w, _messageOf(err));
       return;
     }
-    if (!isClaude && !isCodex) info.status = WorkerStatus.idle;
+    // One that says itself when it's up (see ProviderAdapter.bootHint) starts out 'starting'.
+    if (adapter?.bootHint == null) info.status = WorkerStatus.idle;
     _follow(w, proc, term, resumeSessionId);
     _emitUpdate(w);
     _persist();
@@ -1366,19 +1046,20 @@ class WorkerManager implements QueueWorkers {
       info.acked = saved.acked;
       info.waitingSince = saved.waitingSince;
     }
-    if (info.provider == AgentProvider.codex) w.codexHome = _codexHome(_cwd(info), childEnv(_env));
+    final adapter = _adapterOf(info);
+    adapter?.usage?.locate?.call(_handleOf(w), _cwd(info), childEnv(_env));
     _follow(w, adopted.pty, term, null);
     // A turn that ended while the office was down says so with its Stop hook, which retries until
     // the office is back. Claude's progress report, where it gives one, says a turn is still going.
-    if (adopted.busy && info.provider == AgentProvider.claude) _onProgress(w, true);
+    if (adopted.busy && (adapter?.screenProgress ?? false)) _onProgress(w, true);
     _emitUpdate(w);
   }
 
-  /// A fresh screen for a worker's terminal, reading Claude's progress and title off it.
+  /// A fresh screen for a worker's terminal, reading its progress reports (Claude's) and title off it.
   HeadlessTerminal _newTerm(_Worker w) {
     final term = HeadlessTerminal(cols: w.info.cols, rows: w.info.rows);
     // OSC 9;4 progress (Claude Code emits it): catches Esc-cancel, which fires no Stop hook.
-    if (w.info.provider == AgentProvider.claude) term.onProgress = (busy) => _onProgress(w, busy);
+    if (providerAdapter(w.info.provider)?.screenProgress ?? false) term.onProgress = (busy) => _onProgress(w, busy);
     term.onTitleChange = (title) => _setTitle(w, title);
     w.term?.dispose();
     w.fresh?.dispose();
@@ -1391,9 +1072,7 @@ class WorkerManager implements QueueWorkers {
 
   void _setTitle(_Worker w, String title) {
     final clean = title.replaceFirst(RegExp(r'^[^\p{L}\p{N}]+', unicode: true), '').trim();
-    if (clean.isNotEmpty &&
-        clean != w.info.title &&
-        !RegExp(r'^claude( code)?$', caseSensitive: false).hasMatch(clean)) {
+    if (clean.isNotEmpty && clean != w.info.title && !titleNoise(clean)) {
       w.info.title = clean;
       _emitUpdate(w);
     }
@@ -1402,8 +1081,7 @@ class WorkerManager implements QueueWorkers {
   /// Shows a worker's terminal output as it comes, and deals with the process ending.
   void _follow(_Worker w, Pty proc, HeadlessTerminal term, String? resumeSessionId) {
     final info = w.info;
-    final isClaude = info.kind == WorkerKind.agent && info.provider == AgentProvider.claude;
-    final isCodex = info.kind == WorkerKind.agent && info.provider == AgentProvider.codex;
+    final adapter = _adapterOf(info);
     w.pty = proc;
     proc.onData((data) {
       term.write(data);
@@ -1412,6 +1090,8 @@ class WorkerManager implements QueueWorkers {
       if (w.viewers.isNotEmpty) _events.data(info.id, data, w.viewers.keys.toList());
     });
     proc.onExit((e) {
+      // Not for a run it has since replaced.
+      if (w.pty == proc || w.pty == null) adapter?.exited(_handleOf(w), _cwd(info));
       if (w.pty != proc || _workers[info.id] != w) return;
       w.pty = null;
       final error = e.error;
@@ -1425,10 +1105,13 @@ class WorkerManager implements QueueWorkers {
         resume(info.id);
         return;
       }
-      if (isCodex && !_closing) _scheduleScan(w);
+      if ((adapter?.usage?.scanOnExit ?? false) && !_closing) _scheduleScan(w);
       // Resuming a conversation Claude no longer has ("No conversation found") exits before Claude
       // ever starts. Start a fresh one rather than leave the worker asleep.
-      if (isClaude && resumeSessionId != null && info.status == WorkerStatus.starting && !_closing) {
+      if ((adapter?.freshIfResumeFails ?? false) &&
+          resumeSessionId != null &&
+          info.status == WorkerStatus.starting &&
+          !_closing) {
         _events.toast("${info.name}'s last conversation couldn't be resumed — starting a fresh one", ToastLevel.warn);
         _launch(w, null, null);
         return;
@@ -1452,11 +1135,10 @@ class WorkerManager implements QueueWorkers {
     // blocked on a human: folder trust dialog, login, first-run onboarding. Flag it so it jumps.
     Timer(_bootGrace, () {
       if (_closing || info.status != WorkerStatus.starting || w.pty != proc) return;
-      if (isClaude || isCodex) {
+      final hint = adapter?.bootHint;
+      if (hint != null) {
         w.bootBlocked = true;
-        info.activity = isCodex
-            ? 'Open the terminal: complete login and review Office hooks in /hooks'
-            : 'Waiting on a setup prompt (trust / login) — open the terminal';
+        info.activity = hint;
         _setStatus(w, WorkerStatus.needsInput);
       } else {
         _setStatus(w, WorkerStatus.idle);
@@ -1478,12 +1160,12 @@ class WorkerManager implements QueueWorkers {
   }
 
   /// What a worker's terminal runs: the shell, the configured agent command, or another provider's CLI.
-  String _command(_Info info) {
+  String _command(LiveInfo info) {
     if (info.kind == WorkerKind.shell) return _env['SHELL'] ?? '/bin/bash';
     return info.provider == defaultProvider ? _agentCmd : info.provider?.wire ?? _agentCmd;
   }
 
-  String _cwd(_Info info) => info.worktree != null ? p.join(_dir, info.worktree!.path) : _dir;
+  String _cwd(LiveInfo info) => info.worktree != null ? p.join(_dir, info.worktree!.path) : _dir;
 
   /// Hooks fire in bursts (every tool call); one read a moment later covers the whole burst.
   void _scheduleScan(_Worker w) {
@@ -1497,20 +1179,13 @@ class WorkerManager implements QueueWorkers {
   /// Picks up what the session logged since last time and books the difference.
   void _scanUsage(_Worker w) {
     final info = w.info;
-    if (info.kind == WorkerKind.agent && info.provider == AgentProvider.codex) {
-      final transcript = w.codexTranscript, home = w.codexHome, session = info.sessionId;
-      if (_workers[info.id] != w || transcript == null || home == null || session == null) return;
-      final usage = w.codexUsage.read(transcript, session, home);
-      if (usage != null && jsonEncode(usage.toJson()) != jsonEncode(info.usage?.toJson())) {
-        info.usage = usage;
-        _emitUpdate(w);
-        _persist();
-      }
+    final usage = _adapterOf(info)?.usage;
+    final scan = usage?.scan;
+    if (scan != null) {
+      if (_workers[info.id] == w) scan(_handleOf(w));
       return;
     }
-    if (info.kind != WorkerKind.agent || !_claudeLike(info) || w.tracker.transcript == null || _workers[info.id] != w) {
-      return;
-    }
+    if (usage == null || !usage.transcript || w.tracker.transcript == null || _workers[info.id] != w) return;
     try {
       if (!scanTracker(w.tracker)) return;
     } catch (_) {
@@ -1603,45 +1278,29 @@ class WorkerManager implements QueueWorkers {
     }
   }
 
-  /// Claude can sit at its prompt without being usable: stuck on a first-run screen, or not signed
-  /// in on this machine. Flag that as needing a human, and clear it once the screen moves on.
+  /// An agent can sit at its prompt without being usable: Claude stuck on a first-run screen, or not
+  /// signed in on this machine (see ProviderAdapter.screenBlocked). Flag that as needing a human, and
+  /// clear it once the screen moves on.
   void _checkBlocked(_Worker w) {
     final term = w.term;
-    if (w.info.kind != WorkerKind.agent || term == null || !_claudeLike(w.info)) return;
+    final blockedBy = _adapterOf(w.info)?.screenBlocked;
+    if (term == null || blockedBy == null) return;
     final s = w.info.status;
     if (s != WorkerStatus.starting && s != WorkerStatus.idle && !(w.bootBlocked && s == WorkerStatus.needsInput)) {
       return;
     }
     // Only this run's output counts: a "Not logged in" in the scrollback from before is old news.
     final text = term.screenText(term.isAlt ? 0 : max(0, w.fresh?.line ?? 0));
-    final loggedOut = _notLoggedIn.hasMatch(text);
-    final blocked = loggedOut || (_setupPrompt.hasMatch(text) && (s == WorkerStatus.starting || w.bootBlocked));
-    if (blocked && s != WorkerStatus.needsInput) {
+    final blocked = blockedBy(text, s == WorkerStatus.starting || w.bootBlocked);
+    if (blocked != null && s != WorkerStatus.needsInput) {
       w.bootBlocked = true;
-      w.info.activity = loggedOut
-          ? "Claude isn't signed in on this machine — open the terminal and type /login"
-          : 'Waiting on a setup prompt (trust / login) — open the terminal';
+      w.info.activity = blocked;
       _setStatus(w, WorkerStatus.needsInput);
-    } else if (!blocked && w.bootBlocked && s == WorkerStatus.needsInput) {
+    } else if (blocked == null && w.bootBlocked && s == WorkerStatus.needsInput) {
       w.bootBlocked = false;
       w.info.activity = null;
       _setStatus(w, WorkerStatus.idle);
     }
-  }
-
-  /// Claude Code's settings for the workers: every hook POSTs to the office (see hook.dart).
-  void _writeHookSettings() {
-    final hooks = <String, Object>{
-      for (final event in _claudeHookEvents)
-        event: [
-          {
-            'hooks': [
-              {'type': 'command', 'command': claudeHookCommand(event, office: _office)},
-            ],
-          },
-        ],
-    };
-    _writePrivate(_settingsPath, const JsonEncoder.withIndent('  ').convert({'hooks': hooks}));
   }
 
   /// Writes the `agent-office` command into the data dir's bin/, running the office's own executable,
@@ -1697,9 +1356,8 @@ class WorkerManager implements QueueWorkers {
           'pr': ?w.info.pr?.toJson(),
           'meeting': ?w.info.meeting,
           if (w.info.kind == WorkerKind.agent) 'tracker': w.tracker.toJson(),
-          if (w.info.provider == AgentProvider.opencode || w.info.provider == AgentProvider.codex)
-            'usage': ?w.info.usage?.toJson(),
-          if (w.info.provider == AgentProvider.codex) 'codexTranscript': ?w.codexTranscript,
+          if (providerAdapter(w.info.provider)?.usage?.persisted ?? false) 'usage': ?w.info.usage?.toJson(),
+          ...?providerAdapter(w.info.provider)?.usage?.save?.call(w.state),
           // A terminal still running in the host, to pick back up after a restart. Its hooks keep the token.
           'hookToken': w.hookToken,
           if (w.pty?.id case final ptyId?)
@@ -1714,7 +1372,7 @@ class WorkerManager implements QueueWorkers {
         },
     ];
     try {
-      _writePrivate(_statePath, const JsonEncoder.withIndent('  ').convert(saved));
+      writePrivate(_statePath, const JsonEncoder.withIndent('  ').convert(saved));
     } catch (_) {
       // disk issues shouldn't take the office down
     }
@@ -1738,10 +1396,10 @@ class WorkerManager implements QueueWorkers {
             ? null
             : AgentProvider.tryParse(s['provider']) ??
                   (tracker.transcript != null ? AgentProvider.claude : defaultProvider);
-        final claudeLike = provider == AgentProvider.claude || provider == AgentProvider.custom;
+        final usage = providerAdapter(provider)?.usage;
         final pr = s['pr'];
         final worktree = s['worktree'];
-        final info = _Info(
+        final info = LiveInfo(
           id: id,
           kind: shell ? WorkerKind.shell : WorkerKind.agent,
           provider: provider,
@@ -1766,18 +1424,16 @@ class WorkerManager implements QueueWorkers {
           pr: pr is Map && pr['number'] is num && pr['url'] is String
               ? PrRef(number: (pr['number'] as num).toInt(), url: pr['url'] as String)
               : null,
-          usage: provider == AgentProvider.opencode || provider == AgentProvider.codex
+          usage: usage != null && usage.persisted
               ? reportedUsage(s['usage'])
-              : claudeLike && tracker.transcript != null
+              : usage != null && usage.transcript && tracker.transcript != null
               ? trackerUsage(tracker)
               : null,
           meeting: s['meeting'] is String && deskById[deskId]!.room ? s['meeting'] as String : null,
         );
         final token = s['hookToken'];
         final w = _Worker(info, tracker, token is String && token.isNotEmpty ? token : null);
-        if (provider == AgentProvider.codex && s['codexTranscript'] is String) {
-          w.codexTranscript = s['codexTranscript'] as String;
-        }
+        usage?.restore?.call(w.state, s);
         w.screenDirty = false;
         final pty = s['pty'];
         if (pty is Map && pty['id'] is String) {
@@ -1808,9 +1464,7 @@ class WorkerManager implements QueueWorkers {
 // -----------------------------------------------------------------------------------------------
 
 /// In the middle of a turn: working, or asking something (not stuck on a trust or login screen).
-bool _midTurn(_Worker w) =>
-    w.info.kind == WorkerKind.agent &&
-    (w.info.status == WorkerStatus.working || (w.info.status == WorkerStatus.needsInput && !w.bootBlocked));
+bool _midTurn(_Worker w) => midTurn(w.info, w.bootBlocked);
 
 final _random = Random.secure();
 
@@ -1825,74 +1479,9 @@ List<String> _lastN(List<String> xs, int n) => xs.length > n ? xs.sublist(xs.len
 
 WorktreeRef _ref(WorkerWorktree wt) => WorktreeRef(path: wt.path, branch: wt.branch, base: wt.base);
 
-/// Writes a file owner-only, whole: to `<file>.tmp`, then renamed over it.
-void _writePrivate(String file, String data) {
-  final tmp = '$file.tmp';
-  File(tmp).writeAsStringSync(data, flush: true);
-  chmodSync(tmp, 0x180); // 0600
-  File(tmp).renameSync(file);
-}
-
-/// Where a Codex worker's sessions are logged, for reading its usage.
-String _codexHome(String cwd, Map<String, String> env) {
-  final configured = env['CODEX_HOME'];
-  final home = configured != null && configured.isNotEmpty
-      ? configured
-      : p.join(env['HOME'] ?? Platform.environment['HOME'] ?? '', '.codex');
-  return p.normalize(p.join(p.absolute(cwd), home));
-}
-
-/// [args] without any `--model`/`-m` option, for an OpenCode launch that picks its own model (or
-/// resumes a session, which keeps the one it had).
-List<String> withoutOpenCodeModel(List<String> args) {
-  final clean = <String>[];
-  for (var i = 0; i < args.length; i++) {
-    final arg = args[i];
-    if (arg == '--model' || arg == '-m') {
-      if (i + 1 < args.length && !args[i + 1].startsWith('-')) i++;
-      continue;
-    }
-    if (arg.startsWith('--model=') || (arg.startsWith('-m') && arg.length > 2)) continue;
-    clean.add(arg);
-  }
-  return clean;
-}
-
-/// The office's environment (or [base]), minus anything that would make a child think it's a nested session.
-Map<String, String> childEnv([Map<String, String>? base]) => {
-  for (final e in (base ?? Platform.environment).entries)
-    if (!_scrubbed(e.key)) e.key: e.value,
-};
-
 WorkerTask? _validTask(Object? t) => t is Map && t['name'] is String && t['summary'] is String
     ? WorkerTask(name: t['name'] as String, summary: t['summary'] as String)
     : null;
-
-OpenCodeStatusEvent? _openCodeEvent(Object? v) {
-  if (v is! Map) return null;
-  final type = v['type'], sessionId = v['sessionId'];
-  final status = OpenCodeHookStatus.tryParse(v['status']);
-  if (type is! String || !OpenCodeStatusEvent.types.contains(type)) return null;
-  if (sessionId is! String || sessionId.isEmpty || status == null || v['status'] is! String) return null;
-  for (final k in ['prompt', 'tool', 'detail']) {
-    if (v[k] != null && v[k] is! String) return null;
-  }
-  return OpenCodeStatusEvent(
-    type: type,
-    sessionId: sessionId,
-    status: status,
-    prompt: v['prompt'] as String?,
-    tool: v['tool'] as String?,
-    detail: v['detail'] as String?,
-  );
-}
-
-/// First-run screens Claude shows before it can take a prompt.
-final _setupPrompt = RegExp(
-  r'trust this folder|Do you trust the files|Select login method|Choose the text style|Press Enter to continue|Bypass Permissions mode',
-  caseSensitive: false,
-);
-final _notLoggedIn = RegExp(r'Not logged in\s*·\s*Run /login|Invalid API key|Please run /login', caseSensitive: false);
 
 bool _executable(String file) {
   try {
@@ -1938,17 +1527,7 @@ String? _onPath(String cmd, Map<String, String> env) {
   return null;
 }
 
-String _describeTool(Map payload) {
-  final name = payload['tool_name'] ?? 'tool';
-  final input = payload['tool_input'];
-  Object? field(String k) => input is Map ? input[k] : null;
-  final detail =
-      field('command') ?? field('file_path') ?? field('pattern') ?? field('url') ?? field('description') ?? '';
-  final hasDetail = detail is String ? detail.isNotEmpty : detail != false && detail != 0;
-  return _truncate(hasDetail ? '$name: $detail' : '$name', 80);
-}
-
-String _offlineBanner(_Info info) {
+String _offlineBanner(LiveInfo info) {
   final hint = info.kind == WorkerKind.shell
       ? ' Press R to restart it.'
       : info.sessionId != null
@@ -2021,7 +1600,7 @@ Future<PrRef?> _findOpenPr(String branch, String cwd) async {
 /// A pull request title and body from what the worker was asked to do. The title is the issue's
 /// title when the task came off the issues board, else the task's first line; the body carries the
 /// task, the commits, a "Closes #n" when the task asked for one, and which desk it came from.
-({String title, String body}) _draftPr(_Info info, List<String> commits, String by) {
+({String title, String body}) _draftPr(LiveInfo info, List<String> commits, String by) {
   final task = (info.prompt ?? '').replaceAll(RegExp(r'\r\n?'), '\n').trim();
   final firstLine = task.split('\n').map((l) => l.trim()).firstWhere((l) => l.isNotEmpty, orElse: () => '');
   // The issues board hands work over as: Work on GitHub issue #12: "Title".

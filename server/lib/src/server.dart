@@ -35,6 +35,7 @@ import 'theme.dart';
 import 'upgrade.dart';
 import 'usage.dart';
 import 'webhook.dart';
+import 'providers/providers.dart' show providerHook;
 import 'workers.dart';
 
 /// Content types by extension, with the charset the text ones are sent in.
@@ -589,14 +590,16 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
   Future<Response> hookHandler(Request req) async {
     final url = req.url;
     if (url.path == '/office/queue') return officeQueue(req);
-    const paths = ['/hooks/claude', '/hooks/opencode', '/hooks/codex'];
-    if (req.method != Method.post || !paths.contains(url.path)) return _send(404, {'ok': false});
+    // Each provider with hooks has its route, /hooks/<provider> (see providers/).
+    final route = url.path.startsWith('/hooks/') ? url.path.substring('/hooks/'.length) : '';
+    final hook = providerHook(route);
+    if (req.method != Method.post || hook == null) return _send(404, {'ok': false});
     Object? payload = <String, dynamic>{};
     try {
       final body = await req.readAsString(encoding: utf8, maxLength: 1024 * 1024);
       payload = body.isNotEmpty ? jsonDecode(body) : <String, dynamic>{};
     } catch (_) {
-      if (url.path != '/hooks/claude') return _send(400, {'ok': false});
+      if (hook.strictJson) return _send(400, {'ok': false});
       // permissive: a bad payload still counts as the event
     }
     final token = (headerValue(req.headers, 'authorization') ?? '').replaceFirst(
@@ -607,11 +610,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     final workers = workerFloor(workerId)?.workers;
     if (workers == null) return _send(401, {});
     final event = _query(url, 'event') ?? '';
-    final ok = switch (url.path) {
-      '/hooks/opencode' => workers.handleOpenCodeHook(workerId, token, payload),
-      '/hooks/codex' => workers.handleCodexHook(workerId, token, event, payload),
-      _ => workers.handleHook(workerId, token, event, payload),
-    };
+    final ok = workers.handleProviderHook(AgentProvider.parse(route), workerId, token, event, payload);
     return _send(ok ? 200 : 401, {});
   }
 
