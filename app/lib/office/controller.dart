@@ -102,6 +102,7 @@ import 'rooms_hub.dart';
 import 'interaction.dart';
 import 'needs_you.dart';
 import 'palette_entries.dart';
+import 'places_hub.dart';
 import 'roof.dart';
 import 'worlds.dart';
 import 'send_home.dart';
@@ -144,6 +145,7 @@ const Map<InteractKind, double> _reach = {
   InteractKind.bookshelf: 4,
   InteractKind.ladder: 3,
   InteractKind.pole: 3.5,
+  InteractKind.telescope: 3.5,
 };
 
 final Map<PhysicalKeyboardKey, DeskKey> _deskKeys = {
@@ -317,6 +319,16 @@ class OfficeController implements OfficeActions {
 
   /// The games and rooms: board agents, the arcade cabinet, the machine monitor…
   late final RoomsHub rooms = RoomsHub(this);
+
+  /// The places round the building: the loft's telescope, darts and axes, the cars, the desk signs.
+  late final PlacesHub places = PlacesHub(this);
+
+  /// Set by the page: let go of the mouse (as a window opening does), and take it back for the game.
+  VoidCallback yieldMouse = () {};
+  VoidCallback backToGame = () {};
+
+  /// The hint's drawn again next frame.
+  void staleHint() => _hintKey = 'stale';
 
   /// The rooftop bar: up there and back, drinks and the DJ (roof.dart).
   late final RoofHub roofHub;
@@ -497,6 +509,7 @@ class OfficeController implements OfficeActions {
     root.add(hanger.ghost.group);
     arcade = Arcade(office.bossScreen);
     rooms.init();
+    places.init();
     worlds.theOffice
       ..meetingBoardFace = rooms.view.meetingBoard
       ..meetingSignFace = rooms.view.meetingSign;
@@ -592,6 +605,7 @@ class OfficeController implements OfficeActions {
     _messages?.cancel();
     voiceRoom.dispose();
     rooms.dispose();
+    places.dispose();
     needsYou.dispose();
     hanger.dispose();
     whiteboard.dispose();
@@ -1544,6 +1558,7 @@ class OfficeController implements OfficeActions {
   /// You're on a floor (or in the building without one): paint it, and open the doors. [back] is standing in
   /// the spot you left from last time, the doors open already.
   void _arrive({bool back = false}) {
+    places.placeChanged();
     // Up on the roof, or back down: the roof has no dog, and no walls for pictures.
     if (roofHub.setPlace()) {
       dog.root.visible = !roofHub.upTop;
@@ -2789,7 +2804,7 @@ class OfficeController implements OfficeActions {
     if (target.kind != InteractKind.issues) note = null;
     final card = _carrying;
     if (key == DeskKey.e && card != null && _dropCard(target, card, note)) return;
-    if (rooms.interact(target, key)) return;
+    if (rooms.interact(target, key) || places.interact(target, key)) return;
     if (target.kind == InteractKind.desk && target.deskId != null) {
       final deskId = target.deskId!;
       final w = store.workerAtDesk(deskId);
@@ -3198,11 +3213,11 @@ class OfficeController implements OfficeActions {
       hint.value = parts;
       return;
     }
-    final held = ModalStack.instance.open ? null : rooms.heldHint();
+    final held = ModalStack.instance.open ? null : places.heldHint() ?? rooms.heldHint();
     if (held != null) {
       if (held.$1 == _hintKey) return;
       _hintKey = held.$1;
-      hint.value = held.$2;
+      hint.value = held.$2.isEmpty ? null : held.$2;
       return;
     }
     final t = _target;
@@ -3223,7 +3238,7 @@ class OfficeController implements OfficeActions {
   }
 
   (String, List<HintPart>) _hintFor(Interactable it) {
-    final room = rooms.hint(it);
+    final room = rooms.hint(it) ?? places.hint(it);
     if (room != null) return room;
     (String, List<HintPart>) board(String name) => ('', [HintTitle(name), const HintKey('E', 'Open')]);
     switch (it.kind) {
@@ -3387,7 +3402,8 @@ class OfficeController implements OfficeActions {
           InteractKind.meeting ||
           InteractKind.golf ||
           InteractKind.ball ||
-          InteractKind.bookshelf:
+          InteractKind.bookshelf ||
+          InteractKind.telescope:
         return ('', []);
     }
   }
@@ -3487,7 +3503,7 @@ class OfficeController implements OfficeActions {
       emoteWheel.release();
       return emoteWheel.isOpen;
     }
-    if (!ModalStack.instance.open && !hud.typing && rooms.key(e)) return true;
+    if (!ModalStack.instance.open && !hud.typing && (places.key(e) || rooms.key(e))) return true;
     if (e is! KeyDownEvent) return false;
     if (ModalStack.instance.open || hud.typing) return false;
     final hk = HardwareKeyboard.instance;
@@ -3544,7 +3560,7 @@ class OfficeController implements OfficeActions {
   /// A click (not a drag) on the scene, at [screen] in a view of [view] size.
   void onClick(Offset screen, Size view) {
     if (ModalStack.instance.open) return;
-    if (rooms.click()) return;
+    if (places.click() || rooms.click()) return;
     if (hanger.active) {
       _reachOut();
       return hanger.place(screen);
@@ -3660,6 +3676,7 @@ class OfficeController implements OfficeActions {
     );
     camera = arcade.update(camera, dt, view);
     camera = rooms.update(camera, dt, t, view);
+    camera = places.update(camera, dt, t);
     final look = (player.camTarget - player.camPos)..normalize();
     hands.root.visible = firstPerson;
     if (firstPerson) {
@@ -3797,7 +3814,7 @@ class OfficeController implements OfficeActions {
     _updateSky(dt, t);
 
     _aimedNote = null;
-    if (ModalStack.instance.open || hanger.active || climber.active) {
+    if (ModalStack.instance.open || hanger.active || climber.active || places.busy) {
       _target = null;
     } else if (firstPerson) {
       final aim = aimedAt(Offset(view.width / 2, view.height / 2), view);

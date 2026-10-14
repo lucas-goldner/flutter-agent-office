@@ -220,7 +220,11 @@ Face buildLoft(Node group, List<Interactable> interactables, Looks looks) {
   tube.rotation = lookAlong(vm.Vector3(-6 - scopeX, 0.8 - (floorY + 1.08), 0 - scopeZ));
   scope.add(tube);
   scope.position = vm.Vector3(scopeX, floorY, scopeZ);
-  stat.add(scope);
+  // Not merged with the loft's statics: E (or a click) at it looks through it (office/telescope.dart).
+  group.add(scope);
+  final telescope = Interactable(kind: InteractKind.telescope, x: scopeX, y: floorY, z: scopeZ, radius: 1.65);
+  tagInteract(scope, telescope);
+  interactables.add(telescope);
 
   for (final (px, pz, s) in LoftPlan.plants) {
     stat.add(place(plant(s), x: px, y: floorY, z: pz, scale: s));

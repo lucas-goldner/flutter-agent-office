@@ -62,6 +62,8 @@ enum InteractKind {
   // Between floors (world/climb.dart).
   ladder,
   pole,
+  // The boss loft's telescope (office/telescope.dart).
+  telescope,
   // A map's herald, who sends out new workers (the castle's Hand of the King).
   herald,
 }

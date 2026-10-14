@@ -14,6 +14,7 @@ import 'ui/arcade.dart';
 import 'ui/compass.dart';
 import 'ui/emote_wheel.dart';
 import 'ui/shot_meter.dart';
+import 'ui/telescope.dart';
 import 'ui/hud.dart';
 import 'ui/needs_you.dart';
 import 'ui/modal.dart';
@@ -36,6 +37,8 @@ class _OfficePageState extends State<OfficePage> {
     onMove: (dx, dy) {
       // While the emote wheel is open, the mouse points at an emote instead of looking around.
       if (c.emoteWheel.isOpen) return c.emoteWheel.move(dx, dy);
+      // Looking through the telescope (or aiming a dart), the mouse aims that instead.
+      if (c.places.look(dx, dy)) return;
       if (c.player.enabled) c.player.look(dx * kLookSpeed, dy * kLookSpeed);
     },
     onChange: (locked) {
@@ -54,7 +57,10 @@ class _OfficePageState extends State<OfficePage> {
   @override
   void initState() {
     super.initState();
-    c.init();
+    c
+      ..yieldMouse = (() => _lock.finePointer ? _lock.yieldMouse() : _lock.unlock())
+      ..backToGame = _backToGame
+      ..init();
     _lock
       ..mayLock = (() => !ModalStack.instance.open && c.player.view == ViewMode.first)
       ..attach();
@@ -167,6 +173,7 @@ class _OfficePageState extends State<OfficePage> {
 
   void _move(PointerMoveEvent e) {
     c.hanger.mouse = e.localPosition;
+    if (!_lock.locked && c.places.look(e.delta.dx, e.delta.dy)) return;
     final d = _drag;
     if (d == null || _lock.locked) return;
     final delta = e.localPosition - d;
@@ -229,7 +236,11 @@ class _OfficePageState extends State<OfficePage> {
                         onPointerSignal: _wheel,
                         onPointerPanZoomStart: _panZoomStart,
                         onPointerPanZoomUpdate: _panZoom,
-                        onPointerHover: (e) => c.hanger.mouse = e.localPosition,
+                        onPointerHover: (e) {
+                          c.hanger.mouse = e.localPosition;
+                          // The telescope (and the dart in your hand) follows the mouse, pressed or not.
+                          if (!_lock.locked) c.places.look(e.delta.dx, e.delta.dy);
+                        },
                         // A few drinks in at the rooftop bar, the frame sways, blurs and warms (world/drunk.dart).
                         child: DrunkVision(
                           look: c.roofHub.look,
@@ -239,7 +250,11 @@ class _OfficePageState extends State<OfficePage> {
                             onTick: (elapsed, dt) => c.tick(dt, _view),
                             viewsBuilder: (_) => [
                               RenderView(camera: c.camera, layerMask: kRenderLayerAll & ~Hands.layer),
-                              if (c.player.view == ViewMode.first && c.devHands && !c.arcade.zoomed && !c.rooms.zoomed)
+                              if (c.player.view == ViewMode.first &&
+                                  c.devHands &&
+                                  !c.arcade.zoomed &&
+                                  !c.rooms.zoomed &&
+                                  !c.places.busy)
                                 c.hands.overlayView(),
                             ],
                           ),
@@ -306,18 +321,26 @@ class _OfficePageState extends State<OfficePage> {
                     ),
                   ),
                 ),
+                // Looking through the loft's telescope: the eyepiece, and no HUD.
                 Positioned.fill(
-                  child: Hud(
-                    controller: c.hud,
-                    voice: c.voice,
-                    speaking: c.voiceRoom.speaking,
-                    shares: c.voiceRoom.sharesWidget,
-                    connected: c.connected,
-                    hint: c.hint,
-                    crosshair: c.crosshair,
-                    hanging: c.hanging,
-                    caffeine: c.caffeine,
-                    clock: () => c.clockSeconds,
+                  child: TelescopeOverlay(showing: c.places.telescope.showing, onExit: c.places.telescope.exit),
+                ),
+                Positioned.fill(
+                  child: ValueListenableBuilder<bool>(
+                    valueListenable: c.places.hudHidden,
+                    builder: (context, hidden, hud) => Visibility(visible: !hidden, maintainState: true, child: hud!),
+                    child: Hud(
+                      controller: c.hud,
+                      voice: c.voice,
+                      speaking: c.voiceRoom.speaking,
+                      shares: c.voiceRoom.sharesWidget,
+                      connected: c.connected,
+                      hint: c.hint,
+                      crosshair: c.crosshair,
+                      hanging: c.hanging,
+                      caffeine: c.caffeine,
+                      clock: () => c.clockSeconds,
+                    ),
                   ),
                 ),
                 // A worker that needs you: the banner under the top bar, and the red flash round the edge.
