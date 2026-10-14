@@ -196,6 +196,23 @@ void main() {
     await sub.cancel();
     expect(output, matches(echoed));
 
+    // Coming back in: on the same floor at the same spot, or up on the roof when that floor is gone.
+    Future<Map<String, dynamic>> me(String query) async {
+      final other = await WebSocket.connect(
+        'ws://127.0.0.1:$port/ws?$query',
+        headers: {'cookie': cookie, 'origin': 'http://127.0.0.1:$port'},
+      );
+      final hello = jsonDecode(await other.first as String) as Map<String, dynamic>;
+      await other.close();
+      return (hello['peers'] as List).cast<Map<String, dynamic>>().firstWhere((p) => p['id'] == hello['you']);
+    }
+
+    final back = await me('floor=project&x=1.5&y=0&z=2&rotY=0.5');
+    expect([back['floor'], back['x'], back['z'], back['rotY']], ['project', 1.5, 2, 0.5]);
+    final roofed = await me('floor=taken-off&x=1.5&z=2');
+    expect(roofed['floor'], '@roof');
+    expect(roofed['x'], isNot(1.5));
+
     send({'t': 'ping', 'at': 42});
     final pong = await next((m) => m['t'] == 'pong');
     expect(pong['at'], 42, reason: 'whole numbers go out as the Node server sent them');

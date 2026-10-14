@@ -306,6 +306,20 @@ _Spot? _arrivalSpot(Object? at) {
   );
 }
 
+/// The spot someone coming back in says they were standing in (the client's `x`, `y`, `z` and `rotY`
+/// on the socket's URL), if they say.
+({double x, double y, double z, double rotY})? spotFrom(Uri url) {
+  double n(String k) {
+    final v = url.queryParameters[k];
+    if (v == null || v.isEmpty) return double.nan;
+    return double.tryParse(v.trim()) ?? double.nan;
+  }
+
+  final x = n('x'), z = n('z');
+  if (!x.isFinite || !z.isFinite) return null;
+  return _arrivalSpot({'x': x, 'y': n('y'), 'z': z, 'rotY': n('rotY')});
+}
+
 /// A GitHub issue number, else null.
 int? _issueNumber(Object? v) => v is num && v.isFinite && v == v.truncate() && v > 0 ? v.toInt() : null;
 
@@ -2582,12 +2596,17 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
 
   void onConnection(RelicWebSocket ws, Uri url, Session session) {
     final id = _randomHex(5);
-    // Back where they were before a reload or a restart, else the first floor. Everyone arrives by elevator.
+    // Back on the floor they were on before a reload, a restart or closing the tab, else the first floor.
     final wanted = _query(url, 'floor');
+    // Their floor's gone since (taken off the building, or its checkout deleted): up to the roof instead.
+    final gone = wanted != null && wanted.isNotEmpty && wanted != roof && !floors.containsKey(wanted);
     // Up on the roof, as long as there's a building under it.
-    final onRoof = wanted == roof && floors.isNotEmpty;
+    final onRoof = (wanted == roof || gone) && floors.isNotEmpty;
     final floor = onRoof ? null : arrivalFloor(wanted);
-    final spot = elevatorSpot();
+    // Back where they were standing on it too; anywhere else, they arrive by elevator.
+    final back = !gone && wanted != null && (onRoof || floor?.id == wanted);
+    final e = elevatorSpot();
+    final spot = (back ? spotFrom(url) : null) ?? (x: e.x, y: 0.0, z: e.z, rotY: 0.0);
     final account = session.account;
     // An account's name is its own; on the shared password people pick one.
     final picked = _str(_query(url, 'name'), 24).trim();
@@ -2621,6 +2640,10 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
       accountId: account?.id,
       admin: me.admin,
     );
+    // The way they were facing, or out through the elevator's doors.
+    client.peer
+      ..y = spot.y
+      ..rotY = spot.rotY;
     clients[id] = client;
     if (account != null) accounts.seen(account.id);
     // dart:io pings on this interval and drops a connection whose pong doesn't come back in time,
