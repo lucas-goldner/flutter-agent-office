@@ -237,7 +237,7 @@ class CastleWorld extends World {
         f.size * (0.95 + 0.08 * math.cos(t * 19 + f.phase)),
       );
       f.mesh.rotation = vm.Quaternion.axisAngle(vm.Vector3(0, 1, 0), t * 2 + f.phase);
-      f.glow.scale = vm.Vector3.all(f.size * (1.2 + 0.3 * k));
+      f.glow.scale = vm.Vector3.all(f.size * (0.95 + 0.25 * k));
     }
     for (final l in _kit.lights) {
       l.intensity = l.base * (0.82 + 0.1 * math.sin(t * 11 + l.phase) + 0.08 * math.sin(t * 23 + l.phase * 3));

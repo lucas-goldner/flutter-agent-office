@@ -22,7 +22,7 @@ final UnlitMaterial _flameOut = UnlitMaterial()..baseColorFactor = linear(hex('#
 final UnlitMaterial _flameIn = UnlitMaterial()..baseColorFactor = linear(hex('#ffe38a'));
 final UnlitMaterial _glow = UnlitMaterial()
   ..alphaMode = AlphaMode.blend
-  ..baseColorFactor = linear(hex('#ffb45a'), 0.16);
+  ..baseColorFactor = linear(hex('#ffb45a'), 0.09);
 
 /// A licking flame [size] tall at (x, y, z) in [parent], with a warm glow round it.
 void flame(Kit kit, Node parent, double x, double y, double z, double size) {
@@ -35,7 +35,7 @@ void flame(Kit kit, Node parent, double x, double y, double z, double size) {
   );
   f.scale = vm.Vector3.all(size);
   parent.add(f);
-  final glow = mesh(sphere(1, 10, 8), _glow, x, y + size * 0.45, z, false)..scale = vm.Vector3.all(size * 1.4);
+  final glow = mesh(sphere(1, 10, 8), _glow, x, y + size * 0.45, z, false)..scale = vm.Vector3.all(size * 1.1);
   parent.add(glow);
   kit.flames.add(Flame(f, glow, size, _rng.nextDouble() * 10));
 }

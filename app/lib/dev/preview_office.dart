@@ -5,6 +5,7 @@
 //   &beanbags=1   brings every bean bag out;  &look=2  paints floor palette 2;
 //   &elevator=1   opens the elevator;          &juke=1  plays the jukebox.
 //   &roof=1       the rooftop bar instead, &dj=seconds into the DJ's set, &dark=0-1 how dark it is.
+//   &map=castle   a map of its own instead (castle, station), lit by its own mood; &day=0-1 how light it is.
 
 import 'dart:convert';
 
@@ -14,10 +15,16 @@ import 'package:vector_math/vector_math.dart' as vm;
 
 import 'package:office_shared/floors.dart';
 import 'package:office_shared/layout.dart' as lay;
+
 import '../ui/theme.dart';
 import '../world/labels.dart';
 import '../audio/dnb_score.dart';
 import '../world/office/office.dart';
+
+import 'package:office_shared/maps/maps.dart' show planOf;
+
+import '../world/styles.dart';
+import '../world/world.dart';
 import '../world/rooftop.dart';
 import '../world/toon.dart';
 
@@ -42,11 +49,17 @@ double _r(double n) => (n * 1e6).roundToDouble() / 1e6;
 
 /// The office's colliders, interactables and fixtures as JSON, to diff against the TS build.
 String _dump(Office o) => jsonEncode({
-  'colliders': [for (final c in o.colliders) [_r(c.minX), _r(c.maxX), _r(c.minZ), _r(c.maxZ), _r(c.top), c.bottom == null ? null : _r(c.bottom!)]],
-  'interactables': [
-    for (final i in o.interactables) [i.kind.name, _r(i.x), _r(i.z), i.y == null ? null : _r(i.y!), _r(i.radius), i.deskId ?? i.seatId, i.off],
+  'colliders': [
+    for (final c in o.colliders)
+      [_r(c.minX), _r(c.maxX), _r(c.minZ), _r(c.maxZ), _r(c.top), c.bottom == null ? null : _r(c.bottom!)],
   ],
-  'fixtures': [for (final f in o.fixtures()) [f.wall.wire, _r(f.u0), _r(f.u1), _r(f.y0), _r(f.y1)]],
+  'interactables': [
+    for (final i in o.interactables)
+      [i.kind.name, _r(i.x), _r(i.z), i.y == null ? null : _r(i.y!), _r(i.radius), i.deskId ?? i.seatId, i.off],
+  ],
+  'fixtures': [
+    for (final f in o.fixtures()) [f.wall.wire, _r(f.u0), _r(f.u1), _r(f.y0), _r(f.y1)],
+  ],
   'lamps': o.night.lamps.length,
   'halos': o.night.halos.length,
   'bulbs': o.night.bulbs.length,
@@ -65,6 +78,7 @@ class _PreviewOfficeState extends State<PreviewOffice> {
   late final PerspectiveCamera camera;
   Office? office;
   Rooftop? roof;
+  World? map;
   double t = 0;
 
   @override
@@ -85,8 +99,14 @@ class _PreviewOfficeState extends State<PreviewOffice> {
       scene.toneMapping = ToneMappingMode.linear;
       final sw = Stopwatch()..start();
       final o = buildOffice(labels: labels);
-      debugPrint('office built in ${sw.elapsedMilliseconds} ms: ${o.colliders.length} colliders, ${o.interactables.length} interactables');
-      scene.add(Node(name: 'mirror')..localTransform = vm.Matrix4.diagonal3Values(1, 1, -1)..add(o.group));
+      debugPrint(
+        'office built in ${sw.elapsedMilliseconds} ms: ${o.colliders.length} colliders, ${o.interactables.length} interactables',
+      );
+      scene.add(
+        Node(name: 'mirror')
+          ..localTransform = vm.Matrix4.diagonal3Values(1, 1, -1)
+          ..add(o.group),
+      );
       o.setProjectName('agent-office');
       if (q['beanbags'] == '1') o.setBeanbags({for (final b in lay.beanbags) b.id});
       if (q['look'] != null) o.setLook(floorPalettes[int.parse(q['look']!)]);
@@ -98,6 +118,19 @@ class _PreviewOfficeState extends State<PreviewOffice> {
         o.group.visible = false;
         (scene.root.children.first).add(r.group);
         debugPrint('rooftop built: ${r.colliders.length} colliders, ${r.interactables.length} interactables');
+      }
+      final id = q['map'];
+      final build = id == null ? null : worldBuilders[planOf(id).style];
+      if (id != null && build != null) {
+        final sw2 = Stopwatch()..start();
+        final w = map = build(planOf(id), labels);
+        debugPrint(
+          '$id built in ${sw2.elapsedMilliseconds} ms: ${w.colliders.length} colliders, ${w.interactables.length} interactables',
+        );
+        o.group.visible = false;
+        w.setProjectName('agent-office');
+        if (q['look'] != null) w.setLook(floorPalettes[int.parse(q['look']!)]);
+        (scene.root.children.first).add(w.group);
       }
       if (mounted) setState(() => office = o);
     }();
@@ -111,7 +144,31 @@ class _PreviewOfficeState extends State<PreviewOffice> {
     o.update(t, dt, [vm.Vector3(eye.x, eye.y, -eye.z)]);
     o.jukebox.update(t, dt, 0.5);
     final q = Uri.base.queryParameters;
-    roof?.update(t, dt, djFrame(t + (double.tryParse(q['dj'] ?? '') ?? 0)), RoofEnv(dark: double.tryParse(q['dark'] ?? '') ?? 0.3, motion: true));
+    final w = map;
+    if (w != null) {
+      w.update(t, dt, [vm.Vector3(eye.x, eye.y, -eye.z)]);
+      final mood = w.mood;
+      if (mood != null) {
+        Toon.light.officeOn = 0;
+        mood((
+          light: Toon.light,
+          fog: scene.fog,
+          daylight: double.tryParse(q['day'] ?? '') ?? 1,
+          t: t,
+          eye: vm.Vector3(eye.x, eye.y, -eye.z),
+        ));
+        scene.fog
+          ..enabled = true
+          ..mode = FogMode.linear;
+        Toon.updateLight();
+      }
+    }
+    roof?.update(
+      t,
+      dt,
+      djFrame(t + (double.tryParse(q['dj'] ?? '') ?? 0)),
+      RoofEnv(dark: double.tryParse(q['dark'] ?? '') ?? 0.3, motion: true),
+    );
   }
 
   @override
@@ -119,8 +176,12 @@ class _PreviewOfficeState extends State<PreviewOffice> {
     children: [
       const Positioned.fill(child: ColoredBox(color: Swatch.sky)),
       if (office != null) ...[
-        Positioned.fill(child: SceneView(scene, camera: camera, onTick: _tick)),
-        Positioned.fill(child: LabelLayer(hub: labels, camera: () => camera)),
+        Positioned.fill(
+          child: SceneView(scene, camera: camera, onTick: _tick),
+        ),
+        Positioned.fill(
+          child: LabelLayer(hub: labels, camera: () => camera),
+        ),
       ],
     ],
   );
