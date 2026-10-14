@@ -15,10 +15,13 @@ import 'theme.dart';
 
 /// What the floor list does when you pick something in it.
 class FloorMenuOptions {
-  const FloorMenuOptions({required this.go, required this.elevator, this.roof});
+  const FloorMenuOptions({required this.go, required this.elevator, this.roof, this.indoors});
 
-  /// Go to that floor, staying where you are in the office.
+  /// Go to that floor, staying where you are in the office (from outside it, by elevator).
   final void Function(String floorId) go;
+
+  /// Whether you're inside the office, where going to a floor keeps you on the same spot.
+  final bool Function()? indoors;
 
   /// Open the elevator's panel, to add a project.
   final VoidCallback elevator;
@@ -173,7 +176,9 @@ class FloorMenu extends StatelessWidget {
                         ? "You're on this floor"
                         : r.floor.cloning == true
                         ? 'Still being cloned'
-                        : "Go to ${r.floor.name}, right where you're standing",
+                        : (opts.indoors?.call() ?? true)
+                        ? "Go to ${r.floor.name}, right where you're standing"
+                        : 'Go to ${r.floor.name}, in its elevator',
                     onTap: r.here || r.floor.cloning == true ? null : () => pick(() => opts.go(r.floor.id)),
                   ),
                 _Item(

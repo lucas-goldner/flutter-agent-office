@@ -871,16 +871,27 @@ class OfficeController implements OfficeActions {
     if (store.floor == null) return showElevator();
     toggleFloorMenu(
       store,
-      FloorMenuOptions(go: switchFloor, elevator: showElevator, roof: () => ride(roof)),
+      FloorMenuOptions(go: switchFloor, indoors: indoors, elevator: showElevator, roof: () => ride(roof)),
       anchor: anchor,
     );
   }
 
   /// Straight to another floor from the floor list, to the same spot in the office you're in now.
+  /// Inside the office on your floor: not out on the balcony, the fire escape, the street or the golf course
+  /// across it, nor down in the garage. (C3's back office counts as inside once the floor plan has a wing.)
+  bool indoors() {
+    final p = player.pos;
+    if (roofHub.upTop || p.y < -1 || p.y > wallHeight) return false;
+    return p.x > Floor.minX && p.x < Floor.maxX && p.z > Floor.minZ && p.z < Floor.maxZ;
+  }
+
   void switchFloor(String floorId) {
     // The roof isn't laid out like a floor: to and from it, it's the elevator.
     if (store.floor == roof || floorId == roof) return ride(floorId);
     if (_riding != null || floorId == store.floor) return;
+    // Outside, the same spot on another floor looks just like this one: the elevator brings you in to that
+    // floor instead, into its car.
+    if (!indoors()) return ride(floorId);
     ModalStack.instance.closeAll();
     hanger.cancel();
     if (player.seat != null) standUp();
