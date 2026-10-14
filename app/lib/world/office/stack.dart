@@ -294,6 +294,9 @@ class FloorStack {
   final List<Node> _ladderSigns = [];
   late final Material _tiles, _concrete, _band;
 
+  /// The ceiling's tiles, for the back office's ceiling to match.
+  Material get ceiling => _tiles;
+
   /// The poles on this floor, when there's another floor for them to go to.
   List<PoleSpot> poles() => state.others ? poles_ : const [];
 

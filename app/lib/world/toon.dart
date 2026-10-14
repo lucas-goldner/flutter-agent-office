@@ -36,6 +36,10 @@ class ToonLight {
   /// 1 in the office; 0 on a map of its own, where there's no office or garage to fill with light and
   /// the lamps' pools (a castle's torches) light everything.
   double officeOn = 1;
+
+  /// The back office, when the floor you're on is built out into one (world/office/wing.dart), lit like
+  /// the office inside: minX, maxX, minZ, maxZ; (1, 0, 1, 0) without.
+  final vm.Vector4 skyWing = vm.Vector4(1, 0, 1, 0);
 }
 
 class _Shader {
@@ -118,6 +122,7 @@ class Toon {
       ..setFloat('wet', l.wet)
       ..setFloat('snow', l.snow)
       ..setFloat('office_on', l.officeOn)
+      ..setVec4('sky_wing', l.skyWing)
       ..setVec3('sun_direction', l.sunDirection.normalized())
       ..setColor('sun_color', l.sunColor)
       ..setFloat('sun_intensity', l.sunIntensity)

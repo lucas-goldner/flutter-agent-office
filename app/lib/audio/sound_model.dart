@@ -121,9 +121,10 @@ const List<(double, double, double)> gongPartials = [
 /// Where your ears are: in the office, where rain is muffled by the glass, in the garage, or out in it.
 enum Where { office, garage, out }
 
-Where whereIs(Pos l) {
+/// [wing] is how many rows the floor's back office is built out: in there you're indoors too.
+Where whereIs(Pos l, [int wing = 0]) {
   bool under(double m) => l.x > Floor.minX - m && l.x < Floor.maxX + m && l.z > Floor.minZ - m && l.z < Floor.maxZ + m;
-  if (under(0) && l.y > -0.5) return Where.office;
+  if ((under(0) || inWing(l.x, l.z, wing)) && l.y > -0.5) return Where.office;
   return under(0.3) ? Where.garage : Where.out;
 }
 

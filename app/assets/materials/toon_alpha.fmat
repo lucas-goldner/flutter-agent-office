@@ -32,6 +32,9 @@ material {
     // 0 on a map of its own (the castle, the station): no office walls or garage to fill with light
     // there, and the lamps' pools (its torches) light the whole hall.
     { type: float, name: office_on, default: 1 },
+    // The back office, when the floor's built out into one (world/office/wing.dart): minX, maxX,
+    // minZ, maxZ. Empty (1, 0, 1, 0) without.
+    { type: vec4, name: sky_wing, default: [1, 0, 1, 0] },
     { type: sampler2d, name: base_color_texture, hint: default_white },
   ],
 }
@@ -45,10 +48,15 @@ fragment {
     return 1.0;
   }
 
-  // Inside the office's walls (and up through its open top). Floor -18..18 x -13..13.
+  // Inside the office's walls (and up through its open top), or the back office's, up to its ceiling
+  // and no further: its roof, and the cornice over where the wall came down, are outdoors. Floor
+  // -18..18 x -13..13, the ceiling 6.8 up.
   float InOffice(vec3 p) {
     vec3 d = max(vec3(-18.02, -0.06, -13.02) - p, p - vec3(18.02, 40.0, 13.02));
-    return 1.0 - smoothstep(0.0, 0.12, length(max(d, 0.0)));
+    vec4 sw = material_params.sky_wing;
+    vec3 w = max(vec3(sw.x, -0.06, sw.z) - p, p - vec3(sw.y, 6.805, sw.w));
+    float wing = length(max(w, 0.0)) + step(6.805, p.y);
+    return 1.0 - smoothstep(0.0, 0.12, min(length(max(d, 0.0)), wing));
   }
 
   // Under the office: walled at the back and on the west, open to the street on the south and east.

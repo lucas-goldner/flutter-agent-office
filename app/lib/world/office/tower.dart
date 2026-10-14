@@ -16,6 +16,7 @@ import '../toon.dart';
 import 'geo.dart';
 import 'outside.dart';
 import 'parts.dart';
+import 'wing.dart' show wingPosts, wingWindows;
 
 /// The outside's planes stand this far off the walls, so they never fight the floor you're on for a pixel.
 const double _off = 0.01;
@@ -325,9 +326,76 @@ class Tower {
     }
   }
 
+  /// One floor's back office, [y0] up, from outside: its three walls round the bay (windows in the east
+  /// one), the band of its slab, and a roof over the rows the floor above doesn't cover, or an underside
+  /// under the ones the floor below doesn't.
+  void _bay(Node parts, double y0, int level, int above, int below) {
+    final back = wingMinZ(level) - wallT;
+    const west = Wing.minX - wallT;
+    const east = _B.maxX;
+    void plane(double w, double h, Material mat, double x, double y, double z, double rotY) {
+      if (w < 0.001 || h < 0.001) return;
+      parts.add(place(mesh(planeXY(w, h), mat, 0, 0, 0, false), x: x, y: y, z: z, rot: yaw(rotY)));
+    }
+
+    // Each wall: its band, then paint round its windows (along z on the side walls, x on the back).
+    void wall(double u0, double u1, List<Opening> holes, (double, double) Function(double u) at, double rotY) {
+      final (bx, bz) = at((u0 + u1) / 2);
+      plane((u1 - u0).abs(), slab, _band, bx, y0 - slab / 2, bz, rotY);
+      var u = math.min(u0, u1);
+      final end = math.max(u0, u1);
+      void piece(double a, double b, double y1, double y2) {
+        final (x, z) = at((a + b) / 2);
+        plane(b - a, y2 - y1, _paint, x, y0 + (y1 + y2) / 2, z, rotY);
+      }
+
+      for (final o in [...holes]..sort((a, b) => a.u.compareTo(b.u))) {
+        piece(u, o.u - o.width / 2, 0, wallHeight);
+        piece(o.u - o.width / 2, o.u + o.width / 2, 0, o.y0);
+        piece(o.u - o.width / 2, o.u + o.width / 2, o.y1, wallHeight);
+        u = o.u + o.width / 2;
+      }
+      piece(u, end, 0, wallHeight);
+    }
+
+    final windows = wingWindows(level);
+    wall(back, _B.minZ, const [], (z) => (west - _off, z), -math.pi / 2);
+    wall(back, _B.minZ, windows, (z) => (east + _off, z), math.pi / 2);
+    wall(west, east, const [], (x) => (x, back - _off), math.pi);
+    for (final o in windows) {
+      _glazing(parts, o, y0, false);
+    }
+    // Over (and under) the rows of it that the floor above's (and below's) back office doesn't cover.
+    void flat(int from, double y, bool up) {
+      if (from >= level) return;
+      final z0 = wingMinZ(level) - wallT;
+      final z1 = from > 0 ? wingMinZ(from) - wallT : _B.minZ;
+      parts.add(
+        place(
+          mesh(
+            transformed(planeXY(east - west, z1 - z0), rotX(up ? -math.pi / 2 : math.pi / 2)),
+            up ? _cornice : _concrete,
+            0,
+            0,
+            0,
+            false,
+          ),
+          x: (west + east) / 2,
+          y: y,
+          z: (z0 + z1) / 2,
+        ),
+      );
+    }
+
+    flat(above, y0 + wallHeight, true);
+    flat(below, y0 - slab, false);
+  }
+
   /// Builds the outside of every floor but [floorIndex], of [count] stacked from the bottom one (0).
   /// A [floorIndex] of [count] is the roof: every floor, below it, and no top (the roof is its own).
-  void set(int floorIndex, int count) {
+  /// [wings] is how far each floor's back office is built out (see Wing), yours included: the others'
+  /// are drawn, and all of them stand on posts down to the street.
+  void set(int floorIndex, int count, [List<int> wings = const []]) {
     _built?.detach();
     _built = null;
     for (final c in _mine) {
@@ -353,6 +421,16 @@ class Tower {
       }
       _glazing(parts, balconyDoor, y0, true);
       _balcony(parts, y0);
+      final wing = k < wings.length ? wings[k] : 0;
+      if (wing > 0) {
+        _bay(
+          parts,
+          y0,
+          wing,
+          k + 1 < count && k + 1 < wings.length ? wings[k + 1] : 0,
+          k > 0 && k - 1 < wings.length ? wings[k - 1] : 0,
+        );
+      }
       if (k == 0) {
         // Dark behind the exit door, through its porthole.
         parts.add(
@@ -386,10 +464,26 @@ class Tower {
       _crown(parts, top);
       _roofTop(parts, top + slab);
     }
+    // The back offices stand on posts down to the street: each row's, from under the lowest floor it's built on.
+    final street = streetY - floorIndex * storey;
+    final posts = <Collider>[];
+    for (var row = 1; row <= Wing.rows; row++) {
+      final lowest = wings.indexWhere((w) => w >= row);
+      if (lowest < 0 || lowest >= count) continue;
+      final top = (lowest - floorIndex) * storey - slab;
+      for (final p in wingPosts(row)) {
+        parts.add(mesh(cyl(0.14, 0.14, top - street, 10), _concrete, p.x, (top + street) / 2, p.z, false));
+        posts.add(
+          Collider(minX: p.x - 0.16, maxX: p.x + 0.16, minZ: p.z - 0.16, maxZ: p.z + 0.16, bottom: street, top: top),
+        );
+      }
+    }
     final merged = mergeByMaterial(parts);
     group.add(merged);
     _built = merged;
-    _mine.addAll(towerColliders(floorIndex, count));
+    _mine
+      ..addAll(towerColliders(floorIndex, count))
+      ..addAll(posts);
     _colliders.addAll(_mine);
   }
 }

@@ -47,6 +47,11 @@ final List<(String, String)> helpRows = [
     '⛳',
     'The golf tee on the balcony: E steps up, A/D aim, W/S loft, hold Space and let go to swing, E puts the club back',
   ),
+  ('L', 'Hang a big sign over the desk you face ("Operations", "Code cleanup"), or change or take down the one there'),
+  (
+    '🚧',
+    'Room to grow: E at the sign on the north wall past the gong knocks through into a back office with 2 more desks, and again for 2 more. The same sign walls a row back up',
+  ),
   (
     '🏎️',
     "The Lambos and Ferraris in the garage: E at one gets you behind the wheel, or beside whoever's driving it. W is the gas, S brakes and reverses, A and D steer, Space brakes, H honks and E gets you out. Everyone on your floor sees you drive by",

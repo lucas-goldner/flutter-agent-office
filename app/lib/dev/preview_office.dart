@@ -13,8 +13,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
+import 'package:office_shared/floorplan.dart' show DeskLabel;
 import 'package:office_shared/floors.dart';
 import 'package:office_shared/layout.dart' as lay;
+import 'package:office_shared/layout.dart' show deskBuilt;
 
 import '../ui/theme.dart';
 import '../world/labels.dart';
@@ -113,6 +115,20 @@ class _PreviewOfficeState extends State<PreviewOffice> {
       if (q['elevator'] == '1') o.elevator.setOpen(true);
       if (q['juke'] == '1') o.jukebox.show(true, 'Lo-fi beats to code to');
       if (q['dump'] == '1') debugPrint('DUMP ${_dump(o)}');
+      // &wing=1|2 builds the back office out that many rows, with a sign or two over the desks; &level=i,n
+      // stands the office on floor i of n (&wings=0,2,1 how far each one's built out).
+      final wing = int.tryParse(q['wing'] ?? '') ?? 0;
+      if (wing > 0) {
+        o.setWing(wing);
+        o.signs.set({
+          'desk-1': const DeskLabel(text: 'Operations', color: '#ffd166', by: 'Ada', at: 0),
+          'desk-9': const DeskLabel(text: 'Code cleanup', color: '#118ab2', by: 'Ada', at: 0),
+        }, (d) => deskBuilt(d, wing));
+      }
+      final level = q['level']?.split(',').map(int.parse).toList();
+      if (level != null && level.length == 2) {
+        o.setLevel(level[0], level[1], q['wings']?.split(',').map(int.parse).toList() ?? const []);
+      }
       if (q['roof'] == '1') {
         final r = roof = buildRooftop(o.night, labels);
         o.group.visible = false;

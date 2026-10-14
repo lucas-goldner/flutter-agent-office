@@ -50,7 +50,8 @@ abstract interface class RoofCity {
   Node get group;
 
   /// The building has [floors] floors under the roof: the street is as far down as that is tall.
-  void setFloors(int floors);
+  /// [wings] is how far each one's back office is built out.
+  void setFloors(int floors, [List<int> wings = const []]);
 
   /// [night] 0 by day to 1 at night: windows and streets light up.
   void update(double t, double dt, double night);
@@ -247,16 +248,20 @@ class Rooftop {
     // Only to look at: the crosshair and the name tags' line of sight go through it.
     _unpickable(city.group);
     group.add(city.group);
-    city.setFloors(_floors);
+    city.setFloors(_floors, _wings);
   }
 
   RoofCity? get city => _city;
 
   /// The building has [floors] floors under the roof: the street is as far down as that is tall.
-  void setFloors(int floors) {
+  /// [wings] is how far each one's back office is built out (see Wing).
+  void setFloors(int floors, [List<int> wings = const []]) {
     _floors = floors;
-    _city?.setFloors(floors);
+    _wings = wings;
+    _city?.setFloors(floors, wings);
   }
+
+  List<int> _wings = const [];
 
   /// The axe lane and the dart board, and what's thrown at them.
   late final BarGamesView games;

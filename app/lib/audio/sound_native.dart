@@ -575,7 +575,7 @@ class OfficeSound implements DogSounds {
   /// Rain: a hiss that's muffled indoors, and drops pattering on the windows or all around you.
   void _tickRain(double now) {
     if (_rain < 0.01 && _rainLevel < 1e-4) return;
-    final where = whereIs(_listener);
+    final where = whereIs(_listener, wing);
     for (final name in const ['office', 'garage', 'out']) {
       if (_rainVoices[name] == null && _bank['rain.$name'] != null) {
         final v = _play('rain.$name', gain: 0, loop: true, seek: _rand(0, 3));
@@ -619,7 +619,7 @@ class OfficeSound implements DogSounds {
     final e = _engine;
     if (e == null || !_ready) return;
     _count('thunder');
-    final peak = 0.45 * loud * (whereIs(_listener) == Where.office ? 0.6 : 1);
+    final peak = 0.45 * loud * (whereIs(_listener, wing) == Where.office ? 0.6 : 1);
     final crack = delay < 1;
     final asked = _t;
     unawaited(() async {
@@ -764,6 +764,9 @@ class OfficeSound implements DogSounds {
     _count('airlock.$what');
     _play('airlock.$what', at: Pos(x, y, z), ref: 3, rolloff: 1);
   }
+
+  /// How many rows the floor's back office is built out: in there you're indoors too.
+  int wing = 0;
 
   // ---- The cars in the garage (features/cars/sound.ts) ------------------------------------------
 

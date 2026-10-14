@@ -70,6 +70,8 @@ enum InteractKind {
   telescope,
   // One of the garage's cars (office/driving.dart).
   car,
+  // The "Room to grow" sign: build out the back office (world/office/wing.dart).
+  expand,
   // A map's herald, who sends out new workers (the castle's Hand of the King).
   herald,
 }

@@ -30,6 +30,7 @@ import 'package:office_shared/jukebox.dart';
 import 'package:office_shared/layout.dart' hide Elevator, Gong, Jukebox, Whiteboard;
 import 'package:office_shared/layout.dart' as lay show Elevator;
 import 'package:office_shared/garage.dart' show seatHips;
+import 'package:office_shared/floorplan.dart' show canLabel;
 import 'package:office_shared/palette.dart' show isPaletteKey;
 import 'package:office_shared/protocol.dart';
 import 'package:office_shared/rooftop.dart' show roof, roofName;
@@ -104,6 +105,7 @@ import 'interaction.dart';
 import 'needs_you.dart';
 import 'palette_entries.dart';
 import 'places_hub.dart';
+import '../ui/floorplan.dart';
 import 'roof.dart';
 import 'worlds.dart';
 import 'send_home.dart';
@@ -150,6 +152,7 @@ const Map<InteractKind, double> _reach = {
   InteractKind.darts: 4,
   InteractKind.axe: 5.5,
   InteractKind.car: 4,
+  InteractKind.expand: 8,
 };
 
 final Map<PhysicalKeyboardKey, DeskKey> _deskKeys = {
@@ -160,6 +163,7 @@ final Map<PhysicalKeyboardKey, DeskKey> _deskKeys = {
   PhysicalKeyboardKey.keyB: DeskKey.b,
   PhysicalKeyboardKey.keyC: DeskKey.c,
   PhysicalKeyboardKey.keyO: DeskKey.o,
+  PhysicalKeyboardKey.keyL: DeskKey.l,
 };
 
 class _Remote {
@@ -281,7 +285,7 @@ class OfficeController implements OfficeActions {
     sounds: _SendoffSounds(this),
     onUp: (deskId) {
       final desk = world.desks[deskId];
-      if (desk != null && store.workerAtDesk(deskId) == null) desk.vacancy.visible = true;
+      if (desk != null && store.workerAtDesk(deskId) == null) desk.vacancy.visible = seatBuilt(deskId);
       _arrangeBeanbags();
     },
     world: () => world,
@@ -425,7 +429,7 @@ class OfficeController implements OfficeActions {
     office = buildOffice(labels: labels);
     root.add(office.group);
     worlds = Worlds(
-      theOffice: OfficeWorld(office, () => office.stack.state.index > 0, () => 0),
+      theOffice: OfficeWorld(office, () => office.stack.state.index > 0, officeWing),
       labels: labels,
       parent: root,
       footstep: (x, y, z) => sound.stepAt(x, z, y),
@@ -494,7 +498,7 @@ class OfficeController implements OfficeActions {
     root.add(dog.root);
     departures = Departures(root, groundHere, (x, y, z) => sound.stepAt(x, z, y), (deskId) {
       final desk = world.desks[deskId];
-      if (desk != null && store.workerAtDesk(deskId) == null) desk.vacancy.visible = true;
+      if (desk != null && store.workerAtDesk(deskId) == null) desk.vacancy.visible = seatBuilt(deskId);
       _arrangeBeanbags();
     }, ways: () => world.ways);
     // A click on a worker's notification: over to its desk, with its terminal open to answer it.
@@ -558,6 +562,7 @@ class OfficeController implements OfficeActions {
     _listen(Topic.jail, _syncJail);
     registerMapSettings();
     _listen(Topic.floors, _syncStack);
+    _listen(Topic.floorPlan, _syncPlan);
     _listen(Topic.dog, () => dog.sync(store.dog, store.dogStart));
     _listen(Topic.jukebox, _syncJukebox);
     _listen(Topic.sky, () {
@@ -711,7 +716,11 @@ class OfficeController implements OfficeActions {
           final inRoom =
               inOffice ||
               (mine.x > b.minX + 0.3 && mine.x < b.maxX - 0.3 && mine.z > b.minZ + 0.3 && mine.z < b.maxZ - 0.3);
-          if (sameMap && inRoom && !(inOffice && inElevator(mine.x, mine.z)) && player.fits(mine.x, mine.z, mine.y)) {
+          final past = pastTheWing((x: mine.x, y: mine.y, z: mine.z), store.floorPlan.wing);
+          if (sameMap &&
+              inRoom &&
+              !(inOffice && (inElevator(mine.x, mine.z) || past)) &&
+              player.fits(mine.x, mine.z, mine.y)) {
             _placeAt((x: mine.x, y: mine.y, z: mine.z, rotY: mine.rotY));
             _arrive(back: true);
           } else {
@@ -1399,13 +1408,74 @@ class OfficeController implements OfficeActions {
     final down = index > 0 ? floors[index - 1].name : null;
     final next =
         _devLevel ?? StackState(index: math.max(0, index), count: index < 0 ? 1 : floors.length, up: up, down: down);
-    if (next == office.stack.state) return;
-    office.stack.set(next);
-    // The building is as tall as there are floors, with the street as far down as this one is up.
-    office.setLevel(next.index, next.count);
+    final wings = roofHub.floorWings();
+    final same = next == office.stack.state;
+    if (same && wings.join() == _wingsShown) return;
+    _wingsShown = wings.join();
+    roofHub.syncFloors();
+    if (!same) office.stack.set(next);
+    // The building is as tall as there are floors, with the street as far down as this one is up, and each
+    // floor's back office as far as it's built out.
+    office.setLevel(next.index, next.count, wings);
     // The holiday decorations out on the street go down with it.
     holiday.setStreetDrop(next.index * storey);
     if (inOffice) player.street = streetBelow(next.index);
+  }
+
+  /// How far each floor's back office was built out, the last time the building's outside was.
+  String _wingsShown = '';
+
+  /// The floor plan last shown, to tell someone knocking through from arriving on a floor already built
+  /// out (or back on the office's map).
+  ({String? floor, String map, int wing}) _shownPlan = (floor: null, map: officeMap, wing: 0);
+
+  /// How many rows the office's back office is built out where you are: the floor's plan in the office,
+  /// none on the roof or on a map of its own (its hall is its own shape).
+  int officeWing() => inOffice && store.floor != roof ? store.floorPlan.wing : 0;
+
+  /// Whether seat [id] is there to sit at on this floor: a back office desk only once the floor's built
+  /// out that far, on whichever map.
+  bool seatBuilt(String id) {
+    final d = wingDesks.where((d) => d.id == id).firstOrNull;
+    return d == null || deskBuilt(d, store.floorPlan.wing);
+  }
+
+  /// Standing where a back office would be, further back than this floor's goes ([level] rows): a row
+  /// walled up round you, or a floor you switched to that isn't built out as far as the one you left.
+  static bool pastTheWing(({double x, double y, double z}) p, int level) =>
+      p.y > -1 &&
+      p.y < 3 &&
+      p.x > Wing.minX - 0.3 &&
+      p.x < Wing.maxX + 0.3 &&
+      p.z < Floor.minZ &&
+      !inWing(p.x, p.z, level);
+
+  /// The floor's back office, as far as it's built out, and the signs over its desks. Everything that
+  /// finds its way round the floor learns how far it goes; a row knocked through goes up in a puff of
+  /// dust, and anyone standing past where it goes now steps back in first.
+  void _syncPlan() {
+    final fp = store.floorPlan;
+    final level = officeWing();
+    final was = _shownPlan;
+    _shownPlan = (floor: store.floor, map: plan.id, wing: level);
+    final p = player.pos;
+    if (inOffice && pastTheWing((x: p.x, y: p.y, z: p.z), level)) {
+      // Out to the side aisle of what's left, or back into the room.
+      final side = p.x < (Wing.minX + Wing.maxX) / 2 ? Wing.minX + 0.6 : Wing.maxX - 0.6;
+      p.setValues(level > 0 ? side : p.x, 0, level > 0 ? wingMinZ(level) + 0.6 : Floor.minZ + 1.6);
+    }
+    office.setWing(level);
+    office.signs.set(fp.labels, (d) => deskBuilt(d, level));
+    player.wing = level;
+    sound.wing = level;
+    skyView.setWing(level);
+    _syncStack();
+    _arrangeBeanbags();
+    if (was.floor == store.floor && was.map == _shownPlan.map && level > was.wing) {
+      final at = (x: (Wing.minX + Wing.maxX) / 2, y: 1.2, z: wingRowZ(level));
+      confetti.burst(at.x, 2.4, at.z, 140, 0.8);
+      sound.toss(TossSound.thunk, at.x, at.y, at.z);
+    }
   }
 
   /// What the hint says while you're on the ladder or a pole.
@@ -1633,7 +1703,7 @@ class OfficeController implements OfficeActions {
     }
     places.placeChanged();
     _paintFloor();
-    _syncStack();
+    _syncPlan();
     world.setProjectName(store.project?.name ?? 'Agent Office');
     // Up the ladder or down the pole: carry on the rest of the way on this floor.
     final c = _climbing;
@@ -1886,7 +1956,7 @@ class OfficeController implements OfficeActions {
   /// The corners of a walk from [from] to [to] on the building's map: round the office (and up its stairs),
   /// or round a map of its own's hall (and down to its dungeon).
   List<Corner> _wayTo(WalkSpot from, WalkSpot to) {
-    if (inOffice) return wayTo(from, to);
+    if (inOffice) return wayTo(from, to, officeWing());
     final d = world.dungeon;
     final hall = world.nav;
     final Pt a = (from.x, from.z), b = (to.x, to.z);
@@ -2247,7 +2317,7 @@ class OfficeController implements OfficeActions {
         v.laptop.root.detach();
         v.model.dispose();
         v.laptop.dispose();
-        if (desk != null) desk.vacancy.visible = true;
+        if (desk != null) desk.vacancy.visible = seatBuilt(desk.def.id);
       }
       sound.removeTypist(id);
     }
@@ -2290,10 +2360,10 @@ class OfficeController implements OfficeActions {
   String? _heraldSeat() {
     final now = nowMs();
     _heraldHires.removeWhere((_, at) => now - at > _heraldWait);
-    return [
-      ...plan.desks,
-      ...plan.overflow,
-    ].where((d) => store.workerAtDesk(d.id) == null && !_heraldHires.containsKey(d.id)).firstOrNull?.id;
+    return [...plan.desks, ...plan.overflow]
+        .where((d) => seatBuilt(d.id) && store.workerAtDesk(d.id) == null && !_heraldHires.containsKey(d.id))
+        .firstOrNull
+        ?.id;
   }
 
   /// Where a worker just hired comes in from, running to its seat: the herald, the doors (off the queue),
@@ -2345,7 +2415,10 @@ class OfficeController implements OfficeActions {
   /// Once every desk is taken, bean bags come out for the workers who don't fit.
   void _arrangeBeanbags() {
     final appeared = world.setBeanbags(
-      beanbagsOut((id) => store.workerAtDesk(id) != null || departures.seated(id) || sendoffs.seated(id)),
+      beanbagsOut(
+        (id) => store.workerAtDesk(id) != null || departures.seated(id) || sendoffs.seated(id),
+        store.floorPlan.wing,
+      ),
     );
     // One came out right where you're standing: you end up on top of it.
     final p = player.pos;
@@ -2376,7 +2449,7 @@ class OfficeController implements OfficeActions {
     String? best;
     var bestD = double.infinity;
     for (final d in plan.desks) {
-      if (store.workerAtDesk(d.id) != null) continue;
+      if (store.workerAtDesk(d.id) != null || !seatBuilt(d.id)) continue;
       final dist = math.sqrt(math.pow(d.x - player.pos.x, 2) + math.pow(d.z - player.pos.z, 2));
       if (dist < bestD) {
         bestD = dist;
@@ -2385,7 +2458,7 @@ class OfficeController implements OfficeActions {
     }
     return best ??
         (inOffice
-            ? nextFreeSeat((id) => store.workerAtDesk(id) != null)?.id
+            ? nextFreeSeat((id) => store.workerAtDesk(id) != null, store.floorPlan.wing)?.id
             : plan.overflow.where((d) => store.workerAtDesk(d.id) == null).firstOrNull?.id);
   }
 
@@ -2879,6 +2952,9 @@ class OfficeController implements OfficeActions {
       final deskId = target.deskId!;
       final w = store.workerAtDesk(deskId);
       switch (key) {
+        case DeskKey.l:
+          openDeskLabel(scope, deskId);
+          return;
         case DeskKey.b when w == null:
           return _openShell(deskId);
         case DeskKey.p:
@@ -2942,6 +3018,8 @@ class OfficeController implements OfficeActions {
         hanger.view(target.decorId!);
       case InteractKind.whiteboard:
         whiteboard.open();
+      case InteractKind.expand:
+        openExpand(scope);
       case InteractKind.ladder:
         _grabLadder();
       case InteractKind.pole when target.pole != null:
@@ -3490,17 +3568,41 @@ class OfficeController implements OfficeActions {
           InteractKind.axe ||
           InteractKind.car:
         return ('', []);
+      case InteractKind.expand:
+        final level = store.floorPlan.wing;
+        if (level >= Wing.rows) {
+          return (
+            'full',
+            [
+              const HintTitle('🏢 Back office'),
+              const HintAside('built all the way out'),
+              const HintKey('E', 'Wall a row up'),
+            ],
+          );
+        }
+        return (
+          '$level',
+          [
+            HintTitle(level > 0 ? '🚧 Room to grow' : '🚧 Room to grow through the wall'),
+            HintAside(level > 0 ? '$level of ${Wing.rows} rows built' : 'the office can get bigger here'),
+            HintKey('E', level > 0 ? 'Another row: 2 more desks' : 'Knock through: 2 more desks'),
+          ],
+        );
     }
   }
 
   (String, List<HintPart>) _deskHint(String deskId) {
     final w = store.workerAtDesk(deskId);
+    // The sign over it, if it has one, and L to hang one (or change it).
+    final sign = store.floorPlan.labels[deskId]?.text;
+    final labelKey = [if (canLabel(deskId)) HintKey('L', sign != null ? 'Sign' : 'Label')];
+    final signed = sign != null ? '🪧 $sign · ' : '';
     if (w == null) {
       final paused = hiringPaused(store.usage);
       return (
-        '$paused',
+        '$paused|$sign',
         [
-          HintTitle('${plan.byId[deskId]!.label} · empty'),
+          HintTitle('$signed${plan.byId[deskId]!.label} · empty'),
           if (paused)
             const HintCost('💸 Budget spent — hiring resumes tomorrow')
           else ...[
@@ -3508,6 +3610,7 @@ class OfficeController implements OfficeActions {
             const HintKey('P', 'Hire with a task'),
           ],
           const HintKey('B', 'Shell'),
+          ...labelKey,
         ],
       );
     }
@@ -3527,9 +3630,9 @@ class OfficeController implements OfficeActions {
     final spent = w.kind == WorkerKind.agent && w.usage != null ? usageLabel(w.usage!, provider) : '';
     final shell = w.kind == WorkerKind.shell;
     return (
-      '${w.status}${w.id}${w.pr?.number ?? ''}${w.repos?.map((r) => r.pr?.number ?? '-').join(',') ?? ''}${w.prOpening == true ? '!' : ''}$doing$spent',
+      '${w.status}${w.id}${w.pr?.number ?? ''}${w.repos?.map((r) => r.pr?.number ?? '-').join(',') ?? ''}${w.prOpening == true ? '!' : ''}$doing$spent${sign ?? ''}',
       [
-        HintTitle('${w.name} · ${statusLabel(w.status)}'),
+        HintTitle('$signed${w.name} · ${statusLabel(w.status)}'),
         if (doing.isNotEmpty) HintAside(doing),
         if (spent.isNotEmpty) HintCost(spent, tooltip: usageTitle(w.usage!, provider)),
         const HintKey('E', 'Open terminal'),

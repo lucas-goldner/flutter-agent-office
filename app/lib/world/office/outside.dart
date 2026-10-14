@@ -403,7 +403,8 @@ void buildStreet(Node group, NightParts night, Node sky) {
     (30.0, 6.0, 1.25),
     (-12.0, -22.0, 1.2),
     (4.0, -24.0, 1.0),
-    (18.0, -21.0, 1.1),
+    // Clear of the back office, when a floor's built out into one (see Wing).
+    (23.0, -19.0, 1.1),
   ];
   for (final (x, z, s) in trees) {
     forest.add(place(_tree(s), x: x, y: _g, z: z, scale: s));

@@ -10,6 +10,7 @@ import '../interop/browser.dart';
 import 'package:office_shared/avatar.dart';
 import 'package:office_shared/decor.dart';
 import 'package:office_shared/dog.dart';
+import 'package:office_shared/floorplan.dart';
 import 'package:office_shared/jukebox.dart';
 import 'package:office_shared/maps/maps.dart';
 import 'package:office_shared/protocol.dart';
@@ -63,6 +64,8 @@ enum Topic {
   // dungeon's prisoners, or the ones adrift outside its airlock).
   map,
   jail,
+  // The signs over the desks, and how far the back office is built out (the floor's own plan).
+  floorPlan,
 }
 
 /// Where someone is right now. peer.move updates it in place; the frame loop eases toward it.
@@ -327,6 +330,9 @@ class Store {
   /// Workers sent home and kept on this floor (locked up in its dungeon, or adrift outside its airlock).
   JailState jail = const JailState();
 
+  /// The signs over the desks, and how far the back office is built out (not the map's plan: see plan()).
+  FloorPlan floorPlan = emptyPlan;
+
   /// The games and rooms on your floor: the cabinet, the ball, the meeting room, the machine monitor.
   final Rooms rooms = Rooms();
 
@@ -399,6 +405,7 @@ class Store {
     whiteboard = {for (final e in v.whiteboard.elements) e.id: e};
     drawing = v.whiteboard.people;
     jail = v.jail;
+    floorPlan = v.plan;
     _setDog(v.dog);
     _setJukebox(v.jukebox);
     for (final t in [
@@ -415,6 +422,7 @@ class Store {
       Topic.whiteboard,
       Topic.drawing,
       Topic.jail,
+      Topic.floorPlan,
     ]) {
       emit(t);
     }
@@ -485,6 +493,9 @@ class Store {
       case FloorsMsg m:
         floors = m.floors;
         emit(Topic.floors);
+      case PlanMsg m:
+        floorPlan = m.plan;
+        emit(Topic.floorPlan);
       case FloorReposMsg m:
         repos = (list: m.repos, error: m.error, loading: false, at: DateTime.now().millisecondsSinceEpoch);
         emit(Topic.repos);

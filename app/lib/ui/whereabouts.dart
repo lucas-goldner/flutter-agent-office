@@ -36,6 +36,8 @@ String? whereabouts(PeerInfo p, [MapPlan? plan, ({int car, CarSeat seat})? car])
   if (!office) return null;
   // The roof is the office's size, but none of its rooms are up there.
   if (p.floor == roof) return roofWhereabouts(p.x, p.z);
+  // Through the north wall in the back office: nobody gets there unless the floor's built out.
+  if (p.y > -1 && inWing(p.x, p.z, Wing.rows)) return '🏗️ in the back office';
   // Down on the street, or out the back door on the stairs down to it.
   if (p.y < -1 || p.x < Floor.minX || p.x > Floor.maxX || p.z < Floor.minZ) return '🚶 outside';
   if (p.z > Floor.maxZ) return p.x >= Balcony.minX && p.x <= Balcony.maxX ? '🌇 on the balcony' : '🚶 outside';

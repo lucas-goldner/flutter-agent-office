@@ -126,13 +126,26 @@ class RoofHub {
     final below = world?.call();
     (below?.group ?? office.group).visible = !up;
     r?.group.visible = up;
-    if (up) r!.setFloors(math.max(1, store.floors.length));
+    if (up) syncFloors();
     player.colliders = up ? r!.colliders : (below?.colliders ?? office.colliders);
     sound.setOutdoors(up);
     sound.setDj(up ? djAt : null);
     // Drinks stay at the bar (what you've had comes down with you).
     if (!up) booze.putDown();
     return true;
+  }
+
+  /// How far each floor's back office is built out, for the building's outside (the one you're on as you see it).
+  List<int> floorWings() => [
+    for (final f in store.floors)
+      if (f.cloning != true) f.id == store.floor ? store.floorPlan.wing : f.wing,
+  ];
+
+  /// The building under the roof: as many floors as it has, each built out as far as it is.
+  void syncFloors() {
+    final r = rooftop;
+    if (!upTop || r == null) return;
+    r.setFloors(math.max(1, store.floors.length), floorWings());
   }
 
   /// The elevator where you are: the office's, or the one up on the roof.

@@ -14,7 +14,7 @@ import 'package:office_shared/layout.dart';
 import 'office/outside.dart' show NightParts;
 import 'sky_model.dart';
 import 'text.dart' show verticalPlane;
-import 'toon.dart' show hex;
+import 'toon.dart' show Toon, hex;
 
 /// The furthest off the haze ever is, however high up you are: past that nothing's built (the grass
 /// and the road round the office end there, the city round the roof just past it), so it hides that.
@@ -126,7 +126,30 @@ class SkyView {
   /// Out in space (a world that draws its own sky): no sun, moon or stars of the office's.
   bool space = false;
 
-  bool _shelter(double x, double z) => indoors || (!roof && _sheltered(x, z));
+  bool _shelter(double x, double z) => indoors || (!roof && (_sheltered(x, z) || _inWing(x, z)));
+
+  /// The back office, walls included, when the floor you're on is built out into one (see [setWing]).
+  ({double minX, double maxX, double minZ, double maxZ})? _wingBox;
+
+  bool _inWing(double x, double z) {
+    final w = _wingBox;
+    return w != null && x > w.minX - 0.05 && x < w.maxX + 0.05 && z > w.minZ - 0.05 && z < w.maxZ;
+  }
+
+  /// The floor you're on is built out [level] rows into the back office (see Wing): lit like the office
+  /// inside, and out of the rain.
+  void setWing(int level) {
+    final minZ = wingMinZ(level);
+    _wingBox = level > 0
+        ? (minX: Wing.minX - wallT, maxX: Wing.maxX + wallT, minZ: minZ - wallT, maxZ: Floor.minZ)
+        : null;
+    final sw = Toon.light.skyWing;
+    if (level > 0) {
+      sw.setValues(Wing.minX - 0.02, Wing.maxX + 0.02, minZ - 0.02, Floor.minZ);
+    } else {
+      sw.setValues(1, 0, 1, 0);
+    }
+  }
 
   late final Node _stars, _sun, _moon, _haloNode, _rainNode, _snowNode;
   late final UnlitMaterial _starMat, _sunMat, _moonMat, _haloMat, _rainMat, _snowMat;

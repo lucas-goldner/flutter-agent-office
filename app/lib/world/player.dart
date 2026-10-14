@@ -126,6 +126,9 @@ class PlayerController {
   /// each frame, with no walking, falling or bumping into things, and the camera follows.
   void Function(double dt)? rig;
 
+  /// How many rows the floor's back office is built out (see Wing): the camera keeps inside it too.
+  int wing = 0;
+
   /// Held by a car you're in (office/driving.dart), rather than the ladder or a pole: the camera keeps
   /// to where you are, as on your feet.
   bool riding = false;
@@ -400,12 +403,17 @@ class PlayerController {
     // On the ladder or a pole you can be down in a shaft under the floor, but you're still indoors.
     final rigged = rig != null && !riding;
     final under = pos.x > r.minX && pos.x < r.maxX && pos.z > r.minZ && pos.z < r.maxZ;
-    final indoors = (rigged || pos.y > -slab - 0.5) && under;
+    // In the office's back office, between its walls, and out through where the north wall was into the room.
+    final back = !r.enclosed && pos.y > -slab - 0.5 && inWing(pos.x, pos.z, wing);
+    final indoors = ((rigged || pos.y > -slab - 0.5) && under) || back;
     // Down in a room under the floor (the castle's dungeon): the camera keeps inside that.
     final v = r.vault;
     if (v != null && pos.y < v.top - 0.5 && pos.x > v.minX && pos.x < v.maxX && pos.z > v.minZ && pos.z < v.maxZ) {
       cam.x = cam.x.clamp(v.minX + m, v.maxX - m);
       cam.z = cam.z.clamp(v.minZ + m, v.maxZ - m);
+    } else if (back) {
+      cam.x = cam.x.clamp(Wing.minX + m, Wing.maxX - m);
+      cam.z = cam.z.clamp(wingMinZ(wing) + m, Floor.maxZ - m);
     } else if (indoors) {
       cam.x = cam.x.clamp(r.minX + m, r.maxX - m);
       cam.z = cam.z.clamp(r.minZ + m, r.maxZ - m);

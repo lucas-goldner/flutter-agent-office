@@ -26,7 +26,9 @@ final Map<_Zone, List<Corner>> _wayDown = {
   _Zone.outside: const [],
 };
 
-_Zone _zoneOf(WalkSpot p) {
+_Zone _zoneOf(WalkSpot p, int wing) {
+  // The back office is more of the office floor, through where the north wall was.
+  if (p.y > -1 && p.y < 0.5 && inWing(p.x, p.z, wing)) return _Zone.floor;
   if (p.y < -1 || p.x < Floor.minX || p.x > Floor.maxX || p.z < Floor.minZ) return _Zone.outside;
   if (p.z > Floor.maxZ) return p.x >= Balcony.minX && p.x <= Balcony.maxX ? _Zone.balcony : _Zone.outside;
   if (p.x > Loft.minX && p.z > Loft.minZ && p.y > Loft.y - 0.5) return _Zone.loft;
@@ -35,9 +37,10 @@ _Zone _zoneOf(WalkSpot p) {
   return _Zone.floor;
 }
 
-/// The corners of a walk from [from] to [to], [to] included when it's somewhere you can stand.
-List<Corner> wayTo(WalkSpot from, WalkSpot to) {
-  final a = _zoneOf(from), b = _zoneOf(to);
+/// The corners of a walk from [from] to [to], [to] included when it's somewhere you can stand, on a
+/// floor built out [wing] rows into the back office.
+List<Corner> wayTo(WalkSpot from, WalkSpot to, [int wing = 0]) {
+  final a = _zoneOf(from, wing), b = _zoneOf(to, wing);
   final end0 = (x: to.x, z: to.z);
   // Across the same room upstairs or on the balcony, or somewhere the office has no map of: straight there.
   if ((a == b && a != _Zone.floor) || a == _Zone.outside || b == _Zone.outside) return [end0];
@@ -48,6 +51,6 @@ List<Corner> wayTo(WalkSpot from, WalkSpot to) {
   final start = out.isNotEmpty ? out.last : (x: from.x, z: from.z);
   final end = into.isNotEmpty ? into.first : end0;
   // Across the office floor; route stops at the nearest place to stand if they're in a chair or on the couch.
-  final across = [for (final (x, z) in route((start.x, start.z), (end.x, end.z)).skip(1)) (x: x, z: z)];
+  final across = [for (final (x, z) in route((start.x, start.z), (end.x, end.z), wing).skip(1)) (x: x, z: z)];
   return [...out, ...across, ...into.skip(1), if (b != _Zone.floor) end0];
 }

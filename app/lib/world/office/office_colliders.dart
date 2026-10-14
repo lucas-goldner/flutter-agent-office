@@ -49,7 +49,8 @@ WallsPlan wallsPlan([List<Opening>? openings]) {
   final plan = WallsPlan();
   const t = wallT;
   final walls = <(Side, double, List<(double, double, double)>)>[
-    (Side.north, Floor.minZ - t / 2, [(Floor.minX - t, Floor.maxX + t, wallHeight)]),
+    // The north wall stops at the back office, whose own bit of wall (wing.dart's plug) comes down for it.
+    (Side.north, Floor.minZ - t / 2, [(Floor.minX - t, Wing.minX, wallHeight)]),
     (Side.south, Floor.maxZ + t / 2, [(Floor.minX - t, Floor.maxX + t, wallHeight)]),
     (Side.west, Floor.minX - t / 2, [(Floor.minZ, Floor.maxZ, wallHeight)]),
     (Side.east, Floor.maxX + t / 2, [(Floor.minZ, Floor.maxZ, wallHeight)]),
@@ -348,7 +349,11 @@ List<Collider> kitchenColliders() => [
 /// Plants around the room (x, z, scale).
 const List<(double, double, double)> roomPlants = plants;
 
-List<Collider> plantColliders() => [for (final (x, z, s) in roomPlants) _plant(x, z, s)];
+/// The plants' colliders, but for those by the back office: office.dart's own, put away while it's built.
+List<Collider> plantColliders() => [
+  for (final (x, z, s) in roomPlants)
+    if (!plantByWing((x, z, s))) _plant(x, z, s),
+];
 
 /// The loft's measurements that the building and the colliders share.
 abstract final class LoftPlan {

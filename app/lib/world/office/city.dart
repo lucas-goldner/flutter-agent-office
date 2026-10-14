@@ -401,6 +401,7 @@ class City implements RoofCity {
   final List<_Car> _cars = [];
   late final InstancedMesh _carMesh, _heads, _tails;
   int _floorsNow = 0;
+  String _wingsNow = '';
   double _riseNow = -1;
 
   void _build() {
@@ -470,7 +471,8 @@ class City implements RoofCity {
       (6.0, 18.0),
       (16.0, 18.0),
       (-20.0, -18.0),
-      (20.0, -18.0),
+      // Clear of the back office, when a floor's built out into one (see Wing).
+      (21.0, -20.0),
     ]) {
       parks.add(place(_tree(r), x: x, z: z));
     }
@@ -668,14 +670,17 @@ class City implements RoofCity {
 
   /// The building has [floors] floors under the roof: the street goes as far down as that is tall,
   /// and the buildings nearby come down to stay under the roof.
+  /// [wings] is how far each floor's back office is built out.
   @override
-  void setFloors(int floors) {
+  void setFloors(int floors, [List<int> wings = const []]) {
     floors = math.max(1, floors);
+    if (floors == _floorsNow && wings.join() == _wingsNow) return;
+    _wingsNow = wings.join();
+    _building.set(floors, floors, wings);
     if (floors == _floorsNow) return;
     _floorsNow = floors;
     final drop = roofDrop(floors);
     _street.position = vm.Vector3(0, -drop, 0);
-    _building.set(floors, floors);
     // The buildings only change height up to six floors (see cityRise).
     final k = math.min(1.0, drop / _laidOut);
     if (k != _riseNow) {

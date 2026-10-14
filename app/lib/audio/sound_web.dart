@@ -744,7 +744,7 @@ class OfficeSound implements DogSounds {
     final rain = _rain;
     if (rain < 0.01 && _rainNodes == null) return;
     final ctx = _ctx!;
-    final where = whereIs(_listener);
+    final where = whereIs(_listener, wing);
     var nodes = _rainNodes;
     if (nodes == null) {
       final src = _noise(_buf.white, loop: true);
@@ -776,7 +776,7 @@ class OfficeSound implements DogSounds {
     if (ctx == null || (ctx.state != 'running' && !_offline)) return;
     _count('thunder');
     final t0 = ctx.currentTime + delay;
-    final peak = 0.45 * loud * (whereIs(_listener) == Where.office ? 0.6 : 1);
+    final peak = 0.45 * loud * (whereIs(_listener, wing) == Where.office ? 0.6 : 1);
     final src = _noise(_buf.brown, loop: true);
     final tone = biquad(ctx, 'lowpass', 700, 0.7);
     tone.frequency.setValueAtTime(700, t0);
@@ -1343,6 +1343,9 @@ class OfficeSound implements DogSounds {
     o.start(when);
     o.stop(when + len + 0.02);
   }
+
+  /// How many rows the floor's back office is built out: in there you're indoors too.
+  int wing = 0;
 
   // ---- The cars in the garage (features/cars/sound.ts) ------------------------------------------
 

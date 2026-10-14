@@ -19,6 +19,8 @@ import '../toon.dart';
 import 'cars.dart';
 import 'elevator.dart';
 import 'fleet.dart';
+import 'wing.dart';
+import '../desk_signs.dart';
 import 'geo.dart';
 import 'gong.dart';
 import 'jukebox.dart';
@@ -86,6 +88,9 @@ class Office {
     required this.elevator,
     required this.garageLift,
     required this.fleet,
+    required this.wing,
+    required this.signs,
+    required this.plantsByWing,
     required this.gong,
     required this.jukebox,
     required this.whiteboard,
@@ -99,7 +104,7 @@ class Office {
   /// You're on floor [index] of a building [count] floors tall (0 is the bottom one): the rest of the
   /// building goes up over you and down under you, the street that many storeys down, and only the
   /// bottom floor has its exit door.
-  void setLevel(int index, int count) {
+  void setLevel(int index, int count, [List<int> wings = const []]) {
     final l = _level;
     final drop = index * storey;
     l.ground.position = vm.Vector3(0, -drop, 0);
@@ -115,7 +120,7 @@ class Office {
     final has = colliders.contains(l.plug.collider);
     if (index > 0 && !has) colliders.add(l.plug.collider);
     if (index == 0 && has) colliders.remove(l.plug.collider);
-    l.tower.set(index, count);
+    l.tower.set(index, count, wings);
     garageLift.setFloor(streetBelow(index));
     fleet.setStreet(streetBelow(index));
   }
@@ -140,6 +145,28 @@ class Office {
 
   /// The Lambos and Ferraris in the garage, which anyone can drive (see office/driving.dart).
   final Fleet fleet;
+
+  /// The back office through the north wall, as far as this floor's built out (see Wing).
+  final WingView wing;
+
+  /// The signs hung over the desks (see shared floorplan.dart).
+  final DeskSigns signs;
+
+  /// The plants in the way into the back office, and their colliders.
+  final List<({Node group, Collider collider})> plantsByWing;
+
+  /// Builds the back office out [level] rows, or walls it up: the plants in the way go too.
+  void setWing(int level) {
+    wing.set(level);
+    final out = wing.level == 0;
+    for (final p in plantsByWing) {
+      if (p.group.visible == out) continue;
+      p.group.visible = out;
+      final has = colliders.contains(p.collider);
+      if (out && !has) colliders.add(p.collider);
+      if (!out && has) colliders.remove(p.collider);
+    }
+  }
 
   /// The merge gong by the PR board.
   final Gong gong;
@@ -588,7 +615,16 @@ Office buildOffice({required LabelHub labels}) {
   // Plants around the room: the pots with the decor, the leaves on their own, so holiday.dart can
   // trim them into Christmas trees.
   final leaves = Node(name: 'plant-leaves');
+  // The ones in the way into the back office stand on their own, to put away while it's built.
+  final byWing = <({Node group, Collider collider})>[];
   for (final (x, z, s) in roomPlants) {
+    if (plantByWing((x, z, s))) {
+      final p = place(plant(s), x: x, z: z, scale: s);
+      group.add(p);
+      final r = 0.3 * s;
+      byWing.add((group: p, collider: Collider(minX: x - r, maxX: x + r, minZ: z - r, maxZ: z + r, top: 0.5 * s)));
+      continue;
+    }
     final pot = place(plant(s), x: x, z: z, scale: s);
     final leaf = place(plant(s), x: x, z: z, scale: s);
     for (final c in pot.children.skip(1).toList()) {
@@ -642,6 +678,26 @@ Office buildOffice({required LabelHub labels}) {
   fixture(Side.east, LoftPlan.cz, Loft.y + 0.5, 2.4, 1);
   fixture(Side.south, Loft.maxX - 3, Loft.y + 1.9, 2.6, 0.6);
 
+  // The back office through the north wall past the gong, walled up until the floor's built out.
+  final wing = buildWing(
+    group: group,
+    colliders: colliders,
+    interactables: interactables,
+    looks: looks,
+    planks: planks,
+    ceiling: stack.ceiling,
+    night: night,
+    desk: (def, i) {
+      final view = _buildDesk(def, i, looks.trim);
+      desks[def.id] = view;
+      return (group: view.group, vacancy: view.vacancy);
+    },
+  );
+  fixture(Side.north, (Wing.minX + Floor.maxX) / 2, wallHeight / 2, Floor.maxX - Wing.minX, wallHeight);
+  // The signs over the desks.
+  final signs = DeskSigns();
+  group.add(signs.group);
+
   group.add(mergeByMaterial(decor));
   looks.paintPlanks(floorPalettes[0]);
   return Office._(
@@ -659,6 +715,9 @@ Office buildOffice({required LabelHub labels}) {
       elevator: elevator,
       garageLift: garageLift,
       fleet: fleet,
+      wing: wing,
+      signs: signs,
+      plantsByWing: byWing,
       gong: gong,
       jukebox: jukebox,
       whiteboard: whiteboard,
@@ -666,6 +725,7 @@ Office buildOffice({required LabelHub labels}) {
       stack: stack,
       level: _Level(ground, [for (final c in groundCs) (c, c.top, c.bottom ?? 0)], exit.door, plug, tower),
     )
+    ..colliders.addAll([for (final p in byWing) p.collider])
     ..plantLeaves = plantLeaves
     ..setLevel(0, 1);
 }
