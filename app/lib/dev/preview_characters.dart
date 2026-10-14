@@ -151,13 +151,14 @@ class _PreviewState extends State<_Preview> {
       w.root.position = vm.Vector3(-6 + i * 2.0, 0, -1.5);
       final s = statuses[i];
       w.setStatus(s, s == WorkerStatus.needsInput || s == WorkerStatus.done);
-      if (i.isEven)
+      if (i.isEven) {
         w.setTask(
           WorkerTask(
             name: 'Fix the ${s.wire} flow',
             summary: 'Reading the logs and patching the retry loop in the queue worker',
           ),
         );
+      }
       world.add(w.root);
       workers.add(w);
     }
