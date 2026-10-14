@@ -138,7 +138,14 @@ GeoData cylinderData(double radiusTop, double radiusBottom, double height, [int 
     final center = g.vertex(0, y, 0, 0, ny, 0);
     final ring = [
       for (var x = 0; x <= radialSegments; x++)
-        g.vertex(r * math.sin(x / radialSegments * math.pi * 2), y, r * math.cos(x / radialSegments * math.pi * 2), 0, ny, 0),
+        g.vertex(
+          r * math.sin(x / radialSegments * math.pi * 2),
+          y,
+          r * math.cos(x / radialSegments * math.pi * 2),
+          0,
+          ny,
+          0,
+        ),
     ];
     for (var x = 0; x < radialSegments; x++) {
       g.tri(center, ring[x], ring[x + 1]);
@@ -151,9 +158,11 @@ Geometry cylinder(double radiusTop, double radiusBottom, double height, [int rad
     cylinderData(radiusTop, radiusBottom, height, radialSegments).build();
 
 /// three's ConeGeometry(radius, height, radialSegments): apex up.
-GeoData coneData(double radius, double height, [int radialSegments = 32]) => cylinderData(0, radius, height, radialSegments);
+GeoData coneData(double radius, double height, [int radialSegments = 32]) =>
+    cylinderData(0, radius, height, radialSegments);
 
-Geometry cone(double radius, double height, [int radialSegments = 32]) => coneData(radius, height, radialSegments).build();
+Geometry cone(double radius, double height, [int radialSegments = 32]) =>
+    coneData(radius, height, radialSegments).build();
 
 /// three's CapsuleGeometry(radius, length, capSegments, radialSegments): a [length] tall middle
 /// between two hemispheres, along Y.
@@ -198,7 +207,13 @@ Geometry capsule(double radius, double length, [int capSegments = 4, int radialS
 
 /// three's TorusGeometry(radius, tube, radialSegments, tubularSegments, arc): in the XY plane,
 /// the arc running from +x counter-clockwise toward +y.
-GeoData torusData(double radius, double tube, [int radialSegments = 12, int tubularSegments = 48, double arc = math.pi * 2]) {
+GeoData torusData(
+  double radius,
+  double tube, [
+  int radialSegments = 12,
+  int tubularSegments = 48,
+  double arc = math.pi * 2,
+]) {
   final g = GeoData();
   final grid = <List<int>>[];
   for (var j = 0; j <= radialSegments; j++) {
@@ -223,8 +238,53 @@ GeoData torusData(double radius, double tube, [int radialSegments = 12, int tubu
   return g;
 }
 
-Geometry torus(double radius, double tube, [int radialSegments = 12, int tubularSegments = 48, double arc = math.pi * 2]) =>
-    torusData(radius, tube, radialSegments, tubularSegments, arc).build();
+Geometry torus(
+  double radius,
+  double tube, [
+  int radialSegments = 12,
+  int tubularSegments = 48,
+  double arc = math.pi * 2,
+]) => torusData(radius, tube, radialSegments, tubularSegments, arc).build();
+
+/// three's LatheGeometry(points, segments): the profile [pts] (radius, y), bottom up, spun round Y.
+/// Normals point out of the profile's right-hand side (outward for a profile that goes up).
+GeoData latheData(List<(double, double)> pts, [int segments = 12]) {
+  final g = GeoData();
+  final n = pts.length;
+  // Each profile point's normal in the (r, y) plane: averaged from the segments either side.
+  final norms = <(double, double)>[];
+  for (var j = 0; j < n; j++) {
+    var nr = 0.0, ny = 0.0;
+    for (final (a, b) in [(j - 1, j), (j, j + 1)]) {
+      if (a < 0 || b >= n) continue;
+      final dr = pts[b].$1 - pts[a].$1, dy = pts[b].$2 - pts[a].$2;
+      final l = math.sqrt(dr * dr + dy * dy);
+      if (l < 1e-9) continue;
+      nr += dy / l;
+      ny += -dr / l;
+    }
+    norms.add((nr, ny));
+  }
+  final rows = <List<int>>[];
+  for (var i = 0; i <= segments; i++) {
+    final phi = i / segments * math.pi * 2;
+    final s = math.sin(phi), c = math.cos(phi);
+    rows.add([
+      for (var j = 0; j < n; j++)
+        g.vertex(pts[j].$1 * s, pts[j].$2, pts[j].$1 * c, norms[j].$1 * s, norms[j].$2, norms[j].$1 * c),
+    ]);
+  }
+  for (var i = 0; i < segments; i++) {
+    for (var j = 0; j < n - 1; j++) {
+      final a = rows[i][j], b = rows[i + 1][j], c = rows[i + 1][j + 1], d = rows[i][j + 1];
+      g.tri(a, b, d);
+      g.tri(b, c, d);
+    }
+  }
+  return g;
+}
+
+Geometry lathe(List<(double, double)> pts, [int segments = 12]) => latheData(pts, segments).build();
 
 /// three's BoxGeometry(w, h, d).
 Geometry box(double w, double h, double d) => CuboidGeometry(vm.Vector3(w, h, d));

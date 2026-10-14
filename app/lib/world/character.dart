@@ -430,6 +430,15 @@ class Person {
     }
   }
 
+  /// Puts [o] on them: on their head, on their body, in their right hand ('hand') or their left ('offhand').
+  /// Forward is +z, so their right arm is the one on -x (see [reach]).
+  void wear(Node o, String on) => switch (on) {
+    'head' => _head.add(o),
+    'hand' => _armL.add(o),
+    'offhand' => _armR.add(o),
+    _ => _body.add(o),
+  };
+
   /// The name tag over their head; [muted] adds 🔇 or 🎙️ (null: neither).
   void setLabel(String name, bool? muted) {
     _name = name;
@@ -920,7 +929,7 @@ class _Dance {
 
 /// The little Claude worker that sits at a desk. Forward is +z.
 class Worker {
-  Worker(String name, String color, this._labels) : _color = hex(color) {
+  Worker(String name, String color, this._labels) : _color = hex(color), _name = name {
     final skin = _skin = toonUnique(_color);
     final white = toon(hex('#ffffff'));
     final ink = toon(hex('#1d1d1d'));
@@ -940,9 +949,12 @@ class Worker {
       _pupils.add(pupil);
     }
     // Headset: band + mic
-    _body.add(mesh(torus(0.29, 0.025, 6, 20, math.pi), dark, 0, 0.72, 0, false)..rotation = euler(0, math.pi / 2));
+    _headset.add(mesh(torus(0.29, 0.025, 6, 20, math.pi), dark, 0, 0.72, 0, false)..rotation = euler(0, math.pi / 2));
     for (final sx in [-1.0, 1.0]) {
-      _body.add(mesh(sphere(0.07, 10, 8), dark, sx * 0.29, 0.72, 0, false));
+      _headset.add(mesh(sphere(0.07, 10, 8), dark, sx * 0.29, 0.72, 0, false));
+    }
+    for (final h in _headset) {
+      _body.add(h);
     }
     // Antenna with status bulb
     _body.add(mesh(cylinder(0.015, 0.015, 0.22, 6), dark, 0, 1.07, 0, false));
@@ -1047,6 +1059,73 @@ class Worker {
   /// How far through its stride it is, walking in.
   double _stride = 0;
 
+  /// How fast its feet go next to a walk: quicker running, slower shuffling (see court.dart).
+  double gait = 1;
+
+  /// Its headset, put away under a peasant's coif.
+  final List<Node> _headset = [];
+
+  /// What it wears on the map it's on (see [setOutfit]): a peasant's smock and coif, or its own skin.
+  PeasantGarb? _garb;
+
+  /// How worn out it looks, 0–1 (see [setAge]), and the beard, brows and dirt that show it.
+  double _age = 0;
+  Beard? _whiskers;
+  List<({Node part, double at})> _dirt = const [];
+  final String _name;
+
+  /// What it wears on the map it's on: a peasant's smock and coif (the castle), or nothing over its own skin.
+  void setOutfit(String? outfit) {
+    if ((_garb != null) == (outfit == 'peasant')) return;
+    final was = _garb;
+    if (was != null) {
+      was.body.detach();
+      was.cap.detach();
+      _garb = null;
+    }
+    if (outfit == 'peasant') {
+      // A cloth for each worker, the same one every time for the same name.
+      final seed = _name.codeUnits.fold(0, (h, c) => (h * 31 + c) & 0x7fffffff);
+      final garb = _garb = peasantGarb(seed);
+      _body
+        ..add(garb.body)
+        ..add(garb.cap);
+      garb.cap.visible = _costume != HolidayTheme.christmas;
+    }
+    for (final h in _headset) {
+      h.visible = _garb == null;
+    }
+    setAge(_age, force: true);
+  }
+
+  /// How worn out it looks, 0 (fresh) to 1 (it's worked for as long as the map says a worker can before
+  /// it's spent): its beard grows out and goes grey, it gets grubby and patched, it droops, and it slows down.
+  void setAge(double k, {bool force = false}) {
+    final age = k.clamp(0.0, 1.0);
+    if (!force && (age - _age).abs() < 0.004) return;
+    _age = age;
+    if (age > 0.02 && _whiskers == null) {
+      final w = _whiskers = beard();
+      _body.add(w.group);
+      _dirt = grime();
+      for (final d in _dirt) {
+        _body.add(d.part);
+      }
+    }
+    final w = _whiskers;
+    if (w != null) growBeard(w, age);
+    for (final d in _dirt) {
+      d.part.visible = age >= d.at;
+    }
+    final garb = _garb;
+    if (garb != null) wearGarb(garb, age);
+  }
+
+  double get age => _age;
+
+  /// How fast it walks, next to a fresh worker: a worn-out one shuffles.
+  double get pace => 1 - 0.3 * _age;
+
   void setName(String name) {
     _labels.remove(_nameTag);
     _nameTag = _labels.add(
@@ -1086,6 +1165,7 @@ class Worker {
       _outfit.add(o);
     }
 
+    _garb?.cap.visible = theme != HolidayTheme.christmas;
     var c = _color;
     if (theme == HolidayTheme.halloween) c = scaleColor(mixColor(c, kZombie, 0.6), 0.85);
     setToonColor(_skin, c);
@@ -1341,9 +1421,10 @@ class Worker {
       );
     }
     for (final p in _pupils) {
-      p.position = vm.Vector3(p.position.x, 0.7 + s.look, p.position.z);
+      p.position = vm.Vector3(p.position.x, 0.7 + s.look - 0.02 * _age, p.position.z);
     }
-    _body.x = s.lean;
+    // Worn out, it hunches over and its eyes droop.
+    _body.x = s.lean + 0.2 * _age;
     var twirl = 0.0;
     if (_twirlT >= 0) {
       _twirlT += dt;
@@ -1365,14 +1446,14 @@ class Worker {
     _body.y = _turnY + twirl;
     _body.z = isAsleep(status) ? math.sin(t * 1.5) * 0.08 : s.roll;
     _props(dt, t);
-    _blink(dt, s.lid);
+    _blink(dt, math.min(s.lid, 1 - 0.38 * _age));
     _bulbMesh.scale = vm.Vector3.all(status == WorkerStatus.needsInput ? 1 + math.sin(t * 8).abs() * 0.5 : 1);
     final lift = hopping ? bodyY : 0.0;
     _bubble?.offset = vm.Vector3(0, (_bubbleIsCard ? 1.74 : 1.95) + lift + math.sin(t * 3) * 0.03, 0);
     _nameTag?.offset = vm.Vector3(0, 1.55 + lift, 0);
     // Walking in to a meeting: the same waddle as on the way out, without the box.
     if (walking || _stride != 0) {
-      _stride = walking ? _stride + dt * 9 : 0;
+      _stride = walking ? _stride + dt * 9 * pace * gait : 0;
       final w = math.sin(_stride);
       for (var i = 0; i < _feet.length; i++) {
         final step = i > 0 ? -w : w;

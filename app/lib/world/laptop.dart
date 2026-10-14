@@ -16,21 +16,56 @@ import 'text.dart' show verticalPlane;
 import 'toon.dart';
 
 class Laptop implements LeavingLaptop {
-  Laptop() {
-    final shell = toon(hex('#c9ced6'));
-    final dark = toon(hex('#2b2d42'));
-    // Base with keyboard
-    root.add(mesh(roundedBox(0.78, 0.035, 0.52, 0.04), shell, 0, 0.018, 0.02));
-    root.add(mesh(CuboidGeometry(vm.Vector3(0.66, 0.006, 0.24)), dark, 0, 0.037, 0.0, false));
-    root.add(mesh(CuboidGeometry(vm.Vector3(0.2, 0.004, 0.11)), toon(hex('#aab1bb')), 0, 0.037, 0.19, false));
+  /// [tome]: a leather-bound book whose inside page shows the terminal, for the castle; it opens and
+  /// shuts like the laptop.
+  Laptop({bool tome = false}) {
     // Lid, hinged along the back edge
     _lid.position = vm.Vector3(0, 0.035, -0.24);
     root.add(_lid);
-    final lidShell = mesh(roundedBox(0.78, 0.025, 0.5, 0.04), shell, 0, 0.25, 0)..rotation = euler(math.pi / 2, 0);
-    _lid.add(lidShell);
+    if (tome) {
+      final leather = toon(hex('#5a2a17'));
+      final gold = toon(hex('#d9ab2e'));
+      final pages = toon(hex('#efe3c2'));
+      // The back cover and the block of pages on it, gold on the corners.
+      root.add(mesh(roundedBox(0.8, 0.03, 0.54, 0.03), leather, 0, 0.015, 0.02));
+      root.add(mesh(roundedBox(0.74, 0.03, 0.48, 0.02), pages, 0, 0.044, 0.02, false));
+      for (final sx in const [-1, 1]) {
+        for (final sz in const [-1, 1]) {
+          root.add(
+            mesh(CuboidGeometry(vm.Vector3(0.07, 0.034, 0.07)), gold, sx * 0.37, 0.016, 0.02 + sz * 0.24, false),
+          );
+        }
+      }
+      // The front cover, open, with the page inside it (the screen) and a gold seal on the outside.
+      _lid.add(mesh(roundedBox(0.8, 0.025, 0.52, 0.03), leather, 0, 0.25, 0)..rotation = euler(math.pi / 2, 0));
+      final pageMat = UnlitMaterial()..baseColorFactor = linear(hex('#efe3c2'));
+      _lid.add(mesh(verticalPlane(0.76, 0.49), pageMat, 0, 0.25, 0.0135, false));
+      // Hinged over the block of pages, so the cover shuts down on top of them.
+      _lid.position = vm.Vector3(0, 0.072, -0.24);
+      _lid.add(
+        mesh(DiscGeometry(radius: 0.08, segments: 20), gold, 0, 0.27, -0.014, false)..rotation = euler(-math.pi / 2, 0),
+      );
+      // A ribbon bookmark hanging out of the pages.
+      root.add(mesh(CuboidGeometry(vm.Vector3(0.03, 0.004, 0.16)), toon(hex('#9b1c1c')), 0.2, 0.06, 0.28, false));
+    } else {
+      final shell = toon(hex('#c9ced6'));
+      final dark = toon(hex('#2b2d42'));
+      // Base with keyboard
+      root.add(mesh(roundedBox(0.78, 0.035, 0.52, 0.04), shell, 0, 0.018, 0.02));
+      root.add(mesh(CuboidGeometry(vm.Vector3(0.66, 0.006, 0.24)), dark, 0, 0.037, 0.0, false));
+      root.add(mesh(CuboidGeometry(vm.Vector3(0.2, 0.004, 0.11)), toon(hex('#aab1bb')), 0, 0.037, 0.19, false));
+      final lidShell = mesh(roundedBox(0.78, 0.025, 0.5, 0.04), shell, 0, 0.25, 0)..rotation = euler(math.pi / 2, 0);
+      _lid.add(lidShell);
+      // Sticker on the back of the lid
+      // A disc lies flat facing +y; tip it back to face -z, like the old circle turned round.
+      final sticker = mesh(DiscGeometry(radius: 0.07, segments: 20), toon(hex('#ff8a5b')), 0, 0.27, -0.014, false)
+        ..rotation = euler(-math.pi / 2, 0);
+      _lid.add(sticker);
+    }
     final screenMat = UnlitMaterial();
     final screen = Node(name: 'screen')
-      ..position = vm.Vector3(0, 0.25, 0.014)
+      ..position = vm.Vector3(0, 0.25, tome ? 0.0145 : 0.014)
+      ..scale = vm.Vector3.all(tome ? 0.94 : 1)
       ..castsShadows = false
       ..addComponent(
         WidgetComponent(
@@ -48,11 +83,6 @@ class Laptop implements LeavingLaptop {
       );
     _widget = screen.getComponent<WidgetComponent>()!;
     _lid.add(screen);
-    // Sticker on the back of the lid
-    // A disc lies flat facing +y; tip it back to face -z, like the old circle turned round.
-    final sticker = mesh(DiscGeometry(radius: 0.07, segments: 20), toon(hex('#ff8a5b')), 0, 0.27, -0.014, false)
-      ..rotation = euler(-math.pi / 2, 0);
-    _lid.add(sticker);
     _setLid(0); // closed; animates open
   }
 
@@ -78,7 +108,11 @@ class Laptop implements LeavingLaptop {
     _clock += dt;
     if (_openT < 1) _setLid(math.min(1, _openT + dt * 1.6));
     final version = screen?.version ?? -1;
-    final every = distance < 6 ? 0.15 : distance < 14 ? 0.6 : 2.0;
+    final every = distance < 6
+        ? 0.15
+        : distance < 14
+        ? 0.6
+        : 2.0;
     if (version != _drawnVersion && (_clock - _paintedAt > every || _drawnVersion < 0)) {
       _paintedAt = _clock;
       _drawnVersion = version;
@@ -114,7 +148,10 @@ class _Frame {
   // ScreenState changes in place, so compare versions too.
   @override
   bool operator ==(Object other) =>
-      other is _Frame && identical(other.screen, screen) && other.placeholder == placeholder && other.version == version;
+      other is _Frame &&
+      identical(other.screen, screen) &&
+      other.placeholder == placeholder &&
+      other.version == version;
 
   @override
   int get hashCode => Object.hash(screen, placeholder, version);

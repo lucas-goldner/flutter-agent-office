@@ -21,6 +21,7 @@ import 'character.dart';
 import 'geo.dart';
 import 'office/geo.dart' show cyl;
 import 'toon.dart' show hex, mesh, toon, toonUnique;
+import 'world.dart' show Ways, WaysOf;
 
 /// What Departures needs of a desk (the old DeskView).
 abstract interface class LeavingDesk {
@@ -211,11 +212,12 @@ final math.Random _rng = math.Random();
 /// has an exit door, so from the floors above it goes out onto the balcony instead, climbs up on the
 /// railing and jumps, and its parachute brings it down onto the lot out front, box and all.
 class Departures {
-  Departures(this._parent, this._ground, this._footstep, this._onUp, {bool Function()? upstairs})
-    : _upstairs = upstairs ?? (() => false);
+  Departures(this._parent, this._ground, this._footstep, this._onUp, {Ways Function()? ways})
+    : _ways = ways ?? (() => _officeWays);
 
-  /// Whether this floor is above the bottom one, with no exit door: the way out is off the balcony.
-  final bool Function() _upstairs;
+  /// The way out of the building, on the map you're on (see Ways.home).
+  final Ways Function() _ways;
+  static final Ways _officeWays = WaysOf((seat, from) => (way: wayHome(seat), chute: false), (seat) => wayIn(seat));
 
   final Node _parent;
 
@@ -229,30 +231,35 @@ class Departures {
   List<_Leaver> _leavers = [];
   List<_Closing> _laptops = [];
 
-  /// Takes over a worker's model and laptop the moment it's sent home from [desk].
-  void add(Worker model, LeavingLaptop laptop, LeavingDesk desk) {
+  /// Takes over a worker's model and laptop the moment it's sent home from [desk]. [from] is where it
+  /// stands if it's up out of its seat (in line for the throne, say): it sets off from there.
+  void add(Worker model, LeavingLaptop laptop, LeavingDesk desk, [Pt? from]) {
+    // Off the desk first if it was up there dancing: it packs up in its seat.
+    model.stopDancing();
     // Where it sits, in the space it walks out in (the parent's, not the engine's mirrored world).
     final local = vm.Matrix4.inverted(_parent.globalTransform) * model.root.globalTransform as vm.Matrix4;
     final seat = local.getTranslation();
     final scale = local.getColumn(0).xyz.length;
     model.root.parent?.remove(model.root);
     _parent.add(model.root);
-    // On the seat it faces the desk: the seat anchor is turned round from the desk's own rotation.
-    final yaw = desk.def.rotY + math.pi;
+    // On the seat it faces the desk: the seat anchor is turned round from the desk's own rotation. Up
+    // and about, it faces the way it was.
+    final f = local.rotated3(vm.Vector3(0, 0, 1));
+    final yaw = from != null ? math.atan2(f.x, f.z) : desk.def.rotY + math.pi;
     model.root.localTransform = vm.Matrix4.compose(seat, euler(0, yaw), vm.Vector3.all(scale));
     model.leave(farewells[_rng.nextInt(farewells.length)]);
-    final up = _upstairs();
+    final home = _ways().home(desk.def, from);
     _leavers.add(
       _Leaver(
         model: model,
         deskId: desk.def.id,
-        chute: up ? _Chute(_canopies[_rng.nextInt(_canopies.length)]) : null,
-        way: up ? wayToBalcony(desk.def) : wayHome(desk.def),
+        chute: home.chute ? _Chute(_canopies[_rng.nextInt(_canopies.length)]) : null,
+        way: home.way,
         seat: seat,
         heading: yaw,
-        chair: desk.def.beanbag ? null : desk.chair,
+        chair: desk.def.beanbag || from != null ? null : desk.chair,
         scale: scale,
-      ),
+      )..t = from != null ? _pack + _hop : 0,
     );
     _laptops.add(_Closing(laptop, desk.def.id));
   }

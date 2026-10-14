@@ -29,6 +29,9 @@ material {
     { type: float, name: snow, default: 0 },
     // 0 for things the sky's extras must leave alone (your first-person hands).
     { type: float, name: sky_on, default: 1 },
+    // 0 on a map of its own (the castle, the station): no office walls or garage to fill with light
+    // there, and the lamps' pools (its torches) light the whole hall.
+    { type: float, name: office_on, default: 1 },
     { type: sampler2d, name: base_color_texture, hint: default_white },
   ],
 }
@@ -92,8 +95,8 @@ fragment {
     // Wet ground is darker; snow covers what faces up. Only outdoors.
     vec3 p = GetWorldPosition() * vec3(1.0, 1.0, -1.0);
     float on = material_params.sky_on;
-    float indoor = on * InOffice(p);
-    float garage = on * InGarage(p);
+    float indoor = on * material_params.office_on * InOffice(p);
+    float garage = on * material_params.office_on * InGarage(p);
     float faceUp = on * (1.0 - max(indoor, garage)) * smoothstep(0.45, 0.85, n.y);
     albedo *= 1.0 - 0.38 * material_params.wet * faceUp;
     albedo = mix(albedo, vec3(0.93, 0.96, 1.0), material_params.snow * faceUp);

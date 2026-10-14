@@ -32,6 +32,10 @@ class ToonLight {
   final List<vm.Vector3> lampColor = List.generate(8, (_) => vm.Vector3.zero());
   double wet = 0;
   double snow = 0;
+
+  /// 1 in the office; 0 on a map of its own, where there's no office or garage to fill with light and
+  /// the lamps' pools (a castle's torches) light everything.
+  double officeOn = 1;
 }
 
 class _Shader {
@@ -113,6 +117,7 @@ class Toon {
       ..setMat4('lamp_col_b', _columns(l.lampColor.skip(4).map(col)))
       ..setFloat('wet', l.wet)
       ..setFloat('snow', l.snow)
+      ..setFloat('office_on', l.officeOn)
       ..setVec3('sun_direction', l.sunDirection.normalized())
       ..setColor('sun_color', l.sunColor)
       ..setFloat('sun_intensity', l.sunIntensity)
@@ -138,8 +143,7 @@ void setToonColor(Material m, Color color, {Color? emissive}) {
 }
 
 /// An unlit material in one colour: screens, glass, signs (MeshBasicMaterial).
-UnlitMaterial basic(Color color, {double opacity = 1}) =>
-    UnlitMaterial()..baseColorFactor = linear(color, opacity);
+UnlitMaterial basic(Color color, {double opacity = 1}) => UnlitMaterial()..baseColorFactor = linear(color, opacity);
 
 /// A node carrying one mesh, placed at x, y, z (mesh() in the old client).
 Node mesh(Geometry geo, Material mat, [double x = 0, double y = 0, double z = 0, bool shadow = true]) {
@@ -232,8 +236,7 @@ Node mergeByMaterial(Node root) {
 }
 
 /// sRGB colour to linear RGBA, the way three.js's ColorManagement converts hex colours.
-vm.Vector4 linear(Color c, [double alpha = 1]) =>
-    vm.Vector4(_lin(c.r), _lin(c.g), _lin(c.b), alpha * c.a);
+vm.Vector4 linear(Color c, [double alpha = 1]) => vm.Vector4(_lin(c.r), _lin(c.g), _lin(c.b), alpha * c.a);
 
 double _lin(double c) => c <= 0.04045 ? c / 12.92 : math.pow((c + 0.055) / 1.055, 2.4).toDouble();
 

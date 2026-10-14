@@ -28,6 +28,7 @@ import '../world/collider.dart';
 import '../world/machine.dart';
 import '../world/meeting.dart';
 import '../world/office/rooms.dart';
+import '../world/office/loft.dart' show Face;
 import 'ball_play.dart';
 import 'golf_play.dart';
 import 'interaction.dart' show DeskKey;
@@ -109,11 +110,6 @@ class RoomsHub {
       (g) => paintMeetingSign(g, c.store.rooms.meeting),
       pixels: 0.6,
     );
-    void paintMeeting() {
-      _meetingBoard.paint();
-      _meetingSign.paint();
-    }
-
     paintMeeting();
     c.store.rooms.meetingChanged.addListener(paintMeeting);
 
@@ -146,6 +142,28 @@ class RoomsHub {
         ..setTask(WorkerTask(name: stationInfo[kind]!.offer, summary: stationInfo[kind]!.does));
       view.idleAgentSpots[def.id]!.add(model.root);
       _idleAgents.add((model: model, deskId: def.id));
+    }
+  }
+
+  /// The meeting's board and sign on maps of their own (the castle's easel), painted with the office's.
+  final List<ScreenTexture> _moreMeeting = [];
+
+  /// Paints the meeting on a map's own [board] and [sign] too, from now on.
+  void meetingFaces(Face board, Face sign) {
+    _moreMeeting
+      ..add(
+        ScreenTexture(board, boardWidth, boardHeight, (g) => paintMeetingBoard(g, c.store.rooms.meeting), pixels: 0.8),
+      )
+      ..add(ScreenTexture(sign, signWidth, signHeight, (g) => paintMeetingSign(g, c.store.rooms.meeting), pixels: 0.6));
+    _moreMeeting[_moreMeeting.length - 2].paint();
+    _moreMeeting.last.paint();
+  }
+
+  void paintMeeting() {
+    _meetingBoard.paint();
+    _meetingSign.paint();
+    for (final s in _moreMeeting) {
+      s.paint();
     }
   }
 

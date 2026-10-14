@@ -7,6 +7,8 @@ import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
 import 'package:office_shared/layout.dart' as lay;
+import 'package:office_shared/maps/props.dart' show boxFootprint;
+
 import '../collider.dart';
 import '../text.dart';
 import '../toon.dart';
@@ -19,7 +21,17 @@ const _lacquer = '#b23a48';
 const _ink = '#2b2d42';
 
 class Gong {
-  Gong._(this.group, this.colliders, this.interactable, this.top, this._pivot, this._disc, this._brass, this._wave, this._waveMat);
+  Gong._(
+    this.group,
+    this.colliders,
+    this.interactable,
+    this.top,
+    this._pivot,
+    this._disc,
+    this._brass,
+    this._wave,
+    this._waveMat,
+  );
 
   final Node group;
   final List<Collider> colliders;
@@ -80,10 +92,14 @@ class Gong {
 const double _r = 0.62;
 const double _drop = 1.02;
 
-Gong buildGong() {
-  const x = lay.Gong.x, z = lay.Gong.z, width = lay.Gong.width, height = lay.Gong.height;
+/// The gong, where the office has it, or [at] (x, z) facing `rotY` (0 is +z, the office's way), on a
+/// floor `y` up (a map of its own's).
+Gong buildGong([({double x, double y, double z, double rotY})? at]) {
+  const width = lay.Gong.width, height = lay.Gong.height;
+  final x = at?.x ?? lay.Gong.x, z = at?.z ?? lay.Gong.z, y = at?.y ?? 0.0, rotY = at?.rotY ?? 0.0;
   final group = Node(name: 'gong');
-  group.position = vm.Vector3(x, 0, z);
+  group.position = vm.Vector3(x, y, z);
+  group.rotation = yaw(rotY);
   final lacquer = tc(_lacquer);
   final ink = tc(_ink);
   const half = width / 2;
@@ -98,10 +114,19 @@ Gong buildGong() {
   }
   stat.add(mesh(roundedBox(width + 0.5, 0.16, 0.18, 0.05), lacquer, 0, height - 0.08, 0));
   for (final sx in [-1, 1]) {
-    stat.add(place(mesh(roundedBox(0.3, 0.1, 0.18, 0.04), lacquer, 0, 0, 0, false), x: sx * (half + 0.33), y: height + 0.02, rot: euler(0, 0, sx * 0.45)));
+    stat.add(
+      place(
+        mesh(roundedBox(0.3, 0.1, 0.18, 0.04), lacquer, 0, 0, 0, false),
+        x: sx * (half + 0.33),
+        y: height + 0.02,
+        rot: euler(0, 0, sx * 0.45),
+      ),
+    );
   }
   stat.add(mesh(box(width, 0.07, 0.08), ink, 0, height - 0.32, 0, false));
-  group.add(place(textPlane('🎉 Merge gong', const TextOpts(bg: '#fffaf3', size: 48)), y: height - 0.08, z: 0.1, scale: 0.5));
+  group.add(
+    place(textPlane('🎉 Merge gong', const TextOpts(bg: '#fffaf3', size: 48)), y: height - 0.08, z: 0.1, scale: 0.5),
+  );
 
   // The disc hangs on two cords from a pivot under the beam, so it can swing when it's hit.
   final pivot = Node(name: 'pivot')..position = vm.Vector3(0, height - 0.34, 0);
@@ -131,7 +156,33 @@ Gong buildGong() {
   group.add(wave);
 
   group.add(mergeByMaterial(stat));
-  final interactable = Interactable(kind: InteractKind.gong, x: x, z: z + 1.3, radius: 1.5);
+  final ahead = (x: math.sin(rotY), z: math.cos(rotY));
+  final interactable = Interactable(
+    kind: InteractKind.gong,
+    x: x + ahead.x * 1.3,
+    y: y == 0 ? null : y,
+    z: z + ahead.z * 1.3,
+    radius: 1.5,
+  );
   tagInteract(group, interactable);
-  return Gong._(group, gongColliders(), interactable, vm.Vector3(x, height + 0.4, z + 0.3), pivot, disc, brass, wave, waveMat);
+  final List<Collider> colliders;
+  if (at == null) {
+    colliders = gongColliders();
+  } else {
+    final (minX, maxX, minZ, maxZ) = boxFootprint(x, z, width + 0.42, 0.6, rotY);
+    colliders = [
+      Collider(minX: minX, maxX: maxX, minZ: minZ, maxZ: maxZ, top: y + height + 0.1, bottom: y == 0 ? null : y),
+    ];
+  }
+  return Gong._(
+    group,
+    colliders,
+    interactable,
+    vm.Vector3(x + ahead.x * 0.3, y + height + 0.4, z + ahead.z * 0.3),
+    pivot,
+    disc,
+    brass,
+    wave,
+    waveMat,
+  );
 }

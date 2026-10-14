@@ -11,6 +11,7 @@ class Collider {
     required this.maxZ,
     required this.top,
     this.bottom,
+    this.fence = false,
   });
 
   final double minX;
@@ -25,18 +26,44 @@ class Collider {
   /// down on the street, which is further down the higher your floor is (Office.setLevel).
   double? bottom;
 
+  /// Only there to keep people out: its top isn't anything to land on, so confetti falls through it.
+  final bool fence;
+
   @override
   String toString() => 'Collider($minX..$maxX, $minZ..$maxZ, top $top${bottom == null ? '' : ', bottom $bottom'})';
 }
 
 enum InteractKind {
-  desk, issues, pulls, services, queue, tv, coffee, decor, smoke, elevator, gong, dog, jukebox, seat, whiteboard,
+  desk,
+  issues,
+  pulls,
+  services,
+  queue,
+  tv,
+  coffee,
+  decor,
+  smoke,
+  elevator,
+  gong,
+  dog,
+  jukebox,
+  seat,
+  whiteboard,
   // The games and rooms (office/rooms_hub.dart).
-  station, cabinet, meeting, golf, ball, bookshelf,
+  station,
+  cabinet,
+  meeting,
+  golf,
+  ball,
+  bookshelf,
   // The rooftop bar (office/roof.dart).
-  bar, dj,
+  bar,
+  dj,
   // Between floors (world/climb.dart).
-  ladder, pole,
+  ladder,
+  pole,
+  // A map's herald, who sends out new workers (the castle's Hand of the King).
+  herald,
 }
 
 /// Something you can use: walk up to it and press E, or click it.
@@ -52,6 +79,7 @@ class Interactable {
     this.seatId,
     this.pole,
     this.off = false,
+    this.label,
   });
 
   final InteractKind kind;
@@ -70,13 +98,16 @@ class Interactable {
 
   /// Put away for now (a bean bag nobody needs yet): can't be used.
   bool off;
+
+  /// What the hint calls it, where a map's own looks differ from the office's (the castle's ale for the coffee machine).
+  final String? label;
 }
 
 /// Which node carries which interactable, for clicking: the old `userData.interact`. A raycast hit
 /// walks up the parent chain until it finds one (see [interactableOf]).
 final Expando<Interactable> _interact = Expando('interact');
 
-void tagInteract(Node node, Interactable it) => _interact[node] = it;
+void tagInteract(Node node, Interactable? it) => _interact[node] = it;
 
 Interactable? interactableOf(Node? node) {
   for (var n = node; n != null; n = n.parent) {

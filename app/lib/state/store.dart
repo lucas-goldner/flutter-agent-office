@@ -11,6 +11,7 @@ import 'package:office_shared/avatar.dart';
 import 'package:office_shared/decor.dart';
 import 'package:office_shared/dog.dart';
 import 'package:office_shared/jukebox.dart';
+import 'package:office_shared/maps/maps.dart';
 import 'package:office_shared/protocol.dart';
 import 'package:office_shared/whiteboard.dart';
 
@@ -57,6 +58,10 @@ enum Topic {
   machine,
   // Your own Claude and GitHub sign-ins (🔐 Your sign-ins).
   signins,
+  // The building's map (the office, the castle, the station…), and whoever the floor has kept (its
+  // dungeon's prisoners, or the ones adrift outside its airlock).
+  map,
+  jail,
 }
 
 /// Where someone is right now. peer.move updates it in place; the frame loop eases toward it.
@@ -312,6 +317,15 @@ class Store {
   /// How busy the office's machine is, and its worker limit.
   MachineState machine = MachineState.empty;
 
+  /// What the building looks like inside (see shared maps): the same on every floor.
+  MapState map = const MapState();
+
+  /// Where everything is on the building's map.
+  MapPlan plan() => planOf(map.pick, map.custom);
+
+  /// Workers sent home and kept on this floor (locked up in its dungeon, or adrift outside its airlock).
+  JailState jail = const JailState();
+
   /// The games and rooms on your floor: the cabinet, the ball, the meeting room, the machine monitor.
   final Rooms rooms = Rooms();
 
@@ -380,6 +394,7 @@ class Store {
     services = v.services;
     whiteboard = {for (final e in v.whiteboard.elements) e.id: e};
     drawing = v.whiteboard.people;
+    jail = v.jail;
     _setDog(v.dog);
     _setJukebox(v.jukebox);
     for (final t in [
@@ -395,6 +410,7 @@ class Store {
       Topic.jukebox,
       Topic.whiteboard,
       Topic.drawing,
+      Topic.jail,
     ]) {
       emit(t);
     }
@@ -416,6 +432,9 @@ class Store {
     rooms.apply(msg);
     switch (msg) {
       case WelcomeMsg m:
+        // The map first, so the floor's workers sit down in its seats and not the last one's.
+        map = m.map;
+        emit(Topic.map);
         you = m.you;
         _setPeers(m.peers);
         floors = m.floors;
@@ -489,6 +508,11 @@ class Store {
         workers[m.worker.id] = m.worker;
         emit(Topic.workers);
       case WorkerRemoveMsg m:
+        final kept = m.jail;
+        if (kept != null) {
+          jail = kept;
+          emit(Topic.jail);
+        }
         workers.remove(m.workerId);
         screens.remove(m.workerId);
         emit(Topic.workers);
@@ -570,6 +594,18 @@ class Store {
       case ThemeMsg m:
         theme = m.state;
         emit(Topic.theme);
+      case MapMsg m:
+        // Onto another map: nobody's on a seat of the last one any more (the office forgot them too).
+        final moved = m.state.pick != map.pick;
+        map = m.state;
+        if (moved) {
+          peers = {
+            for (final e in peers.entries)
+              e.key: e.value.seat == null ? e.value : PeerInfo.fromJson(e.value.toJson()..remove('seat')),
+          };
+        }
+        emit(Topic.map);
+        if (moved) emit(Topic.peers);
       case PromptsMsg m:
         prompts = m.state;
         emit(Topic.prompts);

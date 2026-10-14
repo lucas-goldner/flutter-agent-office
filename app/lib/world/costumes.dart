@@ -448,3 +448,223 @@ Node warlockHand(int side, Material skin) {
   }
   return (group: group, sparks: sparks);
 }
+
+// ---- The castle's workers (see Worker.setOutfit and Worker.setAge) -------------------------------
+
+final Map<String, Material> _details = {};
+
+/// A toon material of its own in [color], shared by every small detail that colour.
+Material _detail(String color) => _details[color] ??= toonUnique(hex(color));
+
+/// Undyed wool and linen, one per worker (by its name), so a hall full of them isn't in uniform.
+const List<String> _smocks = ['#8b6b4a', '#6f7d4f', '#7a5c3e', '#5f6f7a', '#8a7a55', '#6b4f3a', '#7d6a5a', '#556b52'];
+
+/// What cloth and skin turn toward, the longer a worker has toiled.
+const Color kGrime = Color(0xFF4A3A2A);
+
+/// The smock's outline, bottom up: its radius at each height.
+const List<(double, double)> _smock = [
+  (0.338, 0.1),
+  (0.322, 0.16),
+  (0.3, 0.28),
+  (0.293, 0.45),
+  (0.292, 0.55),
+  (0.276, 0.6),
+  (0.258, 0.625),
+];
+
+/// How far out from the bean something stuck on at height [y] has to go to sit on the smock.
+double _onSmock(double y) {
+  var r = _smock[0].$1;
+  for (var i = 1; i < _smock.length; i++) {
+    final (r0, y0) = _smock[i - 1];
+    final (r1, y1) = _smock[i];
+    if (y >= y0 && y <= y1) r = r0 + (r1 - r0) * (y - y0) / (y1 - y0);
+  }
+  final bean = onBean(y, 0).at;
+  return r - math.sqrt(bean.x * bean.x + bean.z * bean.z) + 0.008;
+}
+
+/// A peasant's clothes, over the worker's bean.
+class PeasantGarb {
+  PeasantGarb(this.body, this.cap, this.cloth, this.clean, this.patches);
+
+  /// The smock with its rope belt, on the body.
+  final Node body;
+
+  /// The linen coif on its head (off while a holiday hat's on).
+  final Node cap;
+
+  /// The smock's cloth, which gets grubby (see Worker.setAge), and the color it started out.
+  final Material cloth;
+  final Color clean;
+
+  /// Patches sewn on as it wears through: each shows once the worker's this worn (0–1).
+  final List<({Node part, double at})> patches;
+}
+
+/// A rough smock gathered at the neck with a rope belt, and a linen coif: what the castle's workers wear.
+/// [seed] picks the cloth.
+PeasantGarb peasantGarb(int seed) {
+  final body = Node(name: 'smock');
+  final clean = hex(_smocks[seed.abs() % _smocks.length]);
+  final cloth = toonUnique(clean);
+  // Round the bean from its bottom up to under its chin, flaring out a little at the hem.
+  body.add(mesh(latheData(_smock, 28).build(), cloth));
+  body.add(mesh(torusData(0.335, 0.016, 5, 28).rotateX(math.pi / 2).build(), _detail('#3b2f25'), 0, 0.105, 0, false));
+  body.add(mesh(torusData(0.258, 0.022, 6, 24).rotateX(math.pi / 2).build(), _detail('#e8dcc2'), 0, 0.622, 0, false));
+  // A rope for a belt, knotted at the front with the ends hanging down.
+  final rope = toon(hex('#c8a86a'));
+  body.add(mesh(torusData(0.298, 0.022, 6, 28).rotateX(math.pi / 2).build(), rope, 0, 0.4, 0, false));
+  body.add(mesh(sphere(0.035, 8, 6), rope, 0.06, 0.4, 0.29, false));
+  for (final (x, rz) in const [(0.05, 0.12), (0.085, -0.1)]) {
+    body.add(mesh(cylinder(0.013, 0.01, 0.13, 5), rope, x, 0.33, 0.3, false)..rotation = euler(0, 0, rz));
+  }
+  final patches = [
+    for (final (y, a, c, at) in const [
+      (0.3, 0.7, '#a8875c', 0.35),
+      (0.5, -2.4, '#6a7a52', 0.55),
+      (0.32, -1.1, '#9a6b4a', 0.7),
+      (0.46, 2.5, '#7a6a8a', 0.85),
+    ])
+      () {
+        final part = _stick(mesh(box(0.085, 0.08, 0.012), _detail(c), 0, 0, 0, false), y, a, _onSmock(y) + 0.006);
+        part.rotation = part.rotation * vm.Quaternion.axisAngle(vm.Vector3(0, 0, 1), a * 0.3);
+        part.visible = false;
+        body.add(part);
+        return (part: part, at: at);
+      }(),
+  ];
+  // A linen coif over the crown, tied on.
+  final linen = toon(hex('#e8dcc2'));
+  final cap = Node(name: 'coif')
+    ..add(mesh(sphere(0.302, 20, 10, 0, math.pi * 2, 0, 1.08), linen, 0, 0.7, -0.015))
+    ..add(mesh(torusData(0.265, 0.018, 5, 24).rotateX(math.pi / 2).build(), linen, 0, 0.84, -0.015, false))
+    ..rotation = euler(-0.12, 0);
+  return PeasantGarb(body, cap, cloth, clean, patches);
+}
+
+/// Its peasant's clothes, [age] of the way worn out: grubbier, and patched.
+void wearGarb(PeasantGarb garb, double age) {
+  setToonColor(garb.cloth, mixColor(garb.clean, kGrime, 0.5 * age));
+  for (final p in garb.patches) {
+    p.part.visible = age >= p.at;
+  }
+}
+
+/// A beard and brows, grown out as the worker toils (see Worker.setAge).
+class Beard {
+  Beard(this.group, this.hair, this.mustache, this.chin, this.hang, this.brows, this.bags);
+  final Node group;
+  final Material hair;
+  final Node mustache, chin, hang, brows, bags;
+}
+
+/// A mustache under the eyes, a beard off the chin that grows down to the floor, and bushy brows.
+Beard beard() {
+  final group = Node(name: 'beard');
+  final hair = toonUnique(hex('#5d4030'));
+  final mustache = Node(name: 'mustache');
+  for (final sx in const [-1, 1]) {
+    mustache.add(
+      mesh(capsule(0.03, 0.08, 4, 8), hair, sx * 0.055, 0.6, 0.283, false)
+        ..rotation = euler(0, 0, sx * (math.pi / 2 + 0.45)),
+    );
+  }
+  group.add(mustache);
+  final chin = mesh(sphere(0.16, 14, 10), hair, 0, 0.53, 0.235, false)..scale = vm.Vector3(1.2, 0.75, 0.45);
+  group.add(chin);
+  // The beard proper: a long, full oval hanging from the chin, lying flat down the front of the smock
+  // (its length is its y scale, from the chin down), with a few straggly wisps at its tip.
+  final hang = Node(name: 'hang')..position = vm.Vector3(0, 0.54, 0.285);
+  // A teardrop: full under the chin, tapering to a point at the bottom (a unit long, down from 0).
+  final lock = latheData(const [
+    (0, -1),
+    (0.08, -0.96),
+    (0.26, -0.8),
+    (0.44, -0.52),
+    (0.5, -0.24),
+    (0.4, -0.06),
+    (0, 0.02),
+  ], 16);
+  hang.add(mesh(lock.build(), hair, 0, 0, 0, false)..scale = vm.Vector3(0.34, 1, 0.13));
+  for (final (x, rz) in const [(-0.06, 0.35), (0.0, 0.0), (0.06, -0.35)]) {
+    final wisp = coneData(0.035, 0.14, 6).rotateX(math.pi).transform(vm.Matrix4.translationValues(0, -0.07, 0)).build();
+    hang.add(
+      mesh(wisp, hair, x, -0.97, 0, false)
+        ..rotation = euler(0, 0, rz)
+        ..scale = vm.Vector3(1, 1, 0.6),
+    );
+  }
+  hang.rotation = euler(0.06, 0);
+  group.add(hang);
+  final brows = Node(name: 'brows');
+  for (final sx in const [-1, 1]) {
+    brows.add(
+      mesh(capsule(0.024, 0.08, 4, 6), hair, sx * 0.115, 0.815, 0.235, false)
+        ..rotation = euler(0, 0, math.pi / 2 + sx * 0.25),
+    );
+  }
+  group.add(brows);
+  // Dark bags under its eyes, from too long at the tome.
+  final bags = Node(name: 'bags');
+  for (final sx in const [-1, 1]) {
+    bags.add(
+      mesh(
+        sphere(0.06, 10, 6, 0, math.pi * 2, math.pi / 2, math.pi / 2),
+        _detail('#5b3f5e'),
+        sx * 0.11,
+        0.645,
+        0.235,
+        false,
+      )..scale = vm.Vector3(1.1, 0.45, 0.5),
+    );
+  }
+  group.add(bags);
+  return Beard(group, hair, mustache, chin, hang, brows, bags);
+}
+
+/// The beard's color at [k] worn (0 fresh, 1 worn out): brown, then salt and pepper, then white.
+Color beardColor(double k) {
+  const brown = Color(0xFF5D4030), grey = Color(0xFF8F8B85), white = Color(0xFFECEBE6);
+  return k < 0.5 ? mixColor(brown, grey, k / 0.5) : mixColor(grey, white, (k - 0.5) / 0.5);
+}
+
+/// Its beard, [age] (0 to 1) of the way grown out: longer and greyer, with a mustache, brows and bags.
+void growBeard(Beard w, double age) {
+  w.group.visible = age > 0.02;
+  setToonColor(w.hair, beardColor(age));
+  final grown = 0.45 + 0.55 * math.min(1, age * 3);
+  w.chin.scale = vm.Vector3(1.2 * grown, 0.75 * grown, 0.45);
+  w.hang.visible = age > 0.08;
+  // It grows from a short beard under the chin down to the floor; the smock bulges, so it leans out a little as it grows.
+  w.hang.scale = vm.Vector3(0.7 + 0.3 * math.min(1, age * 2), 0.08 + 0.5 * age, 1);
+  w.hang.rotation = euler(0.06 - 0.12 * age, 0);
+  w.mustache.visible = age > 0.05;
+  w.brows.visible = age > 0.45;
+  w.bags.visible = age > 0.6;
+}
+
+/// Smudges of dirt on the worker's bean and smock: each shows once it's this worn (0–1).
+List<({Node part, double at})> grime() {
+  final mud = _detail('#4d3a29');
+  return [
+    for (final (y, a, r, at) in const [
+      (0.68, 0.55, 0.05, 0.15),
+      (0.34, -0.4, 0.06, 0.25),
+      (0.78, -0.75, 0.045, 0.4),
+      (0.3, 1.9, 0.07, 0.5),
+      (0.5, 2.6, 0.06, 0.6),
+      (0.7, -1.4, 0.05, 0.7),
+      (0.36, 0.25, 0.065, 0.8),
+      (0.74, 1.2, 0.05, 0.9),
+    ])
+      // On the smock below its neck; on the worker's face above it.
+      (
+        part: _stick(mesh(sphere(r, 10, 8), mud, 0, 0, 0, false), y, a, y < 0.63 ? _onSmock(y) - 0.004 : -0.012)
+          ..scale = vm.Vector3(1, 1, 0.3)
+          ..visible = false,
+        at: at,
+      ),
+  ];
+}

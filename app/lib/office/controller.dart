@@ -56,6 +56,7 @@ import '../ui/queue.dart';
 import '../ui/search.dart';
 import '../ui/services.dart';
 import '../ui/settings.dart';
+import '../ui/settings_map.dart';
 import '../ui/signins.dart';
 import '../ui/team.dart';
 import '../ui/accounts.dart';
@@ -101,6 +102,12 @@ import 'interaction.dart';
 import 'needs_you.dart';
 import 'palette_entries.dart';
 import 'roof.dart';
+import 'worlds.dart';
+import '../world/world.dart' show DeskView, OfficeWorld, World, WorldDevice, streetOf;
+
+import 'package:office_shared/maps/maps.dart' show MapPlan, levelRoute, officeMap, seatHereOn;
+import 'package:office_shared/nav.dart' show Pt;
+
 import '../world/office/city.dart' show buildCity;
 
 /// How close (meters) you stop a worker jumping, and how far you go before it starts again.
@@ -239,6 +246,18 @@ class OfficeController implements OfficeActions {
   );
   late final Office office;
 
+  /// The building's map as it's built: the office, or a map of its own (see worlds.dart).
+  late final Worlds worlds;
+
+  /// The world the building's map is built as.
+  World get world => worlds.world;
+
+  /// Where everything is on the building's map: its seats by id, and places to sit.
+  MapPlan get plan => worlds.plan;
+
+  /// Whether the building's on the office's own map (the elevator, the balcony, the lounge…).
+  bool get inOffice => worlds.inOffice;
+
   /// Voice chat and screen sharing (the TV, the thumbnails, mouths and proximity volume).
   late final OfficeVoice voiceRoom;
 
@@ -346,13 +365,22 @@ class OfficeController implements OfficeActions {
 
     office = buildOffice(labels: labels);
     root.add(office.group);
+    worlds = Worlds(
+      theOffice: OfficeWorld(office, () => office.stack.state.index > 0, () => 0),
+      labels: labels,
+      parent: root,
+      footstep: (x, y, z) => sound.stepAt(x, z, y),
+      mount: _mountWorld,
+    );
     voiceRoom = OfficeVoice(store: store, net: net, tv: office.tvScreen, state: voice);
     dictating.addListener(_dictatingChanged);
     _unsubscribe.add(() => dictating.removeListener(_dictatingChanged));
     whiteboard = WhiteboardHub(scope, office.whiteboard);
-    if (q['boards'] != '0') _mountBoards();
+    _boards = q['boards'] != '0';
+    if (_boards) _mountBoards(office.boardMeshes);
     skyView = SkyView(root, office.night);
-    confetti = Confetti((x, z, y) => groundAt(office.colliders, x, z, y));
+    // What it lands on: anything but what's only there to keep people out.
+    confetti = Confetti((x, z, y) => math.max(groundAt(world.colliders, x, z, y, false), player.street));
     smoke = Smoke();
     root
       ..add(confetti.node)
@@ -405,17 +433,11 @@ class OfficeController implements OfficeActions {
     // The floor's dog. It goes quiet once someone has the terminal of the worker it's barking at open.
     dog = Dog(sound, (id) => (store.workers[id]?.viewers.length ?? 0) > 0, labels, now: nowMs);
     root.add(dog.root);
-    departures = Departures(
-      root,
-      (x, z, y) => groundAt(office.colliders, x, z, y),
-      (x, y, z) => sound.stepAt(x, z, y),
-      (deskId) {
-        final desk = office.desks[deskId];
-        if (desk != null && store.workerAtDesk(deskId) == null) desk.vacancy.visible = true;
-        _arrangeBeanbags();
-      },
-      upstairs: () => office.stack.state.index > 0,
-    );
+    departures = Departures(root, groundHere, (x, y, z) => sound.stepAt(x, z, y), (deskId) {
+      final desk = world.desks[deskId];
+      if (desk != null && store.workerAtDesk(deskId) == null) desk.vacancy.visible = true;
+      _arrangeBeanbags();
+    }, ways: () => world.ways);
     // A click on a worker's notification: over to its desk, with its terminal open to answer it.
     notifier = DesktopNotifier(enabled: () => settings.notify, openWorker: answerWorker);
     needsYou = NeedsYouHub(
@@ -427,7 +449,7 @@ class OfficeController implements OfficeActions {
         root: root,
         workerRoot: (id) => _workerViews[id]?.model.root,
         deskFloor: (id) {
-          final desk = office.desks[_workerViews[id]?.deskId];
+          final desk = world.desks[_workerViews[id]?.deskId];
           return desk == null ? null : fromEngine(desk.group.globalTransform.getTranslation()).y;
         },
       ),
@@ -443,6 +465,9 @@ class OfficeController implements OfficeActions {
     root.add(hanger.ghost.group);
     arcade = Arcade(office.bossScreen);
     rooms.init();
+    worlds.theOffice
+      ..meetingBoardFace = rooms.view.meetingBoard
+      ..meetingSignFace = rooms.view.meetingSign;
     roofHub = RoofHub(
       root: root,
       office: office,
@@ -457,7 +482,7 @@ class OfficeController implements OfficeActions {
       reach: _reachOut,
       // The same city C3's tower stands in, seen from the roof.
       city: buildCity,
-    );
+    )..world = (() => world);
     _listen(Topic.decor, () => gallery.sync(store.decor));
 
     _listen(Topic.peers, _syncPeers);
@@ -469,6 +494,9 @@ class OfficeController implements OfficeActions {
     _listen(Topic.pulls, _paintPrs);
     _listen(Topic.queue, _paintPrs);
     _listen(Topic.floors, _paintFloor);
+    _listen(Topic.map, _applyMap);
+    _listen(Topic.jail, _syncJail);
+    registerMapSettings();
     _listen(Topic.floors, _syncStack);
     _listen(Topic.dog, () => dog.sync(store.dog, store.dogStart));
     _listen(Topic.jukebox, _syncJukebox);
@@ -541,9 +569,19 @@ class OfficeController implements OfficeActions {
 
   // ---- Boards: each face is a live Flutter widget on the wall -----------------------------------
 
-  void _mountBoards() {
+  /// Whether the boards' faces are drawn (the ?boards=0 dev switch leaves them blank).
+  bool _boards = true;
+
+  /// A map of its own was just built: its boards and its meeting board show what the office's do.
+  void _mountWorld(World w) {
+    if (_boards) _mountBoards(w.boardMeshes);
+    final board = w.meetingBoard, sign = w.meetingSign;
+    if (board != null && sign != null) rooms.meetingFaces(board, sign);
+  }
+
+  void _mountBoards(Map<String, Face> faces) {
     void mount(String key, Widget face) {
-      final f = office.boardMeshes[key];
+      final f = faces[key];
       if (f == null) return;
       f.material.baseColorFactor = vm.Vector4(1, 1, 1, 1);
       f.node.addComponent(
@@ -576,7 +614,12 @@ class OfficeController implements OfficeActions {
     if (msg is WelcomeMsg) voiceRoom.beforeWelcome();
     // The floor you asked to come back to (see OfficeSocket.connect), to tell if the office put you somewhere else.
     final wasOn = msg is WelcomeMsg ? (store.floor ?? lastFloor()) : null;
-    if (msg is WelcomeMsg || msg is FloorEnterMsg) departures.clear();
+    if (msg is WelcomeMsg || msg is FloorEnterMsg) {
+      // A floor arriving: nobody's still leaving, and its workers are seated already.
+      departures.clear();
+      _clearSendoffs();
+      _seatedAlready = true;
+    }
     if (msg is WorkerRemoveMsg) _sentHome.add(msg.workerId);
     try {
       store.apply(msg);
@@ -585,6 +628,7 @@ class OfficeController implements OfficeActions {
       debugPrint('store.apply(${msg.runtimeType}) failed: $e\n$st');
     }
     _sentHome.clear();
+    _seatedAlready = false;
     whiteboard.route(msg);
     roofHub.onMessage(msg);
     switch (msg) {
@@ -597,7 +641,15 @@ class OfficeController implements OfficeActions {
         if (_firstWelcome && mine != null) {
           _firstWelcome = false;
           // Where the office put you: back in the spot you left (if there's still room there), or in the car.
-          if (!inElevator(mine.x, mine.z) && player.fits(mine.x, mine.z, mine.y)) {
+          // Back to where you were, if that was on this map (and not in the elevator: that's arriving). A hall
+          // of its own has nothing outside it to come back to (and its walls may have moved since).
+          final saved = lastSpot();
+          final sameMap = saved == null || (saved.map ?? officeMap) == plan.id;
+          final b = plan.bounds;
+          final inRoom =
+              inOffice ||
+              (mine.x > b.minX + 0.3 && mine.x < b.maxX - 0.3 && mine.z > b.minZ + 0.3 && mine.z < b.maxZ - 0.3);
+          if (sameMap && inRoom && !(inOffice && inElevator(mine.x, mine.z)) && player.fits(mine.x, mine.z, mine.y)) {
             _placeAt((x: mine.x, y: mine.y, z: mine.z, rotY: mine.rotY));
             _arrive(back: true);
           } else {
@@ -680,6 +732,13 @@ class OfficeController implements OfficeActions {
         _signInsGreeted = true;
         if (needsSigningIn(scope)) openSignIns(scope, signInsWelcome);
       // Something you did needs a sign-in first (hiring a worker before signing in to Claude, say).
+      case SitRefusedMsg m:
+        // Somebody on the floor got there first: back on your feet, next to them.
+        if (player.seat?.key == m.seat) {
+          player.stand();
+          _gotUp();
+          toast('${m.by} got there first', ToastKind.warn);
+        }
       case SignInsNeededMsg m:
         openSignIns(scope, m.why);
       default:
@@ -716,6 +775,7 @@ class OfficeController implements OfficeActions {
 
   /// In the car, facing out through the doors: where you are when you arrive on a floor.
   void _placeInCar([({double x, double z})? at]) {
+    if (!inOffice) return _placeAtSpawn();
     final spot = at != null && inElevator(at.x, at.z)
         ? at
         : (x: lay.Elevator.x, z: (ElevatorCar.minZ + ElevatorCar.maxZ) / 2);
@@ -750,7 +810,16 @@ class OfficeController implements OfficeActions {
     // Sitting, it's where you'd get up to.
     final at = player.standingSpot() ?? (x: player.pos.x, y: player.pos.y, z: player.pos.z);
     final name = floor == roof ? roofName : (store.floors.where((f) => f.id == floor).firstOrNull?.name ?? '');
-    return SavedSpot(floor: floor, name: name, x: at.x, y: at.y, z: at.z, facing: player.facing);
+    return SavedSpot(
+      floor: floor,
+      name: name,
+      map: plan.id,
+      throne: _onThrone(),
+      x: at.x,
+      y: at.y,
+      z: at.z,
+      facing: player.facing,
+    );
   }
 
   /// Where to put you back when the office lets you in: where you are now, or before this page was loaded,
@@ -994,7 +1063,7 @@ class OfficeController implements OfficeActions {
   /// across it, nor down in the garage. (C3's back office counts as inside once the floor plan has a wing.)
   bool indoors() {
     final p = player.pos;
-    if (roofHub.upTop || p.y < -1 || p.y > wallHeight) return false;
+    if (roofHub.upTop || !inOffice || p.y < -1 || p.y > wallHeight) return false;
     return p.x > Floor.minX && p.x < Floor.maxX && p.z > Floor.minZ && p.z < Floor.maxZ;
   }
 
@@ -1220,7 +1289,7 @@ class OfficeController implements OfficeActions {
     office.setLevel(next.index, next.count);
     // The holiday decorations out on the street go down with it.
     holiday.setStreetDrop(next.index * storey);
-    player.street = streetBelow(next.index);
+    if (inOffice) player.street = streetBelow(next.index);
   }
 
   /// What the hint says while you're on the ladder or a pole.
@@ -1244,11 +1313,182 @@ class OfficeController implements OfficeActions {
         : ('slide', [const HintTitle('🚒 Sliding down…')]);
   }
 
+  /// The top of whatever's underfoot at (x, z) for feet at [y], in the world you're in: its floor, a step, the street.
+  double groundHere(double x, double z, double y) => math.max(groundAt(world.colliders, x, z, y), player.street);
+
+  /// The building changed maps (or you arrived and it's not the office): the old world goes, the new one's
+  /// put up, every worker sits down in its seat there, and you come in where it has you arrive.
+  void _applyMap() {
+    final next = worlds.worldFor(store.plan());
+    if (identical(next.world, world)) return;
+    // Everyone gets up from the old map's seats; they sit down in the new one's below.
+    for (final e in _workerViews.entries) {
+      worlds.court?.release(e.key);
+      final v = e.value;
+      v.model.root.detach();
+      v.laptop.root.detach();
+      v.model.dispose();
+      v.laptop.dispose();
+      sound.removeTypist(e.key);
+    }
+    _workerViews.clear();
+    departures.clear();
+    _clearSendoffs();
+    _stopWalking();
+    hanger.cancel();
+    if (_smokeBreakUntil > 0) _setSmoking(false);
+    // The office's things: the ball goes down, the games stop; the card goes back on the board.
+    if (rooms.ball.holding) rooms.ball.drop();
+    rooms.golf.stop();
+    arcade.stop();
+    if (_carrying != null) _setCarrying(null);
+    if (player.seat != null) standUp();
+    world.group.visible = false;
+    worlds.enter(next);
+    final up = roofHub.upTop;
+    world.group.visible = !up;
+    if (!up) player.colliders = world.colliders;
+    final b = plan.bounds, r = world.room;
+    final v = r.vault;
+    player.room = CameraRoom(
+      minX: b.minX,
+      maxX: b.maxX,
+      minZ: b.minZ,
+      maxZ: b.maxZ,
+      wall: r.wall,
+      enclosed: r.enclosed,
+      vault: v == null
+          ? null
+          : (minX: v.bounds.minX, maxX: v.bounds.maxX, minZ: v.bounds.minZ, maxZ: v.bounds.maxZ, top: v.top),
+    );
+    if (!up) player.street = inOffice ? streetBelow(office.stack.state.index) : streetOf(world);
+    skyView.indoors = r.enclosed;
+    Toon.light.officeOn = inOffice ? 1 : 0;
+    // The office's own: the holiday decorations round it and the street, the dog.
+    holiday.group.visible = inOffice && !up;
+    dog.root.visible = inOffice && !up;
+    _painted = -1;
+    _paintFloor();
+    world.setProjectName(store.project?.name ?? 'Agent Office');
+    _dressUp(_theme);
+    // They were there already: nobody walks in (and on a welcome, the floor's workers that come next weren't either).
+    _syncWorkersSeated();
+    _syncJail();
+    if (store.floor != null && !up && _riding == null && _climbing == null) {
+      _placeInCar();
+      // Back in the office, in its elevator: the doors open onto it.
+      if (inOffice) roofHub.lift().setOpen(true);
+    }
+    _heraldHires.clear();
+    _offTheRoof();
+    _hintKey = 'stale';
+  }
+
+  /// Down off the roof, on a map with no roof to be up on (it changed while you were up there).
+  void _offTheRoof() {
+    if (!roofHub.upTop || inOffice || _riding != null || _climbing != null) return;
+    final f = _builtFloors().firstOrNull;
+    if (f == null) return;
+    ride(f.id);
+    toast("The building's ${plan.icon} ${plan.name} now, with no rooftop bar: down you go");
+  }
+
+  /// Where you come in on a map of its own: on the throne if nobody's on it, else on your feet where the map says.
+  void _placeAtSpawn() {
+    final at = plan.spawn;
+    _placeAt((x: at.x, y: groundHere(at.x, at.z, 1.5), z: at.z, rotY: at.rotY));
+    // Not on the way to another floor: the throne's this one's.
+    if (_riding == null && _climbing == null) _sitOnThrone();
+  }
+
+  /// Up onto the map's throne, if it has one and nobody's on it.
+  void _sitOnThrone() {
+    final throne = plan.throne;
+    final seat = throne == null ? null : _freePlace(throne);
+    if (seat == null || roofHub.upTop) return;
+    if (player.seat != null) player.stand();
+    player.sit(seat);
+    me.sit(seat.hips);
+    if (store.floor != null) net.send(SitCmd(seat: seat.key));
+  }
+
+  /// Sitting on the map's throne.
+  bool _onThrone() {
+    final id = plan.throne?.id;
+    return id != null && player.seat?.seatId == id;
+  }
+
+  /// E at the herald (the castle's Hand of the King), or K from the throne: what should a new worker do?
+  /// It's hired at the first free seat at the tables, and runs off there from beside him (see [_cameFrom]).
+  void _hireFromHerald() {
+    final h = plan.herald;
+    if (h == null) return;
+    if (_freeDesk() == null) {
+      return toast('${h.name}: every seat at the tables is taken — send someone home first', ToastKind.warn);
+    }
+    final lineup = plan.lineup.isNotEmpty
+        ? ', and comes back to line up${plan.throne != null ? ' before your throne' : ''} once it’s done or needs you'
+        : '';
+    openPrompt(
+      PromptOptions(
+        title: '${plan.icon} ${h.name}: send out a worker',
+        subtitle: 'Say what it’s to do. A new worker runs off to a free seat and gets started$lineup.',
+        warning: pressureNote(store.machine),
+        placeholder: h.ask,
+        submitLabel: h.button,
+        allowEmpty: true,
+        providerOption: true,
+        worktreeOption: store.project?.branch != null,
+        project: store.project,
+        office: store.prompts.agent,
+        repoOptions: repoChoices(store),
+        onSubmit: (text, o) {
+          // Whichever seat is free now (someone may have sat down while you were thinking).
+          final deskId = _heraldSeat();
+          if (deskId == null) return toast('Every seat at the tables is taken now', ToastKind.warn);
+          _heraldHires[deskId] = nowMs();
+          net.send(
+            WorkerSpawnCmd(
+              deskId: deskId,
+              prompt: text.isEmpty ? null : text,
+              worktree: o.worktree,
+              provider: o.provider,
+              model: o.model,
+              effort: o.effort,
+              repos: o.repos.isEmpty ? null : o.repos,
+              via: 'herald',
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  /// What the hint says at the herald.
+  (String, List<HintPart>) _heraldHint() {
+    final h = plan.herald;
+    final full = _freeDesk() == null;
+    final paused = hiringPaused(store.usage);
+    final why = full
+        ? 'every seat is taken'
+        : paused
+        ? '💸 Budget spent — hiring resumes tomorrow'
+        : '';
+    return (
+      '${h?.name}|$why',
+      [
+        HintTitle('${plan.icon} ${h?.name ?? 'Herald'}'),
+        if (why.isNotEmpty) HintCost(why) else HintAside(h?.says ?? ''),
+        if (why.isEmpty) const HintKey('E', 'Send out a new worker'),
+      ],
+    );
+  }
+
   void _paintFloor() {
     final p = store.currentFloor()?.palette ?? 0;
     if (p == _painted) return;
     _painted = p;
-    office.setLook(floorPalette(p));
+    world.setLook(floorPalette(p));
   }
 
   /// You're on a floor (or in the building without one): paint it, and open the doors.
@@ -1264,7 +1504,7 @@ class OfficeController implements OfficeActions {
     }
     _paintFloor();
     _syncStack();
-    office.setProjectName(store.project?.name ?? 'Agent Office');
+    world.setProjectName(store.project?.name ?? 'Agent Office');
     // Up the ladder or down the pole: carry on the rest of the way on this floor.
     final c = _climbing;
     if (c != null) {
@@ -1332,7 +1572,7 @@ class OfficeController implements OfficeActions {
 
   /// The issue whose note on the issues board an aim lands on, or null (bare cork, the frame, anything else).
   GhIssue? _noteUnder(({Interactable it, bool near, SceneRaycastHit hit}) aim) {
-    final face = office.boardMeshes['issues'];
+    final face = world.boardMeshes['issues'];
     final uv = aim.hit.uv;
     if (aim.it.kind != InteractKind.issues || face == null || !identical(aim.hit.node, face.node) || uv == null) {
       return null;
@@ -1513,6 +1753,19 @@ class OfficeController implements OfficeActions {
     }
   }
 
+  /// The corners of a walk from [from] to [to] on the building's map: round the office (and up its stairs),
+  /// or round a map of its own's hall (and down to its dungeon).
+  List<Corner> _wayTo(WalkSpot from, WalkSpot to) {
+    if (inOffice) return wayTo(from, to);
+    final d = world.dungeon;
+    final hall = world.nav;
+    final Pt a = (from.x, from.z), b = (to.x, to.z);
+    final pts = d != null
+        ? levelRoute(d.plan, hall, d.nav, a, from.y < d.plan.ceiling - 0.5, b, to.y < d.plan.ceiling - 0.5)
+        : hall.route(a, b);
+    return [for (final (x, z) in pts.skip(1)) (x: x, z: z)];
+  }
+
   void _stopWalking() {
     _walkingTo = null;
     _errand = null;
@@ -1533,7 +1786,7 @@ class OfficeController implements OfficeActions {
     _stopWalking();
     _errand = (at: at, what: what, face: face, then: then);
     toast('🚶 Walking over to $what');
-    player.walkPath(wayTo((x: player.pos.x, y: player.pos.y, z: player.pos.z), (x: at.x, y: 0, z: at.z)));
+    player.walkPath(_wayTo((x: player.pos.x, y: player.pos.y, z: player.pos.z), (x: at.x, y: 0, z: at.z)));
   }
 
   void _errandEnd(PathEnd why) {
@@ -1591,7 +1844,7 @@ class OfficeController implements OfficeActions {
   late final PaletteHost _paletteHost = PaletteHost(
     store: store,
     you: () => (x: player.pos.x, z: player.pos.z),
-    interactables: () => office.interactables,
+    interactables: () => world.interactables,
     walkThen: walkThen,
     openTerminal: openWorkerTerminal,
     hireAt: _hireAtDesk,
@@ -1619,9 +1872,12 @@ class OfficeController implements OfficeActions {
     walkTo: walkTo,
   );
 
+  /// The place a peer's `seat` names on the building's map, from where you are (up on the roof, or down on a floor).
+  SeatPlace? _seatAt(String key) => seatHereOn(plan, key, store.floor == roof);
+
   /// Where they are, sitting or standing.
   WalkSpot _whereIs(PeerInfo p) {
-    final s = p.seat != null ? seatAt(p.seat!) : null;
+    final s = p.seat != null ? _seatAt(p.seat!) : null;
     return s != null ? (x: s.x, y: s.y, z: s.z) : (x: p.x, y: p.y, z: p.z);
   }
 
@@ -1653,7 +1909,7 @@ class OfficeController implements OfficeActions {
     if (_flat(at) < _nearEnough && (at.y - player.pos.y).abs() < 1) return _arrivedAt(at);
     if (now < w.replanAt) return;
     _walkingTo = (id: w.id, replanAt: now + 800);
-    player.walkPath(wayTo((x: player.pos.x, y: player.pos.y, z: player.pos.z), at));
+    player.walkPath(_wayTo((x: player.pos.x, y: player.pos.y, z: player.pos.z), at));
   }
 
   void _pathEnded(PathEnd why) {
@@ -1732,7 +1988,7 @@ class OfficeController implements OfficeActions {
       }
       r.person.setSmoking(peer.smoking ?? false);
       r.person.holdDrink(roofHub.drinkOf(peer));
-      r.person.sit(peer.seat != null ? seatAt(peer.seat!)?.hips : null);
+      r.person.sit(peer.seat != null ? _seatAt(peer.seat!)?.hips : null);
       r.person.setDoing(whereabouts(peer));
       r.person.carry(peer.carrying);
     }
@@ -1767,17 +2023,24 @@ class OfficeController implements OfficeActions {
 
   void _syncWorkers() {
     for (final w in store.workers.values) {
-      final desk = office.desks[w.deskId];
+      final desk = world.desks[w.deskId];
       if (desk == null) continue;
       var v = _workerViews[w.id];
       if (v == null) {
         departures.vacate(w.deskId);
-        final model = Worker(w.name, w.color, labels)..setCostume(_theme);
+        final model = Worker(w.name, w.color, labels)
+          ..setCostume(_theme)
+          ..setOutfit(plan.outfit == 'peasant' ? 'peasant' : null)
+          ..setAge(_ageOf(w));
         desk.seatAnchor.add(model.root);
-        // Its globe floats beside the laptop, out from behind the card over its head and the back
-        // of its chair, so it shows from across the room.
-        model.setPropSpot(pointIn(model.root, desk.laptopAnchor, vm.Vector3(0.64, 0.5, -0.1)));
-        final laptop = Laptop();
+        // Its globe floats beside the laptop (or the kiosk's counter), out from behind the card over its
+        // head and the back of its chair, so it shows from across the room.
+        final beside = desk.def.station != null ? vm.Vector3(0.62, 0.9, 0) : vm.Vector3(0.64, 0.5, -0.1);
+        model.setPropSpot(pointIn(model.root, desk.laptopAnchor, beside));
+        // In the castle, a worker at the tables gets up and walks about (see Court): a new one runs in to its seat.
+        final court = worlds.court;
+        if (court != null && _inCourt(w)) court.add(w.id, model, desk, _seatedAlready ? null : _cameFrom(w));
+        final laptop = Laptop(tome: world.device == WorldDevice.tome);
         desk.laptopAnchor.add(laptop.root);
         desk.vacancy.visible = false;
         desk.chair.rotation = vm.Quaternion.identity();
@@ -1811,7 +2074,7 @@ class OfficeController implements OfficeActions {
             : task,
       );
       v.model.setAction(w.action);
-      final def = deskById[w.deskId];
+      final def = plan.byId[w.deskId];
       // Keys clack while it types, not while it reads, watches its tests or browses.
       if (def != null) {
         sound.setTyping(
@@ -1835,12 +2098,15 @@ class OfficeController implements OfficeActions {
     for (final id in _workerViews.keys.toList()) {
       if (store.workers.containsKey(id)) continue;
       final v = _workerViews.remove(id)!;
-      final desk = office.desks[v.deskId];
-      // Sent home: it packs up and walks out, and the seat shows as free once it's up.
-      if (desk != null && _sentHome.contains(id)) {
-        // Off the desk first if it was up there dancing: it packs up in its seat.
-        v.model.stopDancing();
-        departures.add(v.model, v.laptop, _Leaving(desk));
+      final desk = world.desks[v.deskId];
+      // Up and about in the castle: it sets off from where it's standing.
+      final up = worlds.court?.release(id);
+      // Sent home: it packs up and walks out, and the seat shows as free once it's up (see departures),
+      // or on a map with its own way of seeing workers off, that (the castle's dungeon, for one it locks up).
+      if (desk != null && _sentHome.contains(id) && _sendOff(id, v, desk, up)) {
+        // The map's script has it.
+      } else if (desk != null && _sentHome.contains(id)) {
+        departures.add(v.model, v.laptop, _Leaving(desk), up);
       } else {
         v.model.root.detach();
         v.laptop.root.detach();
@@ -1851,12 +2117,91 @@ class OfficeController implements OfficeActions {
       sound.removeTypist(id);
     }
     _arrangeBeanbags();
+    // Whoever's waiting on someone lines up for the throne, the one who's waited longest first.
+    worlds.court?.line([
+      for (final w in waitingInOrder(store.workers.values))
+        if (_inCourt(w)) w.id,
+    ]);
     notifier.sync(store.workers);
   }
 
+  /// Set while a floor's workers arrive with it (a welcome, a floor.enter, a change of map): they're in
+  /// their seats already, and nobody runs in.
+  bool _seatedAlready = false;
+
+  /// Syncs the workers as if they were in their seats already: nobody walks in (see [_applyMap]).
+  void _syncWorkersSeated() {
+    final already = _seatedAlready;
+    _seatedAlready = true;
+    _syncWorkers();
+    _seatedAlready = already;
+  }
+
+  /// A worker that sits at the tables (not a board agent or at the meeting table): it gets up and lines
+  /// up for the throne.
+  bool _inCourt(WorkerInfo w) {
+    final d = plan.byId[w.deskId];
+    return w.kind == WorkerKind.agent && d != null && d.station == null && !d.room && w.meeting == null;
+  }
+
+  /// How long a worker sent out from the herald has to turn up before its seat's forgotten (ms).
+  static const double _heraldWait = 30000;
+
+  /// Seats you've just sent a worker out to from the herald (see [_hireFromHerald]), so a second goes elsewhere.
+  final Map<String, double> _heraldHires = {};
+
+  /// The seat a worker sent out from the herald goes to: the first free one, not counting one you've just
+  /// sent someone else to (it isn't taken until the office says so).
+  String? _heraldSeat() {
+    final now = nowMs();
+    _heraldHires.removeWhere((_, at) => now - at > _heraldWait);
+    return [
+      ...plan.desks,
+      ...plan.overflow,
+    ].where((d) => store.workerAtDesk(d.id) == null && !_heraldHires.containsKey(d.id)).firstOrNull?.id;
+  }
+
+  /// Where a worker just hired comes in from, running to its seat: the herald, the doors (off the queue),
+  /// or nowhere (it's just there).
+  Pt? _cameFrom(WorkerInfo w) {
+    _heraldHires.remove(w.deskId);
+    // Sent out by the herald (by anyone: the office says so): from beside him.
+    final h = plan.herald;
+    if (w.via == 'herald' && h != null) return (h.x + math.sin(h.rotY) * 1.1, h.z + math.cos(h.rotY) * 1.1);
+    if (w.createdBy.endsWith('(queue)')) return (plan.door.x, plan.door.z);
+    return null;
+  }
+
+  /// How worn out a worker looks on this map, 0–1: how long it has worked, of the map's ageMinutes.
+  double _ageOf(WorkerInfo w) {
+    final since = w.workingSince;
+    final now = store.officeNow();
+    return _agedBy(
+      (w.workedMs ?? 0) + (since != null && w.status == WorkerStatus.working ? math.max(0, now - since) : 0),
+    );
+  }
+
+  /// How worn out [worked] ms of work makes a worker look on this map, 0–1.
+  double _agedBy(num worked) {
+    final full = plan.ageMinutes;
+    return full > 0 ? math.min(1, worked / (full * 60000)) : 0;
+  }
+
+  /// When the workers' looks were last brought up to how long they've worked.
+  double _agedAt = 0;
+
+  /// A worker sent home on a map with a script for it: true when the script has it (see send_home.dart).
+  bool _sendOff(String id, _WorkerView v, DeskView desk, Pt? up) => false;
+
+  /// Nobody's being seen off any more (a floor arriving, a change of map).
+  void _clearSendoffs() {}
+
+  /// Whoever the floor has kept: locked up in its dungeon, in their cells, or adrift outside its airlock.
+  void _syncJail() {}
+
   /// Once every desk is taken, bean bags come out for the workers who don't fit.
   void _arrangeBeanbags() {
-    final appeared = office.setBeanbags(beanbagsOut((id) => store.workerAtDesk(id) != null || departures.seated(id)));
+    final appeared = world.setBeanbags(beanbagsOut((id) => store.workerAtDesk(id) != null || departures.seated(id)));
     // One came out right where you're standing: you end up on top of it.
     final p = player.pos;
     for (final c in appeared) {
@@ -1885,7 +2230,7 @@ class OfficeController implements OfficeActions {
     // Prefer the empty desk nearest to you; when they're all taken, the bean bag that's out.
     String? best;
     var bestD = double.infinity;
-    for (final d in desks) {
+    for (final d in plan.desks) {
       if (store.workerAtDesk(d.id) != null) continue;
       final dist = math.sqrt(math.pow(d.x - player.pos.x, 2) + math.pow(d.z - player.pos.z, 2));
       if (dist < bestD) {
@@ -1893,7 +2238,10 @@ class OfficeController implements OfficeActions {
         best = d.id;
       }
     }
-    return best ?? nextFreeSeat((id) => store.workerAtDesk(id) != null)?.id;
+    return best ??
+        (inOffice
+            ? nextFreeSeat((id) => store.workerAtDesk(id) != null)?.id
+            : plan.overflow.where((d) => store.workerAtDesk(d.id) == null).firstOrNull?.id);
   }
 
   @override
@@ -1930,7 +2278,7 @@ class OfficeController implements OfficeActions {
 
   void _promptAtDesk(String deskId) {
     final w = store.workerAtDesk(deskId);
-    final desk = deskById[deskId]!;
+    final desk = plan.byId[deskId]!;
     if (w == null) {
       openPrompt(
         PromptOptions(
@@ -1982,7 +2330,7 @@ class OfficeController implements OfficeActions {
 
   /// Direct hire from an empty desk, with an optional first prompt and provider choice.
   void _hireAtDesk(String deskId) {
-    final desk = deskById[deskId]!;
+    final desk = plan.byId[deskId]!;
     openPrompt(
       PromptOptions(
         title: '✨ Hire a worker at ${desk.label}',
@@ -2013,7 +2361,7 @@ class OfficeController implements OfficeActions {
   void killWorker(String workerId) {
     final w = store.workers[workerId];
     if (w == null) return;
-    final where = deskById[w.deskId]?.label ?? 'the desk';
+    final where = plan.byId[w.deskId]?.label ?? 'the desk';
     final session = w.kind == WorkerKind.shell ? 'shared shell' : '${providerLabel(w.provider, store.project)} session';
     final wt = w.worktree;
     if (wt != null) {
@@ -2034,7 +2382,7 @@ class OfficeController implements OfficeActions {
     }
     confirmDialog(
       'Send ${w.name} home?',
-      deskById[w.deskId]?.station != null
+      plan.byId[w.deskId]?.station != null
           ? 'This stops its $session for everyone, and it forgets what it was asked. The next prompt at the $where starts a fresh one.'
           : 'This stops the $session at $where for everyone and frees the desk.',
       'Send home',
@@ -2147,7 +2495,7 @@ class OfficeController implements OfficeActions {
   /// Puts you in front of a desk, looking at it: the PR board's "Go to desk".
   @override
   void goToDesk(String deskId) {
-    final desk = deskById[deskId];
+    final desk = plan.byId[deskId];
     if (desk == null) return;
     ModalStack.instance.closeAll();
     _standAt(desk);
@@ -2201,7 +2549,7 @@ class OfficeController implements OfficeActions {
   /// getting there (you're between floors, or it's gone).
   bool goToWorker(String id) {
     final w = store.workers[id];
-    final desk = w == null ? null : deskById[w.deskId];
+    final desk = w == null ? null : plan.byId[w.deskId];
     if (_riding != null || desk == null) return false;
     ModalStack.instance.closeAll();
     _standAt(desk);
@@ -2219,7 +2567,7 @@ class OfficeController implements OfficeActions {
     String? best;
     var bestD = 2.5;
     for (final w in store.workers.values) {
-      final desk = deskById[w.deskId];
+      final desk = plan.byId[w.deskId];
       if (desk == null || !_workerViews.containsKey(w.id) || !waitingOnSomeone(w)) continue;
       final d = math.sqrt(math.pow(desk.x - player.pos.x, 2) + math.pow(desk.z - player.pos.z, 2));
       if (d < bestD) {
@@ -2290,7 +2638,7 @@ class OfficeController implements OfficeActions {
         title: title,
         context: context,
         initial: initial,
-        newDesk: desk == null ? null : deskById[desk]!.label,
+        newDesk: desk == null ? null : plan.byId[desk]!.label,
         workers: [for (final w in awake) AskWorker(id: w.id, name: w.name, color: w.color, status: w.status)],
         worktreeOption: store.project?.branch != null,
         providerOption: true,
@@ -2440,6 +2788,8 @@ class OfficeController implements OfficeActions {
         }
       case InteractKind.gong:
         _hitGong();
+      case InteractKind.herald:
+        _hireFromHerald();
       case InteractKind.tv:
         voiceRoom.watchShare();
       case InteractKind.decor when target.decorId != null:
@@ -2535,7 +2885,7 @@ class OfficeController implements OfficeActions {
 
   /// E at a seat: sit down on it. Sitting there already, get up, or on the couch facing the TV, watch it.
   void _useSeat(String seatId) {
-    final seat = seatingById[seatId];
+    final seat = plan.seatingById[seatId];
     if (seat == null) return;
     if (player.seat?.seatId == seatId) {
       if (seat.tv && voiceRoom.tvShowing) return voiceRoom.watchShare();
@@ -2570,7 +2920,7 @@ class OfficeController implements OfficeActions {
   Interactable? _mySeat() {
     final id = player.seat?.seatId;
     if (id == null) return null;
-    return (roofHub.usable ?? office.interactables)
+    return (roofHub.usable ?? world.interactables)
         .where((it) => it.kind == InteractKind.seat && it.seatId == id)
         .firstOrNull;
   }
@@ -2587,19 +2937,30 @@ class OfficeController implements OfficeActions {
 
   /// Where confetti comes from over a desk: above the worker's head.
   void _burstOver(String deskId, int n) {
-    final d = deskById[deskId];
+    // Up and about in the castle: over wherever it is.
+    final w = store.workerAtDesk(deskId);
+    final v = w != null && (worlds.court?.away(w.id) ?? false) ? _workerViews[w.id] : null;
+    if (v != null) {
+      final at = v.model.root.position;
+      return confetti.burst(at.x, at.y + 2.1, at.z, n);
+    }
+    final d = plan.byId[deskId];
     if (d != null) confetti.burst(d.x, 2.3, d.z, n);
   }
 
   /// Someone hit the gong, a pull request merged (confetti over its desk), or the queue emptied (a party).
   void _gongRang(GongWhy why, int? pr) {
-    office.gong.strike(why == GongWhy.hit ? 0.7 : 1);
+    final gong = world.gong;
+    gong?.strike(why == GongWhy.hit ? 0.7 : 1);
     sound.gong(why);
-    final top = office.gong.top;
+    // A map with no gong: the bursts come from over the middle of the hall.
+    final b = plan.bounds;
+    final top = gong?.top ?? vm.Vector3((b.minX + b.maxX) / 2, 3, (b.minZ + b.maxZ) / 2);
     if (why == GongWhy.merged) {
       // Confetti rains down all over the floor, and pops over the desk the PR came from while its worker's still there.
-      confetti.rain(_floorArea, _area(_floorArea) * _confettiDensity, 3, _ceilingOver);
-      confetti.rain(_loftArea, _area(_loftArea) * _confettiDensity, 3, (_, _) => Loft.y + Loft.height - 0.1);
+      for (final r in world.rain) {
+        confetti.rain(r.area, _area(r.area) * _confettiDensity, 3, r.top);
+      }
       final it = store.pulls.items.where((p) => p.number == pr).firstOrNull;
       final w = pr == null
           ? null
@@ -2616,37 +2977,28 @@ class OfficeController implements OfficeActions {
       // Three strokes: a burst at the gong, then every desk, then a cannon.
       confetti.burst(top.x, top.y, top.z, 160);
       Timer(const Duration(milliseconds: 850), () {
-        office.gong.strike(0.85);
+        world.gong?.strike(0.85);
         for (final e in _workerViews.entries) {
           _burstOver(e.value.deskId, 120);
           if (!isAsleep(store.workers[e.key]?.status ?? WorkerStatus.offline)) e.value.model.cheer(4);
         }
       });
       Timer(const Duration(milliseconds: 1700), () {
-        office.gong.strike(1.2);
+        world.gong?.strike(1.2);
         confetti.burst(top.x, top.y, top.z, 450, 1.5);
       });
     }
   }
 
-  static const ConfettiArea _floorArea = (minX: Floor.minX, maxX: Floor.maxX, minZ: Floor.minZ, maxZ: Floor.maxZ);
-  static const ConfettiArea _loftArea = (minX: Loft.minX, maxX: Loft.maxX, minZ: Loft.minZ, maxZ: Loft.maxZ);
-
   /// Confetti a square meter of floor gets when a pull request merges.
   static const double _confettiDensity = 3.5;
   static double _area(ConfettiArea a) => (a.maxX - a.minX) * (a.maxZ - a.minZ);
-
-  /// Where confetti rains from downstairs over (x, z): the ceiling, or under the loft, the underside of its floor.
-  static double _ceilingOver(double x, double z) {
-    final loft = x > Loft.minX && x < Loft.maxX && z > Loft.minZ && z < Loft.maxZ;
-    return loft ? Loft.y - 0.35 : wallHeight - 0.1;
-  }
 
   /// A pull request merged: every worker awake on the floor gets up on its desk and dances.
   void _danceParty() {
     for (final e in _workerViews.entries) {
       final v = e.value;
-      final desk = office.desks[v.deskId];
+      final desk = world.desks[v.deskId];
       final parent = v.model.root.parent;
       if (desk == null || parent == null || isAsleep(store.workers[e.key]?.status ?? WorkerStatus.offline)) continue;
       v.model.dance(stageFrom(parent, desk.stage));
@@ -2733,7 +3085,8 @@ class OfficeController implements OfficeActions {
     Interactable? best;
     var bestD = double.infinity;
     final up = roofHub.usable;
-    for (final list in up != null ? [up] : [office.interactables, gallery.interactables, dog.interactables]) {
+    final here = inOffice ? [office.interactables, gallery.interactables, dog.interactables] : [world.interactables];
+    for (final list in up != null ? [up] : here) {
       for (final it in list) {
         if (it.off) continue;
         // Up on the loft, or down underneath it.
@@ -2849,7 +3202,18 @@ class OfficeController implements OfficeActions {
         return voiceRoom.tvHint();
       case InteractKind.coffee:
         final buzzed = caffeine.buzzed(nowMs() / 1000);
-        return ('$buzzed', [const HintTitle('☕ Coffee machine'), HintKey('E', buzzed ? 'Another cup' : 'Grab a cup')]);
+        return (
+          '$buzzed',
+          [
+            HintTitle(it.label ?? '☕ Coffee machine'),
+            HintKey(
+              'E',
+              buzzed
+                  ? 'Another ${it.label != null ? 'drink' : 'cup'}'
+                  : (it.label != null ? 'Have a drink' : 'Grab a cup'),
+            ),
+          ],
+        );
       case InteractKind.smoke:
         final on = _smokeBreakUntil > 0;
         return ('$on', [const HintTitle('🚬 Ashtray'), HintKey('E', on ? 'Stub it out' : 'Take a smoke break')]);
@@ -2890,7 +3254,7 @@ class OfficeController implements OfficeActions {
           [HintTitle('🖼️ $name'), if (d != null) HintAside('hung by ${d.by}'), const HintKey('E', 'Look closer')],
         );
       case InteractKind.seat:
-        final seat = seatingById[it.seatId ?? ''];
+        final seat = plan.seatingById[it.seatId ?? ''];
         if (seat == null) return ('', []);
         if (player.seat?.seatId == seat.id) {
           return (
@@ -2955,6 +3319,8 @@ class OfficeController implements OfficeActions {
           '${dog.name}|$doing',
           [HintTitle('🐶 ${dog.name}'), if (doing.isNotEmpty) HintAside(doing), const HintKey('E', 'Pet')],
         );
+      case InteractKind.herald:
+        return _heraldHint();
       case InteractKind.station ||
           InteractKind.cabinet ||
           InteractKind.meeting ||
@@ -2972,7 +3338,7 @@ class OfficeController implements OfficeActions {
       return (
         '$paused',
         [
-          HintTitle('${deskById[deskId]!.label} · empty'),
+          HintTitle('${plan.byId[deskId]!.label} · empty'),
           if (paused)
             const HintCost('💸 Budget spent — hiring resumes tomorrow')
           else ...[
@@ -3044,7 +3410,7 @@ class OfficeController implements OfficeActions {
     final n = note ?? _aimedNote;
     final deskId = it?.deskId;
     final worker = deskId == null ? null : store.workerAtDesk(deskId);
-    final room = deskId != null && (deskById[deskId]?.room ?? false);
+    final room = deskId != null && (plan.byId[deskId]?.room ?? false);
     if (!interactionAvailable(it, key, (worker: worker, room: room, note: n, carrying: _carrying != null))) {
       return false;
     }
@@ -3086,6 +3452,12 @@ class OfficeController implements OfficeActions {
     }
     if (e.physicalKey == PhysicalKeyboardKey.keyF) {
       _startHanging();
+      return true;
+    }
+    // On the throne: the herald beside you sends out a new worker.
+    if (e.physicalKey == PhysicalKeyboardKey.keyK && _onThrone() && world.herald != null) {
+      _reachOut();
+      _hireFromHerald();
       return true;
     }
     if (e.physicalKey == PhysicalKeyboardKey.keyN) {
@@ -3279,7 +3651,7 @@ class OfficeController implements OfficeActions {
       if (peer == null || pose == null) continue;
       final r = e.value;
       // Sitting, they're wherever their seat puts them.
-      final sat = peer.seat != null ? seatAt(peer.seat!) : null;
+      final sat = peer.seat != null ? _seatAt(peer.seat!) : null;
       final target = sat != null ? vm.Vector3(sat.x, sat.y, sat.z) : vm.Vector3(pose.x, pose.y, pose.z);
       final rotY = sat?.rotY ?? pose.rotY;
       final pos = r.person.root.position;
@@ -3306,11 +3678,20 @@ class OfficeController implements OfficeActions {
       }
     }
 
+    // How worn out each looks, as they work on (every second or so is plenty).
+    final aging = plan.ageMinutes > 0 && now - _agedAt > 1000;
+    if (aging) _agedAt = now;
     for (final e in _workerViews.entries) {
       final v = e.value;
-      final desk = deskById[v.deskId]!;
+      final desk = plan.byId[v.deskId];
+      if (desk == null) continue;
+      if (aging) {
+        final w = store.workers[e.key];
+        if (w != null) v.model.setAge(_ageOf(w));
+      }
       // A jumping worker holds still while you're near enough to read its card, and jumps again once you walk away.
-      final d = math.sqrt(math.pow(desk.x - player.pos.x, 2) + math.pow(desk.z - player.pos.z, 2));
+      final at = fromEngine(v.model.root.globalTransform.getTranslation());
+      final d = math.sqrt(math.pow(at.x - player.pos.x, 2) + math.pow(at.z - player.pos.z, 2));
       v.model.held = d < (v.model.held ? _holdLeave : _holdNear);
       v.model.update(dt, t);
       // A board agent's kiosk has no laptop to paint.
@@ -3325,22 +3706,19 @@ class OfficeController implements OfficeActions {
     _presenceTick(now);
     voiceRoom.tick(now, me, {for (final e in _remotes.entries) e.key: e.value.person}, player.pos);
     departures.update(dt, t);
+    if (!roofHub.upTop) _sendoffsTick(dt, t);
+    for (final a in worlds.idleAgents) {
+      if (a.view.vacancy.visible) a.model.update(dt, t);
+    }
+    worlds.court?.update(dt);
     dog.update(dt);
-    office.update(t, dt, [
+    world.update(t, dt, [
       player.pos,
       ...[for (final r in _remotes.values) r.person.root.position],
       ...departures.positions(),
+      ...?worlds.court?.positions(),
     ]);
-    office.jukebox.update(t, dt, sound.beat());
-    office.stack.update(dt, [
-      (x: player.pos.x, y: player.pos.y, z: player.pos.z, onLadder: climber.grip == Grip.ladder),
-      for (final r in _remotes.values)
-        () {
-          final q = r.person.root.position;
-          final ground = groundAt(office.colliders, q.x, q.z, q.y);
-          return (x: q.x, y: q.y, z: q.z, onLadder: gripOf(q.x, q.y, q.z, office.stack.poles(), ground) == Grip.ladder);
-        }(),
-    ], player.camPos);
+    if (inOffice) _officeTick(t, dt);
     _checkSmokeBreak(now);
     smoke.update(dt, player.camPos, player.camTarget);
     needsYou.update(
@@ -3378,6 +3756,23 @@ class OfficeController implements OfficeActions {
     final free = show && lockAvailable && !pointerLocked;
     final next = CrosshairState(show: show, on: _target != null, free: free, relookOnKey: free && relookOnKey);
     if (next != crosshair.value) crosshair.value = next;
+  }
+
+  /// Each frame, while you're on a map of its own: whoever the map is seeing off, locked up or adrift.
+  void _sendoffsTick(double dt, double t) {}
+
+  /// Each frame, while the building's the office: its jukebox, and the ladder and poles between floors.
+  void _officeTick(double t, double dt) {
+    office.jukebox.update(t, dt, sound.beat());
+    office.stack.update(dt, [
+      (x: player.pos.x, y: player.pos.y, z: player.pos.z, onLadder: climber.grip == Grip.ladder),
+      for (final r in _remotes.values)
+        () {
+          final q = r.person.root.position;
+          final ground = groundAt(office.colliders, q.x, q.z, q.y);
+          return (x: q.x, y: q.y, z: q.z, onLadder: gripOf(q.x, q.y, q.z, office.stack.poles(), ground) == Grip.ladder);
+        }(),
+    ], player.camPos);
   }
 
   /// The page's query string, as the page was opened.
@@ -3435,8 +3830,10 @@ class OfficeController implements OfficeActions {
       ..garageLight = m.garageLight.vector
       ..wet = m.wet * (1 - m.lying)
       ..snow = m.lying * 0.9;
-    // Pools of light round the eight lamps nearest you.
-    final lamps = [...office.night.lamps]..sort((a, b) => _d2(a.x, a.z).compareTo(_d2(b.x, b.z)));
+    // Pools of light round the eight lamps nearest you (the office's: a map of its own lights itself, see mood).
+    final lamps = inOffice || roofHub.upTop
+        ? ([...office.night.lamps]..sort((a, b) => _d2(a.x, a.z).compareTo(_d2(b.x, b.z))))
+        : const <Lamp>[];
     for (var i = 0; i < 8; i++) {
       if (i < lamps.length && m.lampsOn > 0.005) {
         final lamp = lamps[i];
@@ -3450,6 +3847,11 @@ class OfficeController implements OfficeActions {
       }
     }
     roofHub.light(l);
+    l.officeOn = inOffice || roofHub.upTop ? 1 : 0;
+    final mood = world.mood;
+    if (!roofHub.upTop && mood != null) {
+      mood((light: l, fog: scene.fog, daylight: m.daylight, t: t, eye: player.camPos));
+    }
     Toon.updateLight();
     for (final b in office.night.bulbs) {
       b.glow(m.lampsOn);
@@ -3457,11 +3859,14 @@ class OfficeController implements OfficeActions {
     office.night.setWindowsLit(m.lampsOn * 1.1);
     setToonColor(office.night.clouds, m.clouds.color);
     final fog = scene.fog;
-    fog.color = m.background.vector;
-    if (roofHub.upTop) {
+    if (!roofHub.upTop && mood != null) {
+      // The world's mood set its own fog.
+    } else if (roofHub.upTop) {
+      fog.color = m.background.vector;
       fog.start = m.fogNear * roofHub.fogReach;
       fog.end = m.fogFar * roofHub.fogReach;
     } else {
+      fog.color = m.background.vector;
       // The haze thins out the higher you are over the street (see hazeFog).
       final haze = hazeFog(m.fogNear, m.fogFar, player.camPos.y, office.night.street);
       fog.start = haze.start;

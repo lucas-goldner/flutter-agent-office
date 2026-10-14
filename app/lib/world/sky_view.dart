@@ -10,6 +10,7 @@ import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
 import 'package:office_shared/layout.dart';
+
 import 'office/outside.dart' show NightParts;
 import 'sky_model.dart';
 import 'text.dart' show verticalPlane;
@@ -70,8 +71,10 @@ class SkyView {
     _moonMat = UnlitMaterial()
       ..alphaMode = AlphaMode.blend
       ..baseColorFactor = _lin(0xf2f1ea, 1);
-    _sun = Node(name: 'sun', mesh: Mesh(SphereGeometry(radius: 5, segments: 24, rings: 16), _sunMat))..castsShadows = false;
-    _moon = Node(name: 'moon', mesh: Mesh(SphereGeometry(radius: 3.2, segments: 24, rings: 16), _moonMat))..castsShadows = false;
+    _sun = Node(name: 'sun', mesh: Mesh(SphereGeometry(radius: 5, segments: 24, rings: 16), _sunMat))
+      ..castsShadows = false;
+    _moon = Node(name: 'moon', mesh: Mesh(SphereGeometry(radius: 3.2, segments: 24, rings: 16), _moonMat))
+      ..castsShadows = false;
     _dome
       ..add(_stars)
       ..add(_sun)
@@ -112,8 +115,15 @@ class SkyView {
   final NightParts _night;
   final math.Random _rnd;
   final Node _dome = Node(name: 'sky-dome');
+
   /// Up on the roof: rain and snow fall on it, and the office's bulbs (under your feet) have no halos.
   bool roof = false;
+
+  /// In a hall with a roof and walls all round (a map other than the office's): no rain or snow falls,
+  /// and the office's bulbs aren't there to glow.
+  bool indoors = false;
+
+  bool _shelter(double x, double z) => indoors || (!roof && _sheltered(x, z));
 
   late final Node _stars, _sun, _moon, _haloNode, _rainNode, _snowNode;
   late final UnlitMaterial _starMat, _sunMat, _moonMat, _haloMat, _rainMat, _snowMat;
@@ -161,7 +171,8 @@ class SkyView {
     _dome.position = cam;
     _starMat.baseColorFactor = vm.Vector4(1, 1, 1, m.starOpacity);
     _stars.visible = m.starOpacity > 0.01;
-    vm.Vector3 up(double e, double a) => vm.Vector3(math.cos(e) * math.sin(a) * 160, math.sin(e) * 160, -math.cos(e) * math.cos(a) * 160);
+    vm.Vector3 up(double e, double a) =>
+        vm.Vector3(math.cos(e) * math.sin(a) * 160, math.sin(e) * 160, -math.cos(e) * math.cos(a) * 160);
     _sun.position = up(m.sunEl, m.sunAz);
     final sc = m.sunDiscColor;
     _sunMat.baseColorFactor = vm.Vector4(sc.r, sc.g, sc.b, m.sunDiscOpacity);
@@ -174,7 +185,7 @@ class SkyView {
     _moon.visible = m.moonDiscOpacity > 0.01;
 
     // Halos round the bulbs, when the lamps are on.
-    _haloNode.visible = m.lampsOn > 0.01 && _night.halos.isNotEmpty && !roof;
+    _haloNode.visible = m.lampsOn > 0.01 && _night.halos.isNotEmpty && !roof && !indoors;
     if (_haloNode.visible) {
       _haloMat.baseColorFactor = vm.Vector4(1, 1, 1, m.lampsOn * 0.85);
       final halos = _night.halos;
@@ -227,7 +238,7 @@ class SkyView {
           ..[d] = x
           ..[d + 1] = y
           ..[d + 2] = z;
-        if (!roof && _sheltered(x, z)) {
+        if (_shelter(x, z)) {
           _rain.setInstanceTransform(i, _hidden);
           continue;
         }
@@ -264,7 +275,7 @@ class SkyView {
           ..[f] = x
           ..[f + 1] = y
           ..[f + 2] = z;
-        _snow.setInstanceTransform(i, !roof && _sheltered(x, z) ? _hidden : _facing(vm.Vector3(x, y, z), cam, 1));
+        _snow.setInstanceTransform(i, _shelter(x, z) ? _hidden : _facing(vm.Vector3(x, y, z), cam, 1));
       }
     }
   }
@@ -320,7 +331,8 @@ class _WetGlass {
     _since += dt;
     _spawn += rain * 70 * dt;
     for (; _spawn >= 1; _spawn--) {
-      if (_drops.length < 160) _drops.add(_Drop(rand(0, _n.toDouble()), rand(0, _n.toDouble()), rand(0.8, 2.2), rand(4, 12)));
+      if (_drops.length < 160)
+        _drops.add(_Drop(rand(0, _n.toDouble()), rand(0, _n.toDouble()), rand(0.8, 2.2), rand(4, 12)));
     }
     for (final d in _drops) {
       d.age += dt;

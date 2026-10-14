@@ -24,6 +24,7 @@ import '../world/drunk.dart';
 import '../world/hands.dart';
 import '../world/labels.dart';
 import '../world/office/office.dart';
+import '../world/world.dart' show World;
 import '../world/player.dart';
 import '../world/rooftop.dart';
 import '../world/toon.dart';
@@ -66,6 +67,9 @@ class RoofHub {
 
   /// The city all around, far below.
   RoofCityMaker? city;
+
+  /// The building's map below the roof (the controller's world): the office, or a map of its own.
+  World Function()? world;
 
   /// Up on the roof: built the first time anyone goes up there.
   Rooftop? rooftop;
@@ -118,10 +122,12 @@ class RoofHub {
     if (up == upTop) return false;
     upTop = up;
     final r = up ? theRoof() : rooftop;
-    office.group.visible = !up;
+    // The building's map you come down to: the office, or a map of its own.
+    final below = world?.call();
+    (below?.group ?? office.group).visible = !up;
     r?.group.visible = up;
     if (up) r!.setFloors(math.max(1, store.floors.length));
-    player.colliders = up ? r!.colliders : office.colliders;
+    player.colliders = up ? r!.colliders : (below?.colliders ?? office.colliders);
     sound.setOutdoors(up);
     sound.setDj(up ? djAt : null);
     // Drinks stay at the bar (what you've had comes down with you).

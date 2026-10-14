@@ -47,8 +47,40 @@ class PlayerInput {
   void clear() => forward = back = left = right = run = jump = false;
 }
 
+/// The room the camera keeps to (see [PlayerController.room]): its floor, how thick its outside walls
+/// are, whether it's walled and roofed all round with no street or garage under it, and a room under the
+/// floor (the castle's dungeon) the camera keeps inside while you're down there.
+class CameraRoom {
+  const CameraRoom({
+    required this.minX,
+    required this.maxX,
+    required this.minZ,
+    required this.maxZ,
+    required this.wall,
+    this.enclosed = false,
+    this.vault,
+  });
+
+  final double minX, maxX, minZ, maxZ;
+  final double wall;
+  final bool enclosed;
+  final ({double minX, double maxX, double minZ, double maxZ, double top})? vault;
+
+  /// The office's.
+  static const CameraRoom office = CameraRoom(
+    minX: Floor.minX,
+    maxX: Floor.maxX,
+    minZ: Floor.minZ,
+    maxZ: Floor.maxZ,
+    wall: wallT,
+  );
+}
+
 class PlayerController {
   PlayerController(this.colliders);
+
+  /// The room the camera stays in while you're in it: the office's, unless the building's on a map of its own.
+  CameraRoom room = CameraRoom.office;
 
   List<Collider> colliders;
   final vm.Vector3 pos = vm.Vector3.zero();
@@ -360,53 +392,44 @@ class PlayerController {
     // room while you're in the office, out of the building while you're outside or on the balcony.
     // And under the loft, its roof or the garage ceiling.
     const m = 0.4;
+    final r = room;
     // On the ladder or a pole you can be down in a shaft under the floor, but you're still indoors.
     final rigged = rig != null;
-    final indoors =
-        (rigged || pos.y > -slab - 0.5) &&
-        pos.x > Floor.minX &&
-        pos.x < Floor.maxX &&
-        pos.z > Floor.minZ &&
-        pos.z < Floor.maxZ;
-    if (indoors) {
-      cam.x = cam.x.clamp(Floor.minX + m, Floor.maxX - m);
-      cam.z = cam.z.clamp(Floor.minZ + m, Floor.maxZ - m);
+    final under = pos.x > r.minX && pos.x < r.maxX && pos.z > r.minZ && pos.z < r.maxZ;
+    final indoors = (rigged || pos.y > -slab - 0.5) && under;
+    // Down in a room under the floor (the castle's dungeon): the camera keeps inside that.
+    final v = r.vault;
+    if (v != null && pos.y < v.top - 0.5 && pos.x > v.minX && pos.x < v.maxX && pos.z > v.minZ && pos.z < v.maxZ) {
+      cam.x = cam.x.clamp(v.minX + m, v.maxX - m);
+      cam.z = cam.z.clamp(v.minZ + m, v.maxZ - m);
+    } else if (indoors) {
+      cam.x = cam.x.clamp(r.minX + m, r.maxX - m);
+      cam.z = cam.z.clamp(r.minZ + m, r.maxZ - m);
     }
     final floorY = rigged ? 0.0 : math.max(groundAt(colliders, pos.x, pos.z, pos.y), street);
     final roof = ceilingAt(colliders, cam.x, cam.z, floorY) - 0.3;
     cam.y = cam.y.clamp(floorY + 0.6, math.max(floorY + 0.6, math.min(floorY + 3.5, roof)));
     // Down on the street, stay under the garage ceiling so its edge never cuts across the view.
     final garage = street - streetY - slab;
-    if (pos.y < garage - 1 && !rigged) cam.y = math.min(cam.y, math.max(floorY + 0.6, garage - 0.3));
+    if (!r.enclosed && pos.y < garage - 1 && !rigged) cam.y = math.min(cam.y, math.max(floorY + 0.6, garage - 0.3));
     // How far you are out past each outside wall (west, east, north, south), and how far inside them the camera is.
-    const e = wallT + m;
-    final out = [
-      Floor.minX - wallT - pos.x,
-      pos.x - Floor.maxX - wallT,
-      Floor.minZ - wallT - pos.z,
-      pos.z - Floor.maxZ - wallT,
-    ];
+    final e = r.wall + m;
+    final out = [r.minX - r.wall - pos.x, pos.x - r.maxX - r.wall, r.minZ - r.wall - pos.z, pos.z - r.maxZ - r.wall];
     final side = out.indexOf(out.reduce(math.max));
     final camIn =
-        [
-          cam.x - (Floor.minX - e),
-          Floor.maxX + e - cam.x,
-          cam.z - (Floor.minZ - e),
-          Floor.maxZ + e - cam.z,
-        ].reduce(math.min) >
-        0;
+        [cam.x - (r.minX - e), r.maxX + e - cam.x, cam.z - (r.minZ - e), r.maxZ + e - cam.z].reduce(math.min) > 0;
     // Outside, back the camera out through the wall you're standing beyond: above the garage always,
     // and down in it where it's walled in (the west and north sides).
-    if (!indoors && out[side] > 0 && camIn && (cam.y > garage || side == 0 || side == 2)) {
+    if (!indoors && out[side] > 0 && camIn && (r.enclosed || cam.y > garage || side == 0 || side == 2)) {
       switch (side) {
         case 0:
-          cam.x = Floor.minX - e;
+          cam.x = r.minX - e;
         case 1:
-          cam.x = Floor.maxX + e;
+          cam.x = r.maxX + e;
         case 2:
-          cam.z = Floor.minZ - e;
+          cam.z = r.minZ - e;
         default:
-          cam.z = Floor.maxZ + e;
+          cam.z = r.maxZ + e;
       }
     }
     if (snap) {
@@ -524,11 +547,12 @@ bool touches(Collider c, double x, double z, double r) {
 }
 
 /// The floor under someone standing at (x, z) with their feet at [y]: the highest top they're on or
-/// above (out of doors, the street's; see streetColliders).
-double groundAt(List<Collider> colliders, double x, double z, double y) {
+/// above (out of doors, the street's; see streetColliders). Without [fences], what's there only to keep
+/// people out doesn't count.
+double groundAt(List<Collider> colliders, double x, double z, double y, [bool fences = true]) {
   var g = double.negativeInfinity;
   for (final c in colliders) {
-    if (c.top > 50 || y < c.top - 0.1 || c.top <= g) continue;
+    if (c.top > 50 || y < c.top - 0.1 || c.top <= g || (c.fence && !fences)) continue;
     if (touches(c, x, z, kRadius)) g = c.top;
   }
   return g;
