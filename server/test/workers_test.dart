@@ -1217,6 +1217,96 @@ void main() {
     expect(resumed.args, contains('stopped'));
     expect(_promptOf(resumed), isNull);
   });
+
+  // --- #197: a worktree deleted outside the office -----------------------------------------------
+
+  test('a worker whose worktree was deleted outside the office waits, marked lost, instead of failing to start; '
+      'rebuilding puts it back and it carries on', () async {
+    final f = Fixture();
+    addTearDown(f.close);
+    String git(String cwd, List<String> args) {
+      final r = Process.runSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], workingDirectory: cwd);
+      expect(r.exitCode, 0, reason: '${r.stderr}');
+      return '${r.stdout}'.trim();
+    }
+
+    git(f.root, ['init', '-q', '-b', 'main']);
+    File(p.join(f.root, 'a.txt')).writeAsStringSync('a');
+    git(f.root, ['add', 'a.txt']);
+    git(f.root, ['commit', '-qm', 'init']);
+    final env = isolatedEnv(f, {'FAKE_AGENT_LOG': f.log});
+    WorkerManager officeWith(List<WorkerInfo> updates, List<String> toasts) => WorkerManager(
+      f.root,
+      f.data,
+      f.claude,
+      const ['--from-test'],
+      _hook,
+      WorkerEvents(
+        update: updates.add,
+        remove: (_) {},
+        data: (_, _, _) {},
+        screen: (_, _) {},
+        toast: (text, _) => toasts.add(text),
+      ),
+      ledger(f.data),
+      env: env,
+    );
+    final before = officeWith([], []);
+    Future<WorkerInfo> hire(String deskId, String session) async {
+      final n = _launches(f).length;
+      final w = spawned(before.spawn(deskId, 'test', 'task for $session', true));
+      final token = (await waitFor(() => _launches(f), (x) => x.length > n)).last.hookToken!;
+      expect(before.handleHook(w.id, token, 'SessionStart', {'session_id': session}), isTrue);
+      return w;
+    }
+
+    final kept = await hire('desk-1', 'kept-branch');
+    final gone = await hire('desk-2', 'gone-branch');
+    // Kept did some work on its branch; gone's branch goes with its folder.
+    final keptDir = p.join(f.root, kept.worktree!.path);
+    File(p.join(keptDir, 'work.txt')).writeAsStringSync('work');
+    git(keptDir, ['add', 'work.txt']);
+    git(keptDir, ['commit', '-qm', 'work']);
+    await before.shutdown(true);
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    // Deleted while the office was down, by hand.
+    Directory(keptDir).deleteSync(recursive: true);
+    Directory(p.join(f.root, gone.worktree!.path)).deleteSync(recursive: true);
+    git(f.root, ['worktree', 'prune']);
+    git(f.root, ['branch', '-D', gone.worktree!.branch]);
+
+    final toasts = <String>[];
+    final after = officeWith([], toasts);
+    addTearDown(after.shutdown);
+    final launched = _launches(f).length;
+    await after.start();
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    // Nobody started, nobody was told "could not start": both wait at their desks, marked lost.
+    expect(_launches(f).length, launched);
+    expect(toasts, isEmpty);
+    expect(after.get(kept.id)?.lost, LostBranch.here);
+    expect(after.get(gone.id)?.lost, LostBranch.gone);
+    expect(after.get(kept.id)?.status, WorkerStatus.offline);
+    expect(after.resume(kept.id), matches(RegExp(r'worktree .* was deleted outside agent-office')));
+    expect(_launches(f).length, launched);
+
+    // Put back on its own branch, work and all, and it carries on its conversation.
+    final back = await after.rebuild(kept.id);
+    expect((back.rebuilt, back.note, back.error), (true, null, null));
+    expect(git(keptDir, ['rev-parse', '--abbrev-ref', 'HEAD']), kept.worktree!.branch);
+    expect(File(p.join(keptDir, 'work.txt')).existsSync(), isTrue);
+    expect(after.get(kept.id)?.lost, isNull);
+    final resumed = await waitFor(() => _launches(f).sublist(launched), (x) => x.isNotEmpty);
+    expect(resumed.first.args, containsAll(['--resume', 'kept-branch']));
+
+    // Its branch gone too: made again from where it started.
+    final again = await after.rebuild(gone.id);
+    expect(again.rebuilt, isTrue);
+    expect(again.note, contains('was deleted too'));
+    expect(git(p.join(f.root, gone.worktree!.path), ['rev-parse', 'HEAD']), gone.worktree!.base);
+    expect(after.get(gone.id)?.lost, isNull);
+    expect(toasts, isEmpty);
+  });
 }
 
 bool _claudeLaunch(Invocation r) => r.kind == 'claude' && r.args.contains('--settings');

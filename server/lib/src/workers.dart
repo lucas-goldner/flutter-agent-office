@@ -197,6 +197,9 @@ class _Worker {
 
   /// Where this run's own output starts, below the scrollback carried over from before.
   TermMarker? fresh;
+
+  /// Its lost worktree is being put back (see rebuild): the folder coming back mustn't wake it before that's done.
+  bool rebuilding = false;
 }
 
 /// What a worker's provider adapter is handed of it (see WorkerHandle).
@@ -304,6 +307,7 @@ class WorkerManager implements QueueWorkers {
     _usageTimer = Timer.periodic(_usageScan, (_) {
       for (final w in List.of(_workers.values)) {
         _scanUsage(w);
+        _watchFolder(w);
       }
     });
     _saveTimer = Timer.periodic(_saveScrollback, (_) {
@@ -379,6 +383,10 @@ class WorkerManager implements QueueWorkers {
     ]);
     // Terminals nobody saved a claim on (their worker was sent home as the office went down).
     _host.killUnclaimed();
+    // Whoever's worktree was deleted while the office was down stays asleep, marked lost, rather than failing to start.
+    for (final w in _workers.values) {
+      _checkLost(w);
+    }
     wakeAll();
   }
 
@@ -531,6 +539,7 @@ class WorkerManager implements QueueWorkers {
     final w = _workers[id];
     if (w == null) return 'No such worker';
     if (w.pty != null || w.dsh != null) return 'Worker is already running';
+    if (_checkLost(w, true)) return lostMessage(w.info);
     w.info.status = WorkerStatus.starting;
     w.info.exitCode = null;
     final station = deskById[w.info.deskId]?.station;
@@ -632,6 +641,100 @@ class WorkerManager implements QueueWorkers {
           : "Deleted $name's worktree and kept branch ${wt.branch}",
       error: null,
     );
+  }
+
+  /// Whether the folder a worker works in (its worktree) is gone: deleted outside the office. It's then
+  /// marked lost (WorkerInfo.lost) for whoever comes to its desk, instead of failing to start over and
+  /// over; once the folder is back, it isn't any more.
+  bool _checkLost(_Worker w, [bool recheck = false]) {
+    final info = w.info;
+    final wt = info.worktree;
+    if (wt == null || Directory(_cwd(info)).existsSync()) {
+      if (info.lost != null) {
+        info.lost = null;
+        _emitUpdate(w);
+      }
+      return false;
+    }
+    // Where its branch is only changes by hand: looked at again when someone tries to start it.
+    if (info.lost != null && !recheck) return true;
+    final branch = _trees.branchState(wt.branch);
+    if (branch != info.lost) {
+      info.lost = branch;
+      _emitUpdate(w);
+    }
+    return true;
+  }
+
+  /// Every so often: a worktree deleted under a worker marks it lost, and one put back by hand
+  /// (`git worktree add` at the same place) sets an asleep worker back to work.
+  void _watchFolder(_Worker w) {
+    if (w.info.worktree == null || w.rebuilding) return;
+    final was = w.info.lost != null;
+    if (!_checkLost(w) && was && w.pty == null && w.dsh == null) resume(w.info.id);
+  }
+
+  /// Puts a lost worker's worktree back where it was (see Worktrees.restore) and starts it again,
+  /// carrying on its conversation. Everyone else who worked there (the rest of a meeting's table) gets
+  /// back to work with it. Resolves to whether it `rebuilt` anything, with a note on where a branch
+  /// came back from (or why there was nothing to do), or to what went wrong.
+  Future<({bool rebuilt, String? note, String? error})> rebuild(String id) async {
+    final w = _workers[id];
+    if (w == null) return (rebuilt: false, note: null, error: 'No such worker');
+    final info = w.info;
+    final wt = info.worktree;
+    if (wt == null) return (rebuilt: false, note: null, error: '${info.name} works in the main checkout');
+    if (w.rebuilding) return (rebuilt: false, note: null, error: null);
+    final folder = _cwd(info);
+    // Whoever the folder was deleted from under: this worker, and the rest of its meeting's table.
+    final stranded = [
+      for (final o in _workers.values)
+        if (o.info.worktree != null && _cwd(o.info) == folder && (o.info.lost != null || _checkLost(o))) o,
+    ];
+    final froms = <String>[];
+    if (!Directory(folder).existsSync()) {
+      w.rebuilding = true;
+      try {
+        final r = await _trees.restore(_ref(wt));
+        if (r.error != null) {
+          return (rebuilt: false, note: null, error: "Couldn't rebuild ${info.name}'s worktree: ${r.error}");
+        }
+        if (r.from == LostBranch.origin) froms.add('${wt.branch} came back from origin');
+        if (r.from == LostBranch.gone) {
+          froms.add('${wt.branch} was deleted too, so it starts again from where it began');
+        }
+      } finally {
+        w.rebuilding = false;
+      }
+    }
+    for (final o in stranded) {
+      if (!_checkLost(o)) _restartIn(o);
+    }
+    if (stranded.isEmpty) {
+      if (w.pty == null && w.dsh == null) resume(id);
+      return (rebuilt: false, note: "${info.name}'s worktree is already there", error: null);
+    }
+    return (rebuilt: true, note: froms.isEmpty ? null : froms.join('; '), error: null);
+  }
+
+  /// Starts a worker in its folder again: an asleep one wakes up, and one whose process was left
+  /// running in the folder deleted from under it starts over in the new one, carrying on its conversation.
+  void _restartIn(_Worker w) {
+    final proc = w.pty;
+    final session = w.dsh;
+    if (proc != null || session != null) {
+      if (_midTurn(w)) w.interrupted = true;
+      // Gone before it exits, so the exit handler knows it was the office and stays quiet.
+      w.pty = null;
+      w.dsh = null;
+      try {
+        session?.close();
+        proc?.kill();
+      } catch (_) {
+        // already gone
+      }
+    }
+    resume(w.info.id);
   }
 
   /// What a worker's worktree holds, so whoever sends it home knows what deleting it would lose.
@@ -989,6 +1092,12 @@ class WorkerManager implements QueueWorkers {
 
   void _launch(_Worker w, String? prompt, String? resumeSessionId) {
     final info = w.info;
+    // Its folder was deleted meanwhile: it waits, marked lost, for someone to rebuild it or send it home.
+    if (_checkLost(w)) {
+      info.status = WorkerStatus.exited;
+      _emitUpdate(w);
+      return;
+    }
     // The new terminal starts with what the last one showed (on a resume), or with what was saved
     // when the office last stopped, so earlier output is still there to scroll back to and search.
     final old = w.term;
@@ -1628,6 +1737,10 @@ class WorkerManager implements QueueWorkers {
 }
 
 // -----------------------------------------------------------------------------------------------
+
+/// What starting a worker whose worktree was deleted (see WorkerInfo.lost) says instead.
+String lostMessage(LiveInfo info) =>
+    "${info.name}'s worktree ${info.worktree?.path} was deleted outside agent-office — rebuild it or send ${info.name} home from its desk";
 
 /// In the middle of a turn: working, or asking something (not stuck on a trust or login screen).
 bool _midTurn(_Worker w) => midTurn(w.info, w.bootBlocked);

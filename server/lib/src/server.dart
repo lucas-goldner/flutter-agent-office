@@ -1752,6 +1752,40 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         } else {
           hire();
         }
+      case 'worker.rebuild':
+        final w = worker(msg['workerId']);
+        if (w == null) break;
+        final floor = w.floor;
+        // With `all`, every worker on the floor whose worktree was deleted, this one first.
+        final ids = [
+          w.wid,
+          if (msg['all'] == true)
+            for (final x in floor.workers.list())
+              if (x.lost != null && x.id != w.wid) x.id,
+        ];
+        unawaited(() async {
+          final names = <String>[];
+          final notes = <String>[];
+          for (final id in ids) {
+            final info = floor.workers.get(id);
+            // Sent home meanwhile, or back already with one before it (the rest of a meeting's table).
+            if (info == null || (id != w.wid && info.lost == null)) continue;
+            final r = await floor.workers.rebuild(id);
+            if (r.error != null) {
+              warn(c, r.error);
+            } else if (!r.rebuilt) {
+              sendTo(c, ToastMsg(r.note ?? "${info.name}'s worktree is already there", ToastLevel.info));
+            } else {
+              names.add(info.name);
+              if (r.note != null) notes.add(r.note!);
+            }
+          }
+          if (names.isEmpty) return;
+          final whose = names.length == 1
+              ? "${names[0]}'s worktree"
+              : 'the worktrees of ${names.sublist(0, names.length - 1).join(', ')} and ${names.last}';
+          toastFloor(floor, '🌿 $who rebuilt $whose${notes.isNotEmpty ? ' — ${notes.join('; ')}' : ''}');
+        }());
       case 'worker.resume':
         final w = worker(msg['workerId']);
         warn(c, w != null ? w.floor.workers.resume(w.wid) : 'No such worker');
