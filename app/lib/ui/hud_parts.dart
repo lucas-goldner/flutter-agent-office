@@ -7,7 +7,9 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../caffeine.dart';
+
 import 'package:office_shared/protocol.dart';
+
 import 'theme.dart';
 
 /// Parses '#rrggbb' (or '#rgb'); grey for anything else.
@@ -34,9 +36,12 @@ String statusLabel(WorkerStatus s) => statusLabels[s]!;
 
 /// The .pill for a worker's status; needs input pulses.
 class StatusPill extends StatefulWidget {
-  const StatusPill(this.status, {super.key});
+  const StatusPill(this.status, {super.key, this.label});
 
   final WorkerStatus status;
+
+  /// In place of the status's own word ("NEEDS YOU" in the Workers panel).
+  final String? label;
 
   @override
   State<StatusPill> createState() => _StatusPillState();
@@ -82,7 +87,7 @@ class _StatusPillState extends State<StatusPill> with SingleTickerProviderStateM
       WorkerStatus.done => (Swatch.good, Colors.white),
       WorkerStatus.exited || WorkerStatus.offline => (const Color(0xFFDEE2E6), Swatch.ink),
     };
-    final pill = Pill(statusLabel(widget.status), color: bg, textColor: fg);
+    final pill = Pill(widget.label ?? statusLabel(widget.status), color: bg, textColor: fg);
     if (widget.status != WorkerStatus.needsInput) return pill;
     // @keyframes pulse { 50% { transform: scale(1.08) } }
     return AnimatedBuilder(

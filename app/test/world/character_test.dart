@@ -37,7 +37,8 @@ void main() {
 
   group('workerBubble', () {
     test('says what the status is', () {
-      expect(workerBubble(WorkerStatus.needsInput, true), (text: '❗ needs you', bg: '#ffd6e0'));
+      expect(workerBubble(WorkerStatus.needsInput, true), (text: '🙋 NEEDS YOU', bg: '#ffc2d1'));
+      expect(workerBubble(WorkerStatus.needsInput, true, lost: true).text, '🌿 worktree deleted');
       expect(workerBubble(WorkerStatus.done, true), (text: '✅ done!', bg: '#caffbf'));
       expect(workerBubble(WorkerStatus.done, false), (text: '', bg: '#fffaf3'));
       expect(workerBubble(WorkerStatus.working, false), (text: '⌨️ working', bg: '#ffec99'));

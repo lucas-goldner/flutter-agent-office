@@ -15,6 +15,7 @@ import 'ui/compass.dart';
 import 'ui/emote_wheel.dart';
 import 'ui/shot_meter.dart';
 import 'ui/hud.dart';
+import 'ui/needs_you.dart';
 import 'ui/modal.dart';
 import 'world/drunk.dart';
 import 'world/hands.dart';
@@ -318,6 +319,20 @@ class _OfficePageState extends State<OfficePage> {
                     clock: () => c.clockSeconds,
                   ),
                 ),
+                // A worker that needs you: the banner under the top bar, and the red flash round the edge.
+                Positioned(
+                  left: 12,
+                  right: 12,
+                  top: 72,
+                  child: Center(
+                    child: NeedsYouBanner(
+                      text: c.needsYou.banner,
+                      onGo: (id) => c.goToWorker(id),
+                      onHide: c.needsYou.hide,
+                    ),
+                  ),
+                ),
+                Positioned.fill(child: NeedsYouFlash(pulse: c.needsYou.flash)),
                 Positioned.fill(child: EmotePop(pop: c.emotePop)),
                 Positioned.fill(child: EmoteWheelView(wheel: c.emoteWheel)),
               ],

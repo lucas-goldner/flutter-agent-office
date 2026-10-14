@@ -17,6 +17,7 @@ import 'package:office_shared/emotes.dart';
 import 'package:office_shared/protocol.dart';
 import 'package:office_shared/rooftop.dart' show Drink, DrinkId;
 import 'package:office_shared/status.dart';
+
 import 'drinks.dart' show drinkGlass;
 
 import 'costumes.dart';
@@ -98,8 +99,12 @@ Node coffeeMug([double scale = 1]) {
 /// A cigarette, lit end toward +z, and the material of its glowing tip.
 ({Node group, PreprocessedMaterial ember}) cigarette() {
   final group = Node(name: 'cigarette');
-  group.add(mesh(cylinderData(0.016, 0.016, 0.12, 8).rotateX(math.pi / 2).build(), toon(hex('#fffaf3')), 0, 0, 0.01, false));
-  group.add(mesh(cylinderData(0.017, 0.017, 0.045, 8).rotateX(math.pi / 2).build(), toon(hex('#e9a03b')), 0, 0, -0.07, false));
+  group.add(
+    mesh(cylinderData(0.016, 0.016, 0.12, 8).rotateX(math.pi / 2).build(), toon(hex('#fffaf3')), 0, 0, 0.01, false),
+  );
+  group.add(
+    mesh(cylinderData(0.017, 0.017, 0.045, 8).rotateX(math.pi / 2).build(), toon(hex('#e9a03b')), 0, 0, -0.07, false),
+  );
   final ember = toonUnique(hex('#ff6a2b'));
   setEmissive(ember, hex('#ff3b00'), 0.3);
   group.add(mesh(cylinderData(0.017, 0.017, 0.02, 8).rotateX(math.pi / 2).build(), ember, 0, 0, 0.078, false));
@@ -204,7 +209,8 @@ class Person {
     _head.add(_smile);
     // Talking mouth: a flattened ball pressed into the face, scaled open and shut with the voice.
     _mouth = mesh(sphere(1, 16, 12), toon(hex('#7a2635')), 0, -0.1, 0.295, false);
-    final tongue = mesh(sphere(1, 12, 10), toon(hex('#ff8fa3')), 0, -0.5, 0, false)..scale = vm.Vector3(0.6, 0.45, 1.15);
+    final tongue = mesh(sphere(1, 12, 10), toon(hex('#ff8fa3')), 0, -0.5, 0, false)
+      ..scale = vm.Vector3(0.6, 0.45, 1.15);
     _mouth.add(tongue);
     _mouth.visible = false;
     _head.add(_mouth);
@@ -657,8 +663,11 @@ class Person {
     }
     if (exhale) {
       // (Through a matrix: vector_math's Quaternion.rotated turns the other way from the engine.)
-      final dir = vm.Matrix4.compose(vm.Vector3.zero(), root.rotation, vm.Vector3.all(1)).transform3(vm.Vector3(0, 0.25, 1))
-        ..normalize();
+      final dir = vm.Matrix4.compose(
+        vm.Vector3.zero(),
+        root.rotation,
+        vm.Vector3.all(1),
+      ).transform3(vm.Vector3(0, 0.25, 1))..normalize();
       cb(Puff.exhale, pointIn(root.parent, _head.node, vm.Vector3(0, -0.1, 0.36)), dir);
     }
   }
@@ -769,27 +778,42 @@ const Map<WorkerStatus, String> statusBulb = {
   WorkerStatus.offline: '#6c757d',
 };
 
+/// A worker that needs you: its bubble is the red of its light, in white capitals, and its card is outlined in
+/// it (unless a pull request's colour is).
+const ({String text, String bg, String color, double size, String card}) needsYouLook = (
+  text: '🙋 NEEDS YOU',
+  bg: '#ef476f',
+  color: '#ffffff',
+  size: 46,
+  card: '#ffc2d1',
+);
+
+/// The chip (or bubble) of a worker whose worktree was deleted outside the office.
+final CardChip lostChip = CardChip('🌿 WORKTREE DELETED', '#ffb703', '#2b2d42');
+
 /// Status pill on a worker's task card: text, background, text colour.
 final Map<WorkerStatus, CardChip> taskChip = {
   WorkerStatus.starting: CardChip('⏳ STARTING', statusBulb[WorkerStatus.starting]!, '#2b2d42'),
   WorkerStatus.idle: CardChip('💬 READY', statusBulb[WorkerStatus.idle]!, '#2b2d42'),
   WorkerStatus.working: CardChip('⌨️ WORKING', statusBulb[WorkerStatus.working]!, '#2b2d42'),
-  WorkerStatus.needsInput: CardChip('❗ NEEDS YOU', statusBulb[WorkerStatus.needsInput]!, '#ffffff'),
+  WorkerStatus.needsInput: CardChip(needsYouLook.text, statusBulb[WorkerStatus.needsInput]!, '#ffffff'),
   WorkerStatus.done: CardChip('✅ DONE', statusBulb[WorkerStatus.done]!, '#2b2d42'),
   WorkerStatus.exited: CardChip('💤 ASLEEP', statusBulb[WorkerStatus.exited]!, '#ffffff'),
   WorkerStatus.offline: CardChip('💤 ASLEEP', statusBulb[WorkerStatus.offline]!, '#ffffff'),
 };
 
-/// What floats over a worker for its status: the bubble's text ('' for none) and its background.
-({String text, String bg}) workerBubble(WorkerStatus status, bool bounce) {
+/// What floats over a worker for its status: the bubble's text ('' for none) and its background. [lost]: its
+/// worktree was deleted outside the office.
+({String text, String bg}) workerBubble(WorkerStatus status, bool bounce, {bool lost = false}) {
   final hot = status == WorkerStatus.needsInput || (status == WorkerStatus.done && bounce);
   final bg = hot
-      ? (status == WorkerStatus.done ? '#caffbf' : '#ffd6e0')
+      ? (status == WorkerStatus.done ? '#caffbf' : needsYouLook.card)
       : status == WorkerStatus.working
       ? '#ffec99'
       : '#fffaf3';
+  if (lost) return (text: '🌿 worktree deleted', bg: lostChip.bg);
   final text = status == WorkerStatus.needsInput
-      ? '❗ needs you'
+      ? needsYouLook.text
       : status == WorkerStatus.done && bounce
       ? '✅ done!'
       : status == WorkerStatus.working
@@ -1202,16 +1226,28 @@ class Worker {
     _drawBubble();
   }
 
+  /// Its worktree was deleted outside the office: it waits to be rebuilt, and says so over its head.
+  bool _lost = false;
+
+  void setLost(bool lost) {
+    if (lost == _lost) return;
+    _lost = lost;
+    _drawBubble();
+  }
+
   void _drawBubble() {
     if (_leaving != null) return;
     final task = _task;
-    final b = workerBubble(status, bouncing);
+    final lost = _lost;
+    final b = workerBubble(status, bouncing, lost: lost);
     final pr = _pr;
-    final border = pr != null ? prInk[pr.state] : null;
+    final asking = status == WorkerStatus.needsInput && !lost;
+    final border = pr != null ? prInk[pr.state] : (asking ? needsYouLook.bg : null);
     // Not working on or waiting for something more: its pull request in place of ready / done / asleep.
-    final prText = prLabel(pr, status);
+    final prText = lost ? null : prLabel(pr, status);
     final text = prText ?? b.text;
-    final key = '$border|$prText|${task != null ? '${status.wire}|$bouncing|${task.name}|${task.summary}' : text}';
+    final key =
+        '$lost|$border|$prText|${task != null ? '${status.wire}|$bouncing|${task.name}|${task.summary}' : text}';
     if (key == _bubbleKey) return;
     _bubbleKey = key;
     _labels.remove(_bubble);
@@ -1223,7 +1259,11 @@ class Worker {
         offset: vm.Vector3(0, 1.74, 0),
         alignment: Alignment.bottomCenter,
         child: TaskCard(
-          chip: prText != null ? CardChip(prText.toUpperCase(), border!, '#ffffff') : taskChip[status] ?? taskChip[WorkerStatus.idle],
+          chip: lost
+              ? lostChip
+              : prText != null
+              ? CardChip(prText.toUpperCase(), border!, '#ffffff')
+              : taskChip[status] ?? taskChip[WorkerStatus.idle],
           title: task.name,
           body: task.summary,
           bg: isAsleep(status) ? '#e9ecef' : b.bg,
@@ -1235,7 +1275,15 @@ class Worker {
         anchor: root,
         offset: vm.Vector3(0, 1.95, 0),
         alignment: Alignment.center,
-        child: TagPill(text, bg: b.bg, size: 38, border: border ?? '#2b2d42'),
+        child: asking
+            ? TagPill(
+                text,
+                bg: needsYouLook.bg,
+                color: needsYouLook.color,
+                size: needsYouLook.size,
+                border: pr != null ? border! : '#2b2d42',
+              )
+            : TagPill(text, bg: b.bg, size: 38, border: border ?? '#2b2d42'),
       );
     }
     if (_bubble != null) _labels.add(_bubble!);

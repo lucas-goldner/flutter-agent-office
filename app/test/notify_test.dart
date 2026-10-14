@@ -76,7 +76,7 @@ void main() {
     expect(api.shown, isEmpty);
     api.focused = false;
     n.alert(worker('a', 'needs_input'));
-    expect(api.shown.single.title, 'Ada needs input');
+    expect(api.shown.single.title, '🙋 Ada needs you');
     expect(api.shown.single.body, 'Fix Login\nAllow edit to main.ts?');
     expect(api.shown.single.sticky, isTrue);
     expect(api.shown.single.tag, 'worker-a');
@@ -86,7 +86,7 @@ void main() {
     expect(api.shown.single.isClosed, isTrue);
 
     n.alert(worker('b', 'done'));
-    expect(api.shown.last.title, 'Ada is done');
+    expect(api.shown.last.title, '✅ Ada is done');
     expect(api.shown.last.sticky, isFalse);
 
     on = false;

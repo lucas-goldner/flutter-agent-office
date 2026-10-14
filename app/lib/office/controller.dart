@@ -91,6 +91,7 @@ import 'blast.dart';
 import 'carry.dart';
 import 'hanging.dart';
 import 'rooms_hub.dart';
+import 'needs_you.dart';
 import 'roof.dart';
 import '../world/office/city.dart' show buildCity;
 
@@ -250,6 +251,9 @@ class OfficeController implements OfficeActions {
   late final OfficeSound sound;
   bool _soundMade = false;
   late final DesktopNotifier notifier;
+
+  /// A worker that needs you: the beacons, the banner, the flash and the alarm (office/needs_you.dart).
+  late final NeedsYouHub needsYou;
   late final Gallery gallery;
   late final Hanger hanger;
   late final Arcade arcade;
@@ -404,7 +408,22 @@ class OfficeController implements OfficeActions {
       },
       upstairs: () => office.stack.state.index > 0,
     );
-    notifier = DesktopNotifier(enabled: () => settings.notify, openWorker: openWorkerTerminal);
+    // A click on a worker's notification: over to its desk, with its terminal open to answer it.
+    notifier = DesktopNotifier(enabled: () => settings.notify, openWorker: answerWorker);
+    needsYou = NeedsYouHub(
+      NeedsYouHost(
+        store: store,
+        settings: settings,
+        alarm: (again) => sound.needsYou(again),
+        labels: labels,
+        root: root,
+        workerRoot: (id) => _workerViews[id]?.model.root,
+        deskFloor: (id) {
+          final desk = office.desks[_workerViews[id]?.deskId];
+          return desk == null ? null : fromEngine(desk.group.globalTransform.getTranslation()).y;
+        },
+      ),
+    );
     // Pictures on the walls (and the one you're hanging), and Minesweeper on the boss's monitor.
     gallery = Gallery();
     office.group.add(gallery.group);
@@ -436,6 +455,8 @@ class OfficeController implements OfficeActions {
     _listen(Topic.peers, _syncPeers);
     _listen(Topic.workers, _syncWorkers);
     _listen(Topic.workers, _renderWaiting);
+    _listen(Topic.workers, needsYou.sync);
+    _listen(Topic.floor, needsYou.floorChanged);
     // A worker's bubble shows whether it has a pull request open (green) or merged (purple: send it home).
     _listen(Topic.pulls, _paintPrs);
     _listen(Topic.queue, _paintPrs);
@@ -482,6 +503,7 @@ class OfficeController implements OfficeActions {
     _messages?.cancel();
     voiceRoom.dispose();
     rooms.dispose();
+    needsYou.dispose();
     hanger.dispose();
     whiteboard.dispose();
     if (_soundMade) sound.dispose();
@@ -1524,10 +1546,10 @@ class OfficeController implements OfficeActions {
         _workerViews[w.id] = v;
       }
       if (v.status != w.status || v.acked != w.acked) {
-        // It just finished or started waiting on you: ding, and notify if you're away.
+        // It just finished or started waiting on you: ding (one that needs you has an alarm of its own, see
+        // office/needs_you.dart), and notify if you're away.
         if (waitingOnSomeone(w) && v.status != null && w.status != v.status) {
-          final ding = Ding.fromStatus(w.status.wire);
-          if (ding != null) sound.ding(ding);
+          if (w.status == WorkerStatus.done) sound.ding(Ding.done);
           notifier.alert(w);
           rooms.workerChanged(w);
         }
@@ -1543,6 +1565,7 @@ class OfficeController implements OfficeActions {
       }
       final task = w.task;
       v.model.setPr(workerPr(w, store.pulls.items, store.queue.tasks));
+      v.model.setLost(w.lost != null);
       v.model.setTask(
         task != null && w.kind == WorkerKind.agent
             ? WorkerTask(name: '${providerLabel(w.provider, store.project)} · ${task.name}', summary: task.summary)
@@ -1832,12 +1855,12 @@ class OfficeController implements OfficeActions {
   /// The chip's text ("🙋 2 waiting · ✅ 1 done", empty for none) and whether they're all done.
   final ValueNotifier<(String, bool)> waitingChip = ValueNotifier(('', false));
 
-  /// N: to the worker that has waited longest on someone, and on each press after, the next.
+  /// N: to the first worker waiting on someone (the ones that need you, then the ones that are done, longest
+  /// first), and on each press after, the next.
   void goToNextWaiting() {
     if (_riding != null) return;
     final w = _nextUp.next(store.workers.values, _waitingBeside());
-    final desk = w == null ? null : deskById[w.deskId];
-    if (w == null || desk == null) {
+    if (w == null || !goToWorker(w.id)) {
       final other = store.floors.where((f) => f.id != store.floor && f.waiting > 0).firstOrNull;
       toast(
         other != null
@@ -1846,13 +1869,28 @@ class OfficeController implements OfficeActions {
       );
       return;
     }
-    ModalStack.instance.closeAll();
-    _standAt(desk);
     final waiting = waitingInOrder(store.workers.values);
     final of = waiting.length > 1 ? ' (${waiting.indexWhere((x) => x.id == w.id) + 1} of ${waiting.length})' : '';
     toast(
-      '${w.status == WorkerStatus.needsInput ? '🙋 ${w.name} needs input' : '✅ ${w.name} is done'}$of. E opens its terminal',
+      '${w.status == WorkerStatus.needsInput ? '🙋 ${w.name} needs you' : '✅ ${w.name} is done'}$of. E opens its terminal',
     );
+  }
+
+  /// Puts you behind worker [id], looking over its shoulder, with any window closed. False when there's no
+  /// getting there (you're between floors, or it's gone).
+  bool goToWorker(String id) {
+    final w = store.workers[id];
+    final desk = w == null ? null : deskById[w.deskId];
+    if (_riding != null || desk == null) return false;
+    ModalStack.instance.closeAll();
+    _standAt(desk);
+    return true;
+  }
+
+  /// From a notification about worker [id]: over to its desk, with its terminal open to answer it.
+  void answerWorker(String id) {
+    goToWorker(id);
+    openWorkerTerminal(id);
   }
 
   /// The waiting worker you're standing at, if any: N skips it while anyone else is waiting.
@@ -2949,6 +2987,12 @@ class OfficeController implements OfficeActions {
     ], player.camPos);
     _checkSmokeBreak(now);
     smoke.update(dt, player.camPos, player.camTarget);
+    needsYou.update(
+      t,
+      player.pos,
+      player.camPos,
+      calm: WidgetsBinding.instance.platformDispatcher.accessibilityFeatures.disableAnimations,
+    );
     confetti.update(dt);
     holiday.update(t, skyModel.lampsOn, player.camPos);
     hanger.update(view, locked: lockAvailable ? pointerLocked : null);

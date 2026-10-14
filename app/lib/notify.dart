@@ -2,6 +2,7 @@
 // for workers that need input or finish (the tab title counts them too, see ui/tab_title.dart).
 
 import 'interop/notify.dart';
+
 import 'package:office_shared/protocol.dart';
 import 'package:office_shared/status.dart';
 
@@ -34,7 +35,7 @@ class DesktopNotifier {
     if (!waitingOnSomeone(w)) return;
     if (!enabled() || api.permission != NotifyPermission.granted) return;
     if (api.pageFocused) return;
-    final title = '${w.name} ${w.status == WorkerStatus.done ? 'is done' : 'needs input'}';
+    final title = w.status == WorkerStatus.done ? '✅ ${w.name} is done' : '🙋 ${w.name} needs you';
     final body = [w.task?.name, alertDetail(w)].where((s) => s != null && s.isNotEmpty).join('\n');
     _shown[w.id]?.close();
     // Needs input blocks the worker, so that one stays up until you deal with it.
@@ -69,7 +70,7 @@ class DesktopNotifier {
   void sample() {
     final n = api.show(
       '🔔 Notifications are on',
-      body: 'This is how a worker that needs input or is done gets your attention while you are in another tab.',
+      body: 'This is how a worker that needs you or is done gets your attention while you are in another tab. Click one to go straight to that worker.',
     );
     if (n == null) return;
     n.onClick = () {

@@ -13,9 +13,12 @@ import 'package:flutter/services.dart';
 import '../caffeine.dart';
 import '../interop/browser.dart';
 import '../office_scope.dart';
+
 import 'package:office_shared/rooftop.dart' show roof, roofName;
 import 'package:office_shared/protocol.dart';
+
 import '../state/store.dart';
+import '../nextup.dart' show needyFirst;
 import 'hud_parts.dart';
 import 'limits.dart';
 import 'menu.dart';
@@ -106,6 +109,7 @@ class HudCallbacks {
 
   /// V in voice is push to talk: held down it's true, let go it's false. Without it V toggles voice.
   final bool Function(bool down)? onTalk;
+
   /// Clicking anyone else there: walk over to them (riding the elevator first if they're on another floor).
   final void Function(String peerId)? onWalkTo;
 }
@@ -452,7 +456,10 @@ class _SidePanels extends StatelessWidget {
     final scope = OfficeScope.of(context);
     final store = scope.store;
     return ListenableBuilder(
-      listenable: Listenable.merge([prefs, store.topics(const [Topic.limits, Topic.usage, Topic.workers])]),
+      listenable: Listenable.merge([
+        prefs,
+        store.topics(const [Topic.limits, Topic.usage, Topic.workers]),
+      ]),
       builder: (context, _) {
         final panels = <Widget>[
           if (prefs.panel(HudPanel.people))
@@ -464,7 +471,10 @@ class _SidePanels extends StatelessWidget {
                 speaking: speaking,
               ),
             ),
-          if (prefs.panel(HudPanel.workers)) Flexible(child: _WorkersPanel(prefs: prefs, onOpen: callbacks.onOpenWorker)),
+          if (prefs.panel(HudPanel.workers))
+            Flexible(
+              child: _WorkersPanel(prefs: prefs, onOpen: callbacks.onOpenWorker),
+            ),
           if (prefs.panel(HudPanel.spend)) _SpendPanel(prefs: prefs),
           if (prefs.panel(HudPanel.limits) && store.limits.windows.isNotEmpty)
             _LimitsPanel(prefs: prefs, limits: store.limits, onTap: () => scope.net.send(const LimitsRefreshCmd())),
@@ -571,7 +581,13 @@ class _PeoplePanel extends StatelessWidget {
             for (final (i, p) in peers.indexed)
               Padding(
                 padding: EdgeInsets.only(top: i == 0 ? 0 : 4),
-                child: _PersonRow(p, store: store, speaking: talking.contains(p.id), onEditProfile: onEditProfile, onWalkTo: onWalkTo),
+                child: _PersonRow(
+                  p,
+                  store: store,
+                  speaking: talking.contains(p.id),
+                  onEditProfile: onEditProfile,
+                  onWalkTo: onWalkTo,
+                ),
               ),
           ],
         );
@@ -625,7 +641,13 @@ class _PersonRow extends StatelessWidget {
                   style: heavy(14, color: color, weight: FontWeight.w700),
                 ),
                 // What they have open, or where they are (see whereabouts).
-                if (sub != null) Text(sub, maxLines: 1, overflow: TextOverflow.ellipsis, style: heavy(11, color: Swatch.muted, weight: FontWeight.w700)),
+                if (sub != null)
+                  Text(
+                    sub,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: heavy(11, color: Swatch.muted, weight: FontWeight.w700),
+                  ),
               ],
             ),
           ),
@@ -668,7 +690,8 @@ class _PersonRow extends StatelessWidget {
     );
     if (!you) {
       final walk = onWalkTo;
-      final tip = '${store.onMyFloor(p) ? 'Walk over to' : 'Take the elevator to'} ${p.name}${sub != null ? ' ($sub)' : ''}';
+      final tip =
+          '${store.onMyFloor(p) ? 'Walk over to' : 'Take the elevator to'} ${p.name}${sub != null ? ' ($sub)' : ''}';
       if (walk == null) return Tooltip(message: p.name, child: row);
       return Tooltip(
         message: tip,
@@ -701,7 +724,8 @@ class _WorkersPanel extends StatelessWidget {
     return ListenableBuilder(
       listenable: store.topics(const [Topic.workers, Topic.usage, Topic.project]),
       builder: (context, _) {
-        final workers = store.workers.values.toList()..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+        // One that needs you goes to the top, in red, saying what it's asking and for how long.
+        final workers = needyFirst(store.workers.values);
         final usage = summarizeUsage(store.usage, workers, store.project);
         // The board agents at their kiosks are listed but not counted.
         final hired = hiredCount(workers);
@@ -758,12 +782,18 @@ class _SpendPanel extends StatelessWidget {
       builder: (context, _) {
         final usage = summarizeUsage(store.usage, store.workers.values.toList(), store.project);
         return _SidePanel(
-          heading: _PanelHeading('Spend', hide: PanelHide(prefs: prefs, panel: HudPanel.spend)),
+          heading: _PanelHeading(
+            'Spend',
+            hide: PanelHide(prefs: prefs, panel: HudPanel.spend),
+          ),
           children: [
             if (usage.visible)
               UsagePanel(usage)
             else
-              Text('Nothing spent yet', style: heavy(13, color: Swatch.muted, weight: FontWeight.w600)),
+              Text(
+                'Nothing spent yet',
+                style: heavy(13, color: Swatch.muted, weight: FontWeight.w600),
+              ),
           ],
         );
       },
@@ -818,8 +848,9 @@ class _WorkerRowState extends State<_WorkerRow> {
         agent &&
         providerUsageState(w.provider, widget.project, w.usage) == ProviderUsageState.tracked &&
         w.usage != null;
+    final asking = w.status == WorkerStatus.needsInput && w.lost == null;
     return Tooltip(
-      message: "Open ${w.name}'s terminal",
+      message: asking ? '${w.name} needs you: open its terminal to answer' : "Open ${w.name}'s terminal",
       waitDuration: const Duration(milliseconds: 600),
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
@@ -829,7 +860,13 @@ class _WorkerRowState extends State<_WorkerRow> {
           onTap: () => widget.onOpen(w.id),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
-            decoration: BoxDecoration(color: _hover ? Swatch.paper2 : null, borderRadius: BorderRadius.circular(8)),
+            decoration: BoxDecoration(
+              color: asking
+                  ? (_hover ? const Color(0xFFFFC2D1) : const Color(0xFFFFE3EA))
+                  : (_hover ? Swatch.paper2 : null),
+              borderRadius: BorderRadius.circular(8),
+              border: asking ? Border.all(color: Swatch.bad, width: 2) : null,
+            ),
             child: Row(
               children: [
                 Dot(cssColor(w.color)),
@@ -853,6 +890,14 @@ class _WorkerRowState extends State<_WorkerRow> {
                           softWrap: false,
                           style: heavy(11, color: Swatch.muted, weight: FontWeight.w600),
                         ),
+                      // What it's stopped on, and since when, on a line of its own under its name.
+                      if (asking)
+                        Text(
+                          '🙋 ${w.activity ?? 'Waiting on an answer'}${w.waitingSince != null ? ' · ${timeAgo(w.waitingSince!)}' : ''}',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: heavy(11.5, color: Swatch.bad, weight: FontWeight.w800),
+                        ),
                       if (tracked)
                         Tooltip(
                           message: usageTitle(w.usage!, kind),
@@ -868,7 +913,13 @@ class _WorkerRowState extends State<_WorkerRow> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                StatusPill(w.status),
+                if (w.lost != null)
+                  const Tooltip(
+                    message: 'Its worktree was deleted outside agent-office: open it to fix it',
+                    child: Pill('worktree deleted', color: Color(0xFFFFB703), textColor: Swatch.ink),
+                  )
+                else
+                  StatusPill(w.status, label: asking ? 'NEEDS YOU' : null),
               ],
             ),
           ),
@@ -902,7 +953,11 @@ class _LimitsPanel extends StatelessWidget {
                 stream: Stream.periodic(const Duration(seconds: 30)),
                 builder: (context, _) => LimitsView(limits),
               ),
-              Positioned(top: 0, right: 0, child: PanelHide(prefs: prefs, panel: HudPanel.limits)),
+              Positioned(
+                top: 0,
+                right: 0,
+                child: PanelHide(prefs: prefs, panel: HudPanel.limits),
+              ),
             ],
           ),
         ),
