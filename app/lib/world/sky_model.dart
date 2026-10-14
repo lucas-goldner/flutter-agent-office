@@ -201,6 +201,10 @@ class SkyModel {
   /// The sky behind everything, and the fog that fades far things into it.
   Rgb background = SkyColors.day;
   double fogNear = 40;
+
+  /// How far out into the country you are, 0–1 (out on the scenic loop, see shared scenic.dart): the
+  /// haze near the ground thins out to more than twice as far, so the mountains and the sea show from the road.
+  double open = 0;
   double fogFar = 90;
   Rgb clouds = SkyColors.white;
 
@@ -295,7 +299,11 @@ class SkyModel {
       Weather.snow => 0.85,
       Weather.fog => 0.5,
     };
-    final wantRain = weather == Weather.rain ? k : weather == Weather.storm ? math.max(0.8, k) : 0.0;
+    final wantRain = weather == Weather.rain
+        ? k
+        : weather == Weather.storm
+        ? math.max(0.8, k)
+        : 0.0;
     final wantSnow = weather == Weather.snow ? k : 0.0;
     var wantFog = weather == Weather.fog
         ? k
@@ -346,7 +354,11 @@ class SkyModel {
     moonlit = elD < -4;
     final lightEl = (moonlit ? 50 : 25 + math.max(0, elD) * 0.6) * _deg;
     final lightAz = moonlit ? sp.az + math.pi : sp.az;
-    lightDir.setValues(math.cos(lightEl) * math.sin(lightAz), math.sin(lightEl), -math.cos(lightEl) * math.cos(lightAz));
+    lightDir.setValues(
+      math.cos(lightEl) * math.sin(lightAz),
+      math.sin(lightEl),
+      -math.cos(lightEl) * math.cos(lightAz),
+    );
     lightIntensity = moonlit ? moonI : sunI;
     lightColor = moonlit
         ? SkyColors.moon.lerp(SpookyColors.moonLight, spook)
@@ -379,8 +391,10 @@ class SkyModel {
     sky = sky.lerp(SkyColors.flash, flash * 0.5);
     background = sky;
     final precip = math.max(rain, snow);
-    fogNear = _lerp(40, 3, fog) * (1 - 0.4 * precip);
-    fogFar = _lerp(90, 28, fog) * (1 - 0.3 * precip);
+    // Out in the country (see open) it's further off again.
+    final wide = 1 + 1.4 * open;
+    fogNear = _lerp(40, 3, fog) * (1 - 0.4 * precip) * wide;
+    fogFar = _lerp(90, 28, fog) * (1 - 0.3 * precip) * wide;
     clouds = SkyColors.white.lerp(SkyColors.cloudGrey, cover).lerp(SpookyColors.cloud, spook);
 
     final clear = (1 - cover) * (1 - fog);

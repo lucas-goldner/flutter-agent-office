@@ -34,7 +34,9 @@ void main() {
   test('the street is a floor, however far down it goes', () {
     final street = streetColliders();
     expect(groundAt(street, 30, 40, 0), streetY);
-    expect(groundAt(street, 500, 500, 0), double.negativeInfinity);
+    // Out round the scenic loop too, as far as the haze ever lets you see.
+    expect(groundAt(street, 500, 500, 0), streetY);
+    expect(groundAt(street, 1000, 1000, 0), double.negativeInfinity);
     expect(
       groundColliders(),
       hasLength(

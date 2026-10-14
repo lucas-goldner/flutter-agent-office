@@ -9,6 +9,7 @@ import 'package:vector_math/vector_math.dart' as vm;
 
 import 'package:office_shared/layout.dart' hide Elevator, Gong, Jukebox, Whiteboard;
 import 'package:office_shared/layout.dart' as lay show Elevator;
+import 'package:office_shared/scenic.dart' show shoreX, streetEnd;
 
 import '../text.dart';
 import '../toon.dart';
@@ -70,6 +71,14 @@ class Halo {
   final bool ground;
 }
 
+/// Light you only see at night (the lighthouse's beam): see-through, [max] opaque when it's dark.
+class Glow {
+  Glow(this.node, this.mat, this.max);
+  final Node node;
+  final UnlitMaterial mat;
+  final double max;
+}
+
 /// Everything that changes between day and night and with the weather, for the sky to drive.
 class NightParts {
   NightParts()
@@ -83,6 +92,7 @@ class NightParts {
   /// How far below the floor you're on the street is (see streetBelow): what the `ground` lamps drop with.
   double street = streetY;
   final List<Halo> halos = [];
+  final List<Glow> glows = [];
   final List<Lamp> lamps = [];
 
   /// The neighbours' lit windows: an unlit overlay on each building's walls, clear by day. The
@@ -347,15 +357,21 @@ List<({double minX, double maxX, double minZ, double maxZ, double top})> neighbo
     }(),
 ];
 
-/// How far the grass and the road go, end to end: from the top floor the haze is up to 300 m off
-/// (see sky_view.dart), and their ends must be further than that even at the edge of the view.
-const double _reach = 1200;
+/// How far the grass goes, every way from the office: from the top floor the haze is up to 300 m off
+/// (see sky_view.dart), and out at the far corners of the scenic loop too, so its edges must be
+/// further than that even at the edge of the view. To the west it stops at the beach (world/scenic/).
+const double reach = 900;
+
+/// Where the grass stops to the west, under the beach's sand, whose flat top is everywhere past here.
+final double _lawnWest = ([for (var i = 0; i <= 1800; i++) shoreX(i - 900.0)].reduce(math.max) + 4).ceilToDouble();
 
 /// Everything outside, down on the street: grass, the lot in front of the garage, a road with
 /// sidewalks and street lamps, trees and neighbours' buildings, and in [sky] some clouds. Its
 /// colliders are [streetColliders].
 void buildStreet(Node group, NightParts night, Node sky) {
-  group.add(mesh(groundPlane(_reach, _reach), tc('#a7d98b'), 0, _g - 0.03, 0, false));
+  group.add(
+    mesh(groundPlane(reach - _lawnWest, reach * 2), tc('#a7d98b'), (_lawnWest + reach) / 2, _g - 0.03, 0, false),
+  );
 
   // The lot in front of the garage, out to the sidewalk.
   group.add(_groundPlane(60, 21 - Bldg.maxZ, 0, _g - 0.01, (Bldg.maxZ + 21) / 2, color: '#9a9ea8'));
@@ -370,7 +386,8 @@ void buildStreet(Node group, NightParts night, Node sky) {
     ),
   );
 
-  // The road: asphalt, white edge lines and a dashed yellow middle.
+  // The road, out to either end of the street, where the scenic loop takes over (world/scenic/):
+  // asphalt, white edge lines and a dashed yellow middle.
   final road = canvasTexture(256, 128, (g) {
     g.drawRect(const Rect.fromLTWH(0, 0, 256, 128), fill(linColor('#5b606c')));
     final white = fill(linColor('#f1f1f1'));
@@ -379,10 +396,18 @@ void buildStreet(Node group, NightParts night, Node sky) {
     g.drawRect(const Rect.fromLTWH(0, 61, 150, 6), fill(linColor('#ffd166')));
   });
   group.add(
-    _groundPlane(_reach, Road.maxZ - Road.minZ, 0, _g - 0.008, (Road.minZ + Road.maxZ) / 2, map: road, su: _reach / 8),
+    _groundPlane(
+      streetEnd * 2,
+      Road.maxZ - Road.minZ,
+      0,
+      _g - 0.008,
+      (Road.minZ + Road.maxZ) / 2,
+      map: road,
+      su: streetEnd * 2 / 8,
+    ),
   );
   for (final (z0, z1) in [(21.0, Road.minZ), (Road.maxZ, Road.maxZ + 2)]) {
-    group.add(mesh(box(_reach, 0.08, z1 - z0), tc('#e3ddd0'), 0, _g, (z0 + z1) / 2));
+    group.add(mesh(box(streetEnd * 2 - 4, 0.08, z1 - z0), tc('#e3ddd0'), 0, _g, (z0 + z1) / 2));
   }
 
   // Trees along the sidewalks and around the building.

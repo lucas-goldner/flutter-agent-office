@@ -4100,6 +4100,11 @@ class OfficeController implements OfficeActions {
   // ---- The sky ----------------------------------------------------------------------------------
 
   void _updateSky(double dt, double t) {
+    // Out along the scenic loop, the haze thins: there's more out there to see.
+    final out = !roofHub.upTop && inOffice;
+    final away = out ? math.sqrt(player.pos.x * player.pos.x + player.pos.z * player.pos.z) : 0.0;
+    final k = ((away - 70) / (160 - 70)).clamp(0.0, 1.0);
+    skyModel.open = k * k * (3 - 2 * k);
     final m = skyModel..update(dt, t);
     skyView.update(dt, t, m, player.camPos);
     final l = Toon.light
@@ -4156,6 +4161,8 @@ class OfficeController implements OfficeActions {
       fog.start = haze.start;
       fog.end = haze.end;
     }
+    // What's lost in the haze along the scenic loop isn't drawn.
+    if (out) office.scenic.cull(player.camPos, office.night.street, m.fogFar);
     // Out in space it's black, whatever the hour.
     final bg = !roofHub.upTop && world.ownSky ? const Color(0xFF000000) : m.background.color;
     if (bg != sky.value) sky.value = bg;

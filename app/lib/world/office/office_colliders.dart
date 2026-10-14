@@ -8,6 +8,7 @@ import 'package:office_shared/layout.dart' as lay;
 import 'package:office_shared/layout.dart' hide Elevator, Gong, Jukebox, Whiteboard;
 
 import '../collider.dart';
+import 'outside.dart' show neighbourBoxes, reach;
 import 'rooms_colliders.dart';
 
 // ---------------------------------------------------------------------------------------------
@@ -267,8 +268,8 @@ final List<(double, double, double)> streetLamps = [
 const double streetLampHeight = 5;
 
 List<Collider> streetColliders() => [
-  // What you stand on anywhere out there, the lot and the road and the grass alike.
-  Collider(minX: -200, maxX: 200, minZ: -200, maxZ: 200, bottom: streetY - 1, top: streetY),
+  // What you stand on anywhere out there, the lot and the road and the grass alike, and the beach.
+  Collider(minX: -reach, maxX: reach, minZ: -reach, maxZ: reach, bottom: streetY - 1, top: streetY),
   for (final (x, z, _) in streetLamps)
     Collider(
       minX: x - 0.2,
@@ -278,6 +279,9 @@ List<Collider> streetColliders() => [
       bottom: streetY,
       top: streetY + streetLampHeight,
     ),
+  // The neighbours' buildings are solid: you (and a car) stop at their walls instead of walking in.
+  for (final n in neighbourBoxes())
+    Collider(minX: n.minX, maxX: n.maxX, minZ: n.minZ, maxZ: n.maxZ, bottom: streetY, top: streetY + n.top),
 ];
 
 // ---------------------------------------------------------------------------------------------

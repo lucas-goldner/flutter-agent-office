@@ -228,6 +228,16 @@ class SkyView {
       }
     }
 
+    // Light you only see at night (the lighthouse's beam).
+    for (final g in _night.glows) {
+      final on = m.lampsOn > 0.01 && !roof && !indoors;
+      g.node.visible = on;
+      if (on) {
+        final c = g.mat.baseColorFactor;
+        g.mat.baseColorFactor = vm.Vector4(c.x, c.y, c.z, g.max * m.lampsOn);
+      }
+    }
+
     // Rain and snow fall outside, lit about as much as everything else is.
     final lit = m.precipLit;
     final rc = SkyColors.rain.scale(lit);

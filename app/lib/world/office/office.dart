@@ -18,6 +18,7 @@ import '../text.dart';
 import '../toon.dart';
 import 'cars.dart';
 import 'elevator.dart';
+import '../scenic/scenic.dart';
 import 'fleet.dart';
 import 'wing.dart';
 import '../desk_signs.dart';
@@ -88,6 +89,7 @@ class Office {
     required this.elevator,
     required this.garageLift,
     required this.fleet,
+    required this.scenic,
     required this.wing,
     required this.signs,
     required this.plantsByWing,
@@ -145,6 +147,9 @@ class Office {
 
   /// The Lambos and Ferraris in the garage, which anyone can drive (see office/driving.dart).
   final Fleet fleet;
+
+  /// The scenic loop off either end of the street, and everything along it.
+  final Scenic scenic;
 
   /// The back office through the north wall, as far as this floor's built out (see Wing).
   final WingView wing;
@@ -249,6 +254,7 @@ class Office {
     elevator.update(dt);
     garageLift.update(dt);
     gong.update(dt);
+    scenic.update(t);
   }
 }
 
@@ -475,8 +481,10 @@ Office buildOffice({required LabelHub labels}) {
   ground.add(fleet.group);
   // The clouds stay up in the sky, however far down the street is.
   buildStreet(ground, night, group);
+  // Off either end of the street, the scenic loop: the farm, the pines, the mountains and the beach.
+  final scenic = buildScenic(ground, night);
   group.add(ground);
-  final groundCs = groundColliders();
+  final groundCs = [...groundColliders(), ...scenic.colliders];
   // Upstairs there's no way out on the west side: the doorway is wall like the rest of it.
   final plug = exitPlug(looks);
   group.add(plug.group);
@@ -715,6 +723,7 @@ Office buildOffice({required LabelHub labels}) {
       elevator: elevator,
       garageLift: garageLift,
       fleet: fleet,
+      scenic: scenic,
       wing: wing,
       signs: signs,
       plantsByWing: byWing,
