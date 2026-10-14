@@ -30,6 +30,7 @@ import '../world/meeting.dart';
 import '../world/office/rooms.dart';
 import 'ball_play.dart';
 import 'golf_play.dart';
+import 'interaction.dart' show DeskKey;
 import 'controller.dart';
 
 /// What each board agent is for: its board's icon, what it offers on the card over its head, and an example ask.

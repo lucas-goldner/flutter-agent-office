@@ -94,6 +94,7 @@ import 'blast.dart';
 import 'carry.dart';
 import 'hanging.dart';
 import 'rooms_hub.dart';
+import 'interaction.dart';
 import 'needs_you.dart';
 import 'palette_entries.dart';
 import 'roof.dart';
@@ -130,9 +131,6 @@ const Map<InteractKind, double> _reach = {
   InteractKind.ladder: 3,
   InteractKind.pole: 3.5,
 };
-
-/// Keys that use what you're facing: at a desk, each does something else (see [_interact]).
-enum DeskKey { e, p, r, x, b, c, o }
 
 final Map<PhysicalKeyboardKey, DeskKey> _deskKeys = {
   PhysicalKeyboardKey.keyE: DeskKey.e,
@@ -2804,10 +2802,18 @@ class OfficeController implements OfficeActions {
     }
   }
 
-  void _use(Interactable? it, DeskKey key, [GhIssue? note]) {
-    if (it == null) return;
+  /// [key] at [it]: false when it does nothing there, so the key goes on to walking (see interaction.dart).
+  bool _use(Interactable? it, DeskKey key, [GhIssue? note]) {
+    final n = note ?? _aimedNote;
+    final deskId = it?.deskId;
+    final worker = deskId == null ? null : store.workerAtDesk(deskId);
+    final room = deskId != null && (deskById[deskId]?.room ?? false);
+    if (!interactionAvailable(it, key, (worker: worker, room: room, note: n, carrying: _carrying != null))) {
+      return false;
+    }
     _reachOut();
-    _interact(it, key, note ?? _aimedNote);
+    _interact(it!, key, n);
+    return true;
   }
 
   /// A key went down while the office has the keyboard. True when it was one of the office's own.
@@ -2833,8 +2839,7 @@ class OfficeController implements OfficeActions {
       return true;
     }
     final deskKey = _deskKeys[e.physicalKey];
-    if (deskKey != null) {
-      _use(_target, deskKey);
+    if (deskKey != null && _use(_target, deskKey)) {
       player.input.clear();
       return true;
     }
