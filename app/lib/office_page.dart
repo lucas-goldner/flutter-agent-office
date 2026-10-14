@@ -15,6 +15,7 @@ import 'ui/compass.dart';
 import 'ui/emote_wheel.dart';
 import 'ui/shot_meter.dart';
 import 'ui/telescope.dart';
+import 'ui/throw_panel.dart';
 import 'ui/hud.dart';
 import 'ui/needs_you.dart';
 import 'ui/modal.dart';
@@ -155,8 +156,14 @@ class _OfficePageState extends State<OfficePage> {
 
   void _down(PointerDownEvent e) {
     _focus.requestFocus();
-    if (!c.player.enabled) return;
     final mouse = e.kind == PointerDeviceKind.mouse;
+    // At the dart board or the axe lane, the button draws back (the click that captures the mouse isn't a throw).
+    if (c.places.thrower.active && !ModalStack.instance.open && e.buttons == kPrimaryMouseButton) {
+      if (c.player.view == ViewMode.first && mouse && _lock.canLock && !_lock.locked) return _lock.lock();
+      c.places.pointerDown();
+      return;
+    }
+    if (!c.player.enabled) return;
     if (c.player.view == ViewMode.first && mouse && _lock.canLock) {
       if (_lock.locked) {
         // No cursor while it's captured: a click picks what the emote wheel points at.
@@ -173,7 +180,7 @@ class _OfficePageState extends State<OfficePage> {
 
   void _move(PointerMoveEvent e) {
     c.hanger.mouse = e.localPosition;
-    if (!_lock.locked && c.places.look(e.delta.dx, e.delta.dy)) return;
+    if (!_lock.locked && c.places.pointer(e.localPosition, e.delta, _view)) return;
     final d = _drag;
     if (d == null || _lock.locked) return;
     final delta = e.localPosition - d;
@@ -187,6 +194,7 @@ class _OfficePageState extends State<OfficePage> {
   }
 
   void _up(PointerUpEvent e) {
+    if (c.places.pointerUp()) return;
     final d = _drag;
     _drag = null;
     // A click that captured the mouse is not also a click on the world.
@@ -239,7 +247,7 @@ class _OfficePageState extends State<OfficePage> {
                         onPointerHover: (e) {
                           c.hanger.mouse = e.localPosition;
                           // The telescope (and the dart in your hand) follows the mouse, pressed or not.
-                          if (!_lock.locked) c.places.look(e.delta.dx, e.delta.dy);
+                          if (!_lock.locked) c.places.pointer(e.localPosition, e.delta, _view);
                         },
                         // A few drinks in at the rooftop bar, the frame sways, blurs and warms (world/drunk.dart).
                         child: DrunkVision(
@@ -295,6 +303,16 @@ class _OfficePageState extends State<OfficePage> {
                   child: ValueListenableBuilder(
                     valueListenable: c.rooms.golfPanel,
                     builder: (context, g, _) => g == null ? const SizedBox.shrink() : Center(child: GolfPanelView(g)),
+                  ),
+                ),
+                // At the dart board or the axe lane: the meter and the round so far.
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  top: 70,
+                  child: ValueListenableBuilder(
+                    valueListenable: c.places.thrower.panel,
+                    builder: (context, p, _) => p == null ? const SizedBox.shrink() : Center(child: ThrowPanelView(p)),
                   ),
                 ),
                 Positioned(

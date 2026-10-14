@@ -30,7 +30,7 @@ import 'samples.dart';
 import 'sound_model.dart';
 import 'web_audio.dart';
 
-export 'sound_model.dart' show Ding, DogSounds, JukeboxPlay, SoundListener, StepKind;
+export 'sound_model.dart' show Ding, DogSounds, JukeboxPlay, SoundListener, StepKind, TossSound;
 
 final math.Random _rng = math.Random();
 double _rand(double a, double b) => a + _rng.nextDouble() * (b - a);
@@ -1342,6 +1342,72 @@ class OfficeSound implements DogSounds {
     o.to(g).to(dest);
     o.start(when);
     o.stop(when + len + 0.02);
+  }
+
+  // ---- Darts and axes at the rooftop bar (features/bargames/sound.ts) ----------------------------
+
+  /// Throwing at the rooftop bar, heard from [x], [y], [z] (see [TossSound]).
+  void toss(TossSound kind, double x, double y, double z) {
+    final ctx = _ctx;
+    if (ctx == null) return;
+    _count('toss-${kind.name}');
+    final out = _panner(Pos(x, y, z), 2, 1.1)..connect(_ambience);
+    final t0 = ctx.currentTime + 0.005;
+    void air(double from, double to, double len, double level, [int pulses = 0]) {
+      final n = _noise(_buf.white);
+      final tone = biquad(ctx, 'bandpass', from, 1.4);
+      tone.frequency.setValueAtTime(from, t0);
+      tone.frequency.linearRampToValueAtTime(to, t0 + len);
+      final g = ctx.createGain();
+      if (pulses > 0) {
+        // A blade going round: louder each time it cuts through the air edge on.
+        g.gain.setValueAtTime(0, t0);
+        for (var i = 0; i < pulses; i++) {
+          final at = t0 + (i + 0.5) * (len / pulses);
+          g.gain.linearRampToValueAtTime(level, at);
+          g.gain.linearRampToValueAtTime(level * 0.15, at + len / pulses / 2);
+        }
+        g.gain.linearRampToValueAtTime(0, t0 + len + 0.05);
+      } else {
+        envelope(g.gain, t0, [(len * 0.3, level), (len, 0)]);
+      }
+      n.to(tone).to(g).to(out);
+      n.start(t0);
+      n.stop(t0 + len + 0.1);
+    }
+
+    switch (kind) {
+      case TossSound.dart:
+        air(2600, 3600, 0.12, 0.05);
+      case TossSound.axe:
+        air(500, 900, 0.6, 0.14, 3);
+      case TossSound.board:
+        // Into the sisal: a short, dry thock.
+        _play(_pick(_buf.steps), gain: 0.35, rate: 2.3, dest: out);
+        _tone(out, t0, 950, 0.7, 0.03, 0.05, 'sine');
+      case TossSound.wall:
+        _play(_pick(_buf.steps), gain: 0.3, rate: 1.7, dest: out);
+        _tone(out, t0, 430, 0.8, 0.06, 0.06, 'sine');
+      case TossSound.thunk:
+        // Steel biting into a wooden target, and the boards shuddering.
+        _play(_pick(_buf.steps), gain: 0.8, rate: 0.85, dest: out);
+        _tone(out, t0, 160, 0.6, 0.18, 0.22, 'sine');
+        _tone(out, t0 + 0.01, 310, 0.8, 0.09, 0.07, 'triangle');
+      case TossSound.clank:
+        _clink(out, t0, _rand(1900, 2300), 0.12);
+        _play(_pick(_buf.steps), gain: 0.45, rate: 1.4, dest: out);
+      case TossSound.drop:
+        _play(_pick(_buf.steps), gain: 0.4, rate: 1.05, dest: out);
+        _clink(out, t0 + 0.02, _rand(1300, 1500), 0.04);
+      case TossSound.cheer:
+        // Ta-da-da-DAAA, as at the golf tee.
+        for (final (i, f) in const [523.0, 659.0, 784.0, 1047.0].indexed) {
+          final when = t0 + 0.1 + i * 0.12;
+          final len = i == 3 ? 0.8 : 0.18;
+          _tone(out, when, f, 1, len, 0.1, 'triangle');
+          _tone(out, when, f * 2, 1, len * 0.7, 0.03, 'sine');
+        }
+    }
   }
 
   /// Hic! One too many.

@@ -17,11 +17,13 @@ import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
 import 'package:office_shared/layout.dart' as lay show Elevator;
+import 'package:office_shared/bargames.dart' show AxeLane;
 import 'package:office_shared/layout.dart'
     show DanceFloor, DjBooth, FirePit, Floor, RoofBar, Stage, elevatorFront, roofTables, seatingById, wallHeight, wallT;
 import 'package:office_shared/protocol.dart' show WorkerStatus, WorkerTask;
 
 import '../audio/dnb_score.dart';
+import 'bar_games.dart';
 import 'character.dart' show Worker;
 import 'collider.dart';
 import 'geo.dart' as w show Pivot, capsule;
@@ -256,6 +258,10 @@ class Rooftop {
     _city?.setFloors(floors);
   }
 
+  /// The axe lane and the dart board, and what's thrown at them.
+  late final BarGamesView games;
+  late final RoofLamp _gamesLamp;
+
   late final _Dj _dj;
   late final Worker _bartender;
   double _tendZ = 0;
@@ -293,6 +299,8 @@ class Rooftop {
     final show = 0.3 + 0.7 * dark;
     _city?.update(t, dt, dark);
     elevator.update(dt);
+    games.update(dt, dark);
+    _gamesLamp.set(const Color(0xFFFFD8A8), games.lamp.power * 0.6);
     _dj.update(t, f, motion);
 
     // The bartender drifts along the bar between customers, and comes over when someone orders.
@@ -1103,7 +1111,8 @@ Rooftop buildRooftop(NightParts night, LabelHub labels) {
     colliders.add(Collider(minX: x0, maxX: x1, minZ: z0, maxZ: z1, top: 0.6));
   }
 
-  planterRow(Floor.minX, Floor.minX + 0.7, Floor.minZ + 0.4, 3.2);
+  // Down the west edge from the axe lane's booth, which has the corner.
+  planterRow(Floor.minX, Floor.minX + 0.7, Floor.minZ + AxeLane.depth + 0.3, 3.2);
   planterRow(Floor.minX + 0.4, -6.2, Floor.maxZ - 0.7, Floor.maxZ);
   planterRow(5.2, Floor.maxX - 0.4, Floor.maxZ - 0.7, Floor.maxZ);
   const screenX = 10.9;
@@ -1131,7 +1140,14 @@ Rooftop buildRooftop(NightParts night, LabelHub labels) {
 
   group.add(mergeByMaterial(statics));
 
+  // The games corner: the axe lane and the dart board (bar_games.dart).
+  final games = buildBarGames(night, labels);
+  group.add(games.group);
+  colliders.addAll(games.colliders);
+  interactables.addAll(games.interactables);
+
   final roof = Rooftop._(group, colliders, interactables, elevator)
+    ..games = games
     .._dj = dj
     .._bartender = bartender
     .._tendZ = bz
@@ -1163,7 +1179,8 @@ Rooftop buildRooftop(NightParts night, LabelHub labels) {
   }
   roof._barLamp = RoofLamp(bx + 1.2, 2.8, bz, 11);
   roof._fireLamp = RoofLamp(FirePit.x, 1.1, FirePit.z, 8);
-  roof.lamps.addAll([roof._barLamp, roof._fireLamp]);
+  roof._gamesLamp = RoofLamp(games.lamp.x, games.lamp.y, games.lamp.z, 10);
+  roof.lamps.addAll([roof._barLamp, roof._fireLamp, roof._gamesLamp]);
   roof._drawLed(djFrame(0), 0, true);
   return roof;
 }

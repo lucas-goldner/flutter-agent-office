@@ -579,6 +579,70 @@ class OfficeRender {
     return out;
   }
 
+  // ---- Darts and axes at the rooftop bar (features/bargames/sound.ts) ----------------------------
+
+  /// Throwing at the rooftop bar (see [TossSound]).
+  Float32List toss(TossSound kind) {
+    const t0 = 0.005;
+    final out = _buf(kind == TossSound.cheer ? 1.4 : (kind == TossSound.axe ? 0.8 : 0.5));
+    final n = out.length;
+    void air(double from, double to, double len, double level, [int pulses = 0]) {
+      final f = Param(from)
+        ..setValueAtTime(from, t0)
+        ..linearRampToValueAtTime(to, t0 + len);
+      final tone = biquadAuto(_white(n, start: t0, stop: t0 + len + 0.1), sr, BiquadType.bandpass, f, 1.4);
+      final g = Param(1);
+      if (pulses > 0) {
+        // A blade going round: louder each time it cuts through the air edge on.
+        g.setValueAtTime(0, t0);
+        for (var i = 0; i < pulses; i++) {
+          final at = t0 + (i + 0.5) * (len / pulses);
+          g
+            ..linearRampToValueAtTime(level, at)
+            ..linearRampToValueAtTime(level * 0.15, at + len / pulses / 2);
+        }
+        g.linearRampToValueAtTime(0, t0 + len + 0.05);
+      } else {
+        g.envelope(t0, [(len * 0.3, level), (len, 0)]);
+      }
+      mixInto(out, gain(tone, sr, g));
+    }
+
+    switch (kind) {
+      case TossSound.dart:
+        air(2600, 3600, 0.12, 0.05);
+      case TossSound.axe:
+        air(500, 900, 0.6, 0.14, 3);
+      case TossSound.board:
+        // Into the sisal: a short, dry thock.
+        mixInto(out, _sample(n, _pick(samples.steps), start: t0, rate: 2.3), k: 0.35);
+        _blip(out, t0, 950, 0.7, 0.03, 0.05);
+      case TossSound.wall:
+        mixInto(out, _sample(n, _pick(samples.steps), start: t0, rate: 1.7), k: 0.3);
+        _blip(out, t0, 430, 0.8, 0.06, 0.06);
+      case TossSound.thunk:
+        // Steel biting into a wooden target, and the boards shuddering.
+        mixInto(out, _sample(n, _pick(samples.steps), start: t0, rate: 0.85), k: 0.8);
+        _blip(out, t0, 160, 0.6, 0.18, 0.22);
+        _blip(out, t0 + 0.01, 310, 0.8, 0.09, 0.07, Wave.triangle);
+      case TossSound.clank:
+        _clink(out, t0, _rand(1900, 2300), 0.12);
+        mixInto(out, _sample(n, _pick(samples.steps), start: t0, rate: 1.4), k: 0.45);
+      case TossSound.drop:
+        mixInto(out, _sample(n, _pick(samples.steps), start: t0, rate: 1.05), k: 0.4);
+        _clink(out, t0 + 0.02, _rand(1300, 1500), 0.04);
+      case TossSound.cheer:
+        // Ta-da-da-DAAA, as at the golf tee.
+        for (final (i, f) in const [523.0, 659.0, 784.0, 1047.0].indexed) {
+          final when = t0 + 0.1 + i * 0.12;
+          final len = i == 3 ? 0.8 : 0.18;
+          _blip(out, when, f, 1, len, 0.1, Wave.triangle);
+          _blip(out, when, f * 2, 1, len * 0.7, 0.03);
+        }
+    }
+    return out;
+  }
+
   // ---- Loops: the room, the fridge, the roof, the rain, typing ---------------------------------------
 
   /// A seamless loop of [seconds]: renders a little more and crossfades the end into the start.
@@ -760,6 +824,9 @@ Map<String, Float32List> renderBank(int sr, Bank bank, [int seed = 0]) {
       many('thud', 2, r.thud);
       for (final what in const ['door', 'alarm', 'blow']) {
         out['airlock.$what'] = r.airlock(what);
+      }
+      for (final kind in TossSound.values) {
+        out['toss.${kind.name}'] = r.toss(kind);
       }
       out['arcade.land'] = r.arcade('land');
       out['arcade.over'] = r.arcade('over');

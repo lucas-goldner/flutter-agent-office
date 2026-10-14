@@ -263,3 +263,8 @@ double azimuthOf(SoundListener l, Pos p) {
       ? (gain: mono.gain, left: 1.0, right: math.sin(x * math.pi / 2))
       : (gain: mono.gain, left: math.cos(x * math.pi / 2), right: 1.0);
 }
+
+/// Throwing at the rooftop bar (features/bargames/sound.ts): a dart leaving the hand, an axe going end
+/// over end, a dart into the board or the wood round it, an axe biting into the target or bouncing off
+/// it and landing on the mat, and the crowd going up for a 180 or a killshot.
+enum TossSound { dart, axe, board, wall, thunk, clank, drop, cheer }

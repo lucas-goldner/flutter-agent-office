@@ -29,7 +29,7 @@ import 'office_render.dart';
 import 'sound_model.dart';
 import 'synth.dart';
 
-export 'sound_model.dart' show Ding, DogSounds, JukeboxPlay, SoundListener, StepKind;
+export 'sound_model.dart' show Ding, DogSounds, JukeboxPlay, SoundListener, StepKind, TossSound;
 
 final math.Random _rng = math.Random();
 double _rand(double a, double b) => a + _rng.nextDouble() * (b - a);
@@ -763,6 +763,13 @@ class OfficeSound implements DogSounds {
     if (!_ready) return;
     _count('airlock.$what');
     _play('airlock.$what', at: Pos(x, y, z), ref: 3, rolloff: 1);
+  }
+
+  /// Throwing at the rooftop bar, heard from [x], [y], [z] (see [TossSound]).
+  void toss(TossSound kind, double x, double y, double z) {
+    if (!_ready) return;
+    _count('toss-${kind.name}');
+    _play('toss.${kind.name}', at: Pos(x, y, z), ref: 2, rolloff: 1.1);
   }
 
   void hiccup() {

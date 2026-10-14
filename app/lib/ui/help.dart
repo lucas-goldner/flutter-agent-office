@@ -47,6 +47,11 @@ final List<(String, String)> helpRows = [
     '⛳',
     'The golf tee on the balcony: E steps up, A/D aim, W/S loft, hold Space and let go to swing, E puts the club back',
   ),
+  (
+    '🎯',
+    'Up on the roof, in the corner past the DJ: a dart board and an axe-throwing lane. E at either steps up to the line. The mouse (or the arrow keys) aims, and your hand wanders more after a few drinks. Hold Space (or the mouse button) and let go in the green: three darts a visit, five axes a round, chalked up for everyone up there. E steps back',
+  ),
+  ('🔭', 'The telescope up in the boss office: E looks through it, the mouse aims it, Esc steps back'),
   ('📚', "The bookshelf on the south wall: E reads the project's Markdown docs"),
   (
     '🤝',

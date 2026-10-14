@@ -1,6 +1,7 @@
 // What a teammate is up to, for the line under their name tag and in the people list. A port of
 // ui/whereabouts.ts.
 
+import 'package:office_shared/bargames.dart' show BarGame;
 import 'package:office_shared/layout.dart';
 import 'package:office_shared/maps/maps.dart' show MapPlan, PlanStyle, seatOn;
 import 'package:office_shared/protocol.dart';
@@ -15,6 +16,7 @@ String? whereabouts(PeerInfo p, [MapPlan? plan]) {
   if (p.doing != null && p.doing!.isNotEmpty) return p.doing;
   if (p.smoking == true) return '🚬 on a smoke break';
   if (p.golfing == true) return '🏌️ teeing off';
+  if (p.throwing != null) return p.throwing == BarGame.darts ? '🎯 playing darts' : '🪓 throwing axes';
   final office = plan == null || plan.style == PlanStyle.office || p.floor == roof;
   final key = p.seat;
   final place = key == null ? null : (office ? seatAt(key) : seatOn(plan, key));

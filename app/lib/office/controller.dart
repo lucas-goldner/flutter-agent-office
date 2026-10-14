@@ -146,6 +146,8 @@ const Map<InteractKind, double> _reach = {
   InteractKind.ladder: 3,
   InteractKind.pole: 3.5,
   InteractKind.telescope: 3.5,
+  InteractKind.darts: 4,
+  InteractKind.axe: 5.5,
 };
 
 final Map<PhysicalKeyboardKey, DeskKey> _deskKeys = {
@@ -329,6 +331,12 @@ class OfficeController implements OfficeActions {
 
   /// The hint's drawn again next frame.
   void staleHint() => _hintKey = 'stale';
+
+  /// On your way to another floor: in the elevator, or up the ladder or down a pole.
+  bool get travelling => _riding != null || _climbing != null;
+
+  /// Stops a walk over to someone, if you're on one.
+  void stopWalkingThere() => _stopWalking();
 
   /// The rooftop bar: up there and back, drinks and the DJ (roof.dart).
   late final RoofHub roofHub;
@@ -677,6 +685,7 @@ class OfficeController implements OfficeActions {
     _seatedAlready = false;
     whiteboard.route(msg);
     roofHub.onMessage(msg);
+    places.onMessage(msg);
     switch (msg) {
       case WelcomeMsg m:
         // A few pings, to line this page's clock up with the office's for the jukebox.
@@ -760,7 +769,7 @@ class OfficeController implements OfficeActions {
         _upgradePhase = m.state.phase;
       case ChatMsg m:
         _sayBubble(m.line.from, m.line.text);
-      case PeerActMsg m when !m.drinkSet:
+      case PeerActMsg m when !m.drinkSet && !m.throwingSet:
         final r = _remotes[m.id];
         if (m.smoke == null) {
           r?.person.reach();
@@ -1558,7 +1567,6 @@ class OfficeController implements OfficeActions {
   /// You're on a floor (or in the building without one): paint it, and open the doors. [back] is standing in
   /// the spot you left from last time, the doors open already.
   void _arrive({bool back = false}) {
-    places.placeChanged();
     // Up on the roof, or back down: the roof has no dog, and no walls for pictures.
     if (roofHub.setPlace()) {
       dog.root.visible = !roofHub.upTop;
@@ -1567,6 +1575,7 @@ class OfficeController implements OfficeActions {
       hanger.cancel();
       _hintKey = 'stale';
     }
+    places.placeChanged();
     _paintFloor();
     _syncStack();
     world.setProjectName(store.project?.name ?? 'Agent Office');
@@ -3403,7 +3412,9 @@ class OfficeController implements OfficeActions {
           InteractKind.golf ||
           InteractKind.ball ||
           InteractKind.bookshelf ||
-          InteractKind.telescope:
+          InteractKind.telescope ||
+          InteractKind.darts ||
+          InteractKind.axe:
         return ('', []);
     }
   }

@@ -303,7 +303,10 @@ class Pivot {
   final Node node;
   double x = 0, y = 0, z = 0;
 
-  void apply() => node.rotation = euler(x, y, z);
+  /// A turn set outright, in place of [x], [y], [z] (an arm pointed somewhere: see person_throw.dart).
+  vm.Quaternion? turn;
+
+  void apply() => node.rotation = turn ?? euler(x, y, z);
 
   void add(Node child) => node.add(child);
 

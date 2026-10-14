@@ -13,11 +13,13 @@ import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
 import 'package:office_shared/avatar.dart';
+import 'package:office_shared/bargames.dart' show BarGame;
 import 'package:office_shared/emotes.dart';
 import 'package:office_shared/protocol.dart';
 import 'package:office_shared/rooftop.dart' show Drink, DrinkId;
 import 'package:office_shared/status.dart';
 
+import 'bar_games.dart' show axeModel, dartModel;
 import 'drinks.dart' show drinkGlass;
 
 import 'costumes.dart';
@@ -27,6 +29,7 @@ import 'label_widgets.dart';
 import 'card.dart';
 import 'labels.dart';
 import 'worker_pr.dart';
+import 'person_throw.dart';
 import 'player.dart' show kHips;
 import 'toon.dart';
 import 'worker_acts.dart';
@@ -186,7 +189,7 @@ final math.Random _rng = math.Random();
 
 /// A chibi cartoon person — used for every human in the office. Forward is +z.
 class Person {
-  Person(this._name, String color, Look look, this._labels) : _look = look {
+  Person(this._name, String color, Look look, this._labels) : _look = look, _shirtHex = color {
     shirt = toonUnique(hex(color));
     _skin = toonUnique(hex(skinTones[look.skin]));
     _hairMat = toonUnique(hex(hairColors[look.hair]))..doubleSided = true;
@@ -337,7 +340,73 @@ class Person {
 
   String get name => _name;
 
-  void setColor(String color) => setToonColor(shirt, hex(color));
+  void setColor(String color) {
+    _shirtHex = color;
+    setToonColor(shirt, hex(color));
+  }
+
+  /// The shirt's colour, as '#rrggbb' (a dart's flights are the same).
+  String _shirtHex;
+
+  // ---- Darts and axes (person_throw.dart) ---------------------------------------------------------
+
+  /// At the dart board's oche or the axe lane's line (see setThrowing): the dart or axe in hand, how
+  /// far it's been drawn back, a throw under way or taking it back all by itself first.
+  Oche? _oche;
+
+  /// At the oche with a dart in the right hand, or the axe lane's line with an axe in both, or neither (null).
+  void setThrowing(BarGame? game) {
+    if (game == _oche?.game) return;
+    final o = _oche;
+    if (o != null) {
+      o.prop.detach();
+      _oche = null;
+      for (final limb in [_armL, _armR]) {
+        limb
+          ..turn = null
+          ..x = 0
+          ..y = 0
+          ..z = 0
+          ..apply();
+      }
+    }
+    if (game != null) {
+      final prop = game == BarGame.darts ? dartModel(_shirtHex) : axeModel();
+      _body.add(prop);
+      _oche = Oche(game, prop);
+    }
+    holdMug(_wantsMug);
+  }
+
+  /// Drawing the dart or axe back, [k] of the way (0 aiming, 1 as far as it goes).
+  void tossBack(double k) {
+    final o = _oche;
+    if (o != null && o.throwT < 0 && o.autoT < 0) o.want = k.clamp(0.0, 1.0);
+  }
+
+  /// Throws from wherever it's drawn back to. [release] is told where it left the hand (and how an axe
+  /// was turned, see axeEdge), as it does.
+  void toss(Release release) {
+    final o = _oche;
+    if (o == null) return;
+    o
+      ..release = release
+      ..top = o.back
+      ..throwT = 0
+      ..autoT = -1;
+  }
+
+  /// A whole throw on its own, drawing back first (someone else's).
+  void tossAuto(Release release) {
+    final o = _oche;
+    if (o == null) return release(pointIn(root.parent, root, vm.Vector3(0, 1.4, 0.3)), 0);
+    // One still on its way out of the hand goes first.
+    o.release?.call(pointIn(root.parent, o.prop, vm.Vector3.zero()), o.turn);
+    o
+      ..release = release
+      ..throwT = -1
+      ..autoT = 0;
+  }
 
   String get skinColor => skinTones[_look.skin];
 
@@ -807,6 +876,10 @@ class Person {
     _head.y = _head.z = 0;
     _body.y = _body.z = 0;
     if (_emoting != null) _emoteStep(dt, moving || airborne ? 0 : 1 - sit);
+    final oche = _oche;
+    if (oche != null) {
+      throwStep(oche, _armL, _armR, _body, dt, () => pointIn(root.parent, oche.prop, vm.Vector3.zero()));
+    }
     for (final p in [_body, _head, _legL, _legR, _armL, _armR]) {
       p.apply();
     }
