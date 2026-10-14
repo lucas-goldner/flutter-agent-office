@@ -23,6 +23,7 @@ import '../world/office/parts.dart' show canvasTexture;
 import 'share_views.dart';
 import 'video_texture.dart';
 import 'voice.dart';
+import 'voice_text.dart';
 
 class OfficeVoice {
   OfficeVoice({required this.store, required OfficeSocket net, required this.tv, required this.state})
@@ -39,6 +40,7 @@ class OfficeVoice {
       if (_tvStream == null) tv.material.baseColorTexture = t;
     });
     voice.onChange(_onChange);
+    voice.onFailed(_unreachable);
     store.topic(Topic.peers).addListener(_onPeers);
     _onChange();
     _devHook();
@@ -65,6 +67,15 @@ class OfficeVoice {
 
   /// The thumbnails, for the HUD's shares slot.
   late final Widget sharesWidget = ShareThumbs(shares: thumbs, onWatch: watchShare);
+
+  /// The people voice couldn't connect with: said once a session per person, since retrying (restartIce)
+  /// fails the same way on the same networks.
+  final Set<String> _unreachableIds = {};
+
+  void _unreachable(String id) {
+    if (!_unreachableIds.add(id)) return;
+    toast(unreachableText(store.peers[id]?.name), ToastKind.warn);
+  }
 
   /// window.__voice, as the old client had it: for the dev console and the headless tests.
   void _devHook() {

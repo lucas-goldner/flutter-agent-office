@@ -11,7 +11,9 @@ import 'package:flutter/foundation.dart';
 import 'package:web/web.dart' as web;
 
 import '../net/office_socket.dart' hide Profile;
+
 import 'package:office_shared/protocol.dart';
+
 import '../state/store.dart';
 
 class _Conn {
@@ -61,6 +63,11 @@ class Voice {
   web.MediaStream? get localScreen => _screen;
 
   void onChange(VoidCallback fn) => _listeners.add(fn);
+
+  final List<void Function(String peerId)> _failListeners = [];
+
+  /// A peer's call couldn't connect at all: neither direct nor through a TURN relay.
+  void onFailed(void Function(String peerId) fn) => _failListeners.add(fn);
 
   void _notify() {
     for (final fn in [..._listeners]) {
@@ -318,6 +325,11 @@ class Voice {
     }).toJS;
     pc.onconnectionstatechange = ((web.Event _) {
       debugPrint('rtc ${store.peers[id]?.name ?? id}: ${pc.connectionState}');
+      if (pc.connectionState == 'failed') {
+        for (final fn in [..._failListeners]) {
+          fn(id);
+        }
+      }
     }).toJS;
     pc.ontrack = ((web.RTCTrackEvent e) {
       final track = e.track;
@@ -398,6 +410,7 @@ class Voice {
     stopShare();
     reset();
     _listeners.clear();
+    _failListeners.clear();
   }
 
   /// A property of a thrown DOMException (name, message), or the error's text.
