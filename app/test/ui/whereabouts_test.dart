@@ -84,4 +84,11 @@ void main() {
     expect(whereabouts(p, null, (car: 8, seat: CarSeat.passenger)), '🏎️ riding in the Blue Lambo');
     expect(whereabouts(p), '🚶 outside');
   });
+
+  test('someone on the 2D view is not anywhere in the office, unless they have something open', () {
+    final p = peer(0, 0);
+    final lite = PeerInfo.fromJson({...p.toJson(), 'lite': true});
+    expect(whereabouts(lite), '📱 on the 2D view');
+    expect(whereabouts(PeerInfo.fromJson({...lite.toJson(), 'doing': "💻 in Ada's terminal"})), "💻 in Ada's terminal");
+  });
 }

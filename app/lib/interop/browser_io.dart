@@ -56,6 +56,10 @@ String get locationSearch => _nav.location.hasQuery ? '?${_nav.location.query}' 
 /// No address to read dev switches from.
 final Map<String, String> startupQuery = const {};
 
+/// This page's in-app route and its query (/lite, /login?next=/lite).
+String get pagePath => _nav.location.path;
+Map<String, String> get pageQuery => _nav.location.queryParameters;
+
 /// The office's host (with its port), as a page it served would see its own.
 String get locationHost => Uri.parse(serverOrigin).authority;
 bool get isSecure => Uri.parse(serverOrigin).scheme == 'https';
@@ -161,3 +165,9 @@ void openExternal(String url) {
     return false;
   });
 }
+
+/// The desktop app has a mouse.
+bool get touchOnly => false;
+
+/// No buzz on a Mac.
+void vibrate(int ms) {}

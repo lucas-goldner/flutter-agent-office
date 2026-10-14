@@ -13,6 +13,13 @@ String get locationSearch => web.window.location.search;
 
 /// The page's query as it was when the app started, before the router rewrote the address.
 final Map<String, String> startupQuery = Uri.parse('http://x/${web.window.location.search}').queryParameters;
+
+/// The page's path as it was when the app started (/lite, /login), before the router rewrote the address.
+final String startupPath = web.window.location.pathname;
+
+/// This page's path and query: as the page was loaded (a page is loaded afresh for each).
+String get pagePath => startupPath;
+Map<String, String> get pageQuery => startupQuery;
 String get locationHost => web.window.location.host;
 bool get isSecure => web.window.location.protocol == 'https:';
 
@@ -23,7 +30,7 @@ String get serverOrigin => web.window.location.origin;
 void setServerOrigin(String origin) {}
 
 /// Nothing to set up: the browser has the address and localStorage ready.
-void initPlatform() => startupQuery;
+void initPlatform() => (startupQuery, startupPath);
 
 /// The browser navigates by loading pages, so there's no in-app route to listen to.
 Listenable? get navigation => null;
@@ -88,3 +95,16 @@ set documentTitle(String title) => web.document.title = title;
 
 /// Whether the tab is hidden (another tab or app in front).
 bool get pageHidden => web.document.hidden;
+
+/// A touch screen and no mouse: a phone or a tablet, which can't walk around the office anyway.
+bool get touchOnly =>
+    web.window.matchMedia('(pointer: coarse)').matches && !web.window.matchMedia('(any-pointer: fine)').matches;
+
+/// A buzz on a phone that has one (a worker needs you, on the 2D view).
+void vibrate(int ms) {
+  try {
+    web.window.navigator.vibrate(ms.toJS);
+  } catch (_) {
+    // no vibration here
+  }
+}

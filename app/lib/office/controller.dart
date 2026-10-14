@@ -19,6 +19,7 @@ import '../interop/browser.dart';
 import '../interop/open_link.dart';
 import '../net/api.dart';
 import '../net/office_socket.dart' hide Profile;
+import '../framerate.dart';
 import '../nextup.dart';
 import '../notify.dart';
 import '../office_scope.dart';
@@ -37,6 +38,7 @@ import 'package:office_shared/rooftop.dart' show roof, roofName;
 import 'package:office_shared/status.dart';
 
 import '../state/store.dart';
+import '../ui/lite_suggest.dart';
 import '../ui/ask.dart';
 import '../ui/boards.dart';
 import '../ui/changes.dart';
@@ -419,7 +421,19 @@ class OfficeController implements OfficeActions {
   // ---- Boot -----------------------------------------------------------------------------------
 
   Future<void> init() async {
-    await Scene.initializeStaticResources();
+    // Came here from the 2D view's 🏢 3D button: it isn't offered straight back.
+    _chose3d = pageQuery.containsKey('3d');
+    if (_chose3d && !desktopApp) replaceUrl(locationPath);
+    // A phone can't walk around the office: the 2D view is made for it.
+    if (touchOnly) _offer2d(LiteWhy.touch);
+    try {
+      await Scene.initializeStaticResources();
+    } catch (e) {
+      // No 3D here (WebGL switched off, or no graphics for it): on to the 2D view, which does without.
+      if (desktopApp) rethrow;
+      debugPrint('no 3D: $e');
+      return goReplace('/lite?why=webgl');
+    }
     await Toon.init();
     // The models made in Blender, loaded before the world they're in is built (world/models.dart).
     await Models.instance.preload();
@@ -1139,6 +1153,14 @@ class OfficeController implements OfficeActions {
       ),
       HudAction(id: 'settings', icon: '⚙️', label: 'Settings', section: HudSection.office, run: showSettings),
       HudAction(id: 'help', icon: '❓', label: 'Controls', section: HudSection.office, key: 'H', run: openHelp),
+      HudAction(
+        id: 'lite',
+        icon: '📱',
+        label: '2D view',
+        section: HudSection.office,
+        title: () => 'The workers, their terminals and the boards without the 3D: for a phone or a slow computer',
+        run: () => goTo('/lite'),
+      ),
       HudAction(
         id: 'upgrade',
         icon: '⬆️',
@@ -1969,6 +1991,7 @@ class OfficeController implements OfficeActions {
   void walkTo(String id) {
     final p = store.peers[id];
     if (p == null || id == store.you) return;
+    if (p.lite == true) return toast('📱 ${p.name} is on the 2D view, not anywhere in the office itself');
     if (!store.onMyFloor(p) && p.floor == null) return;
     // Out of the car first (and not at all, with no room at the door).
     if (!places.cars.getOut()) return;
@@ -2202,8 +2225,8 @@ class OfficeController implements OfficeActions {
 
   void _syncPeers() {
     for (final peer in store.peers.values) {
-      // Only who's on your floor is in the room with you.
-      if (peer.id == store.you || !store.onMyFloor(peer)) continue;
+      // Only who's on your floor is in the room with you, and nobody on the 2D view stands anywhere.
+      if (peer.id == store.you || !store.onMyFloor(peer) || peer.lite == true) continue;
       var r = _remotes[peer.id];
       if (r == null) {
         final person = Person(peer.name, peer.color, peer.look, labels)
@@ -2235,7 +2258,7 @@ class OfficeController implements OfficeActions {
     _cork.off = _offBoard();
     for (final id in _remotes.keys.toList()) {
       final peer = store.peers[id];
-      if (peer == null || !store.onMyFloor(peer)) {
+      if (peer == null || !store.onMyFloor(peer) || peer.lite == true) {
         final r = _remotes.remove(id)!;
         labels.remove(r.bubble);
         r.person.root.detach();
@@ -3826,12 +3849,26 @@ class OfficeController implements OfficeActions {
       ..jump = keys.contains(PhysicalKeyboardKey.space);
   }
 
+  /// Came from the 2D view's 🏢 3D button (?3d=1): the 2D view isn't offered back.
+  bool _chose3d = false;
+
+  /// The offer of the 2D view, where the 3D is hard going (ui/lite_suggest.dart).
+  final LiteOffer liteOffer = LiteOffer();
+
+  /// Frames coming too slowly for the 3D to be any fun: the 2D view is offered.
+  final SlowFrames _slowFrames = SlowFrames();
+
+  void _offer2d(LiteWhy why) {
+    if (!_chose3d) liteOffer.offer(why);
+  }
+
   final Stopwatch _perf = Stopwatch();
   double _perfTick = 0, _perfDt = 0;
   int _perfN = 0;
 
   void tick(double dt, Size view) {
     loading.drew();
+    if (_slowFrames.frame(nowMs(), dt * 1000)) _offer2d(LiteWhy.slow);
     _perf
       ..reset()
       ..start();

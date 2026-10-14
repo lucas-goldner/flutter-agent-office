@@ -83,8 +83,32 @@ final _termShortcuts = <ShortcutActivator, Intent>{
 /// Whose terminal is open, so a reconnect can attach to it again.
 String? openTerminalFor() => _current?.workerId;
 
+/// The keypad's keys (see [openTerminal]'s keypad): what each types, or a function of the terminal for the
+/// ones that depend on its mode.
+final List<({String label, String title, String Function(x.Terminal t) keys})> kKeypad = [
+  (label: '1', title: 'Pick 1 (yes, in a permission prompt)', keys: (_) => '1'),
+  (label: '2', title: 'Pick 2', keys: (_) => '2'),
+  (label: '3', title: 'Pick 3', keys: (_) => '3'),
+  (label: '↑', title: 'Up', keys: (t) => t.cursorKeysMode ? '\x1bOA' : '\x1b[A'),
+  (label: '↓', title: 'Down', keys: (t) => t.cursorKeysMode ? '\x1bOB' : '\x1b[B'),
+  (label: '⏎', title: 'Enter', keys: (_) => '\r'),
+  (label: '⇥', title: 'Tab', keys: (_) => '\t'),
+  (label: 'Esc', title: 'Esc: close a menu, or interrupt the agent', keys: (_) => '\x1b'),
+  (label: '^C', title: 'Ctrl+C', keys: (_) => '\x03'),
+];
+
 /// Opens [workerId]'s terminal, or scrolls the open one to [find]. [onChanges] adds the 🌿 Changes button.
-void openTerminal(OfficeScope scope, String workerId, {VoidCallback? onChanges, TerminalFind? find}) {
+///
+/// [keypad]: the keys a phone's keyboard hasn't got (1 2 3 for a menu, arrows, Enter, Tab, Esc, Ctrl+C) and
+/// a box to send a prompt from, under the terminal, for the 2D view (pages/lite_page.dart). The terminal
+/// doesn't take the focus as it opens either, so a phone's keyboard stays down until you tap into it.
+void openTerminal(
+  OfficeScope scope,
+  String workerId, {
+  VoidCallback? onChanges,
+  TerminalFind? find,
+  bool keypad = false,
+}) {
   final cur = _current;
   if (cur != null && cur.workerId == workerId) {
     if (find != null) cur.find(find);
@@ -95,7 +119,15 @@ void openTerminal(OfficeScope scope, String workerId, {VoidCallback? onChanges, 
   final key = GlobalKey<_TerminalWindowState>();
   late final ModalHandle modal;
   modal = ModalStack.instance.show(
-    (m) => _TerminalWindow(key: key, scope: scope, workerId: workerId, modal: m, onChanges: onChanges, find: find),
+    (m) => _TerminalWindow(
+      key: key,
+      scope: scope,
+      workerId: workerId,
+      modal: m,
+      onChanges: onChanges,
+      find: find,
+      keypad: keypad,
+    ),
     // The terminal has the keys: its own Esc leaves (with a tip when the program wanted one), Ctrl+] too.
     escCloses: false,
     onClose: () {
@@ -114,6 +146,7 @@ class _TerminalWindow extends StatefulWidget {
     required this.modal,
     this.onChanges,
     this.find,
+    this.keypad = false,
   });
 
   final OfficeScope scope;
@@ -121,6 +154,9 @@ class _TerminalWindow extends StatefulWidget {
   final ModalHandle modal;
   final VoidCallback? onChanges;
   final TerminalFind? find;
+
+  /// The 2D view's keypad and prompt box under the terminal (see [openTerminal]).
+  final bool keypad;
 
   @override
   State<_TerminalWindow> createState() => _TerminalWindowState();
@@ -225,9 +261,12 @@ class _TerminalWindowState extends State<_TerminalWindow> {
       _term.paste(text);
     });
     net.send(WorkerAttachCmd(widget.workerId));
-    Timer(const Duration(milliseconds: 50), () {
-      if (mounted) _focus.requestFocus();
-    });
+    // With the keypad (a phone), the keyboard stays down until you tap into the terminal.
+    if (!widget.keypad) {
+      Timer(const Duration(milliseconds: 50), () {
+        if (mounted) _focus.requestFocus();
+      });
+    }
   }
 
   @override
@@ -243,6 +282,7 @@ class _TerminalWindowState extends State<_TerminalWindow> {
     _stopPastedFiles();
     _mic?.dispose();
     _resizeDebounce?.cancel();
+    _say.dispose();
     widget.scope.net.send(WorkerDetachCmd(widget.workerId));
     _ctl.dispose();
     _scroll.dispose();
@@ -384,6 +424,25 @@ class _TerminalWindowState extends State<_TerminalWindow> {
     _scroll.jumpTo(target);
   }
 
+  /// The keypad's prompt box.
+  final _say = TextEditingController();
+
+  /// A key from the keypad: typed into the terminal without its focus, so a phone's keyboard stays down.
+  void _keypadKey(String Function(x.Terminal t) keys) {
+    _sendSize(typing: true);
+    _sayTyping();
+    _term.textInput(keys(_term));
+  }
+
+  /// The keypad's prompt box, sent as a prompt (into its input box, if it's busy).
+  void _sendSay() {
+    final prompt = _say.text.trim();
+    if (prompt.isEmpty || !_ready) return;
+    _sendSize(typing: true);
+    widget.scope.net.send(WorkerPromptCmd(widget.workerId, prompt));
+    _say.clear();
+  }
+
   /// Sends the program an Esc: to close a menu like Claude's /skills, or to interrupt it.
   void _sendEsc() {
     _sayTyping();
@@ -512,9 +571,12 @@ class _TerminalWindowState extends State<_TerminalWindow> {
     _focus.requestFocus();
   }
 
+  /// A few more columns on a phone's narrow screen.
+  x.TerminalStyle get _style => widget.keypad ? kTermStyle.copyWith(fontSize: 12) : kTermStyle;
+
   Size _measureCell(BuildContext context) {
     final scaler = MediaQuery.textScalerOf(context);
-    final style = kTermStyle.toTextStyle();
+    final style = _style.toTextStyle();
     const probe = 'mmmmmmmmmm';
     final b = ui.ParagraphBuilder(style.getParagraphStyle())
       ..pushStyle(style.getTextStyle(textScaler: scaler))
@@ -549,45 +611,129 @@ class _TerminalWindowState extends State<_TerminalWindow> {
       body: TermTabs(
         workerId: widget.workerId,
         focusTerm: _focus.requestFocus,
-        terminal: LayoutBuilder(
-          builder: (context, box) {
-            _hostChanged(box.biggest);
-            return Semantics(
-              label: '${w?.name ?? ''} terminal',
-              child: Listener(
-                onPointerDown: (e) => _downAt = e.buttons == kPrimaryButton ? e.localPosition : null,
-                onPointerUp: _pointerUp,
-                onPointerHover: _hover,
-                child: Stack(
-                  children: [
-                    Positioned.fill(
-                      child: x.TerminalView(
-                        _term,
-                        key: _viewKey,
-                        mouseCursor: _overLink ? SystemMouseCursors.click : SystemMouseCursors.text,
-                        controller: _ctl,
-                        scrollController: _scroll,
-                        focusNode: _focus,
-                        autofocus: true,
-                        autoResize: false,
-                        theme: kTermTheme,
-                        textStyle: kTermStyle,
-                        cursorType: x.TerminalCursorType.block,
-                        shortcuts: _termShortcuts,
-                        onKeyEvent: _onKey,
-                        hardwareKeyboardOnly: false,
+        terminal: _withKeypad(
+          LayoutBuilder(
+            builder: (context, box) {
+              _hostChanged(box.biggest);
+              return Semantics(
+                label: '${w?.name ?? ''} terminal',
+                child: Listener(
+                  onPointerDown: (e) => _downAt = e.buttons == kPrimaryButton ? e.localPosition : null,
+                  onPointerUp: _pointerUp,
+                  onPointerHover: _hover,
+                  child: Stack(
+                    children: [
+                      Positioned.fill(
+                        child: x.TerminalView(
+                          _term,
+                          key: _viewKey,
+                          mouseCursor: _overLink ? SystemMouseCursors.click : SystemMouseCursors.text,
+                          controller: _ctl,
+                          scrollController: _scroll,
+                          focusNode: _focus,
+                          autofocus: !widget.keypad,
+                          autoResize: false,
+                          theme: kTermTheme,
+                          textStyle: _style,
+                          cursorType: x.TerminalCursorType.block,
+                          shortcuts: _termShortcuts,
+                          onKeyEvent: _onKey,
+                          hardwareKeyboardOnly: false,
+                        ),
                       ),
-                    ),
-                    if (_dropping || _uploading > 0) Positioned.fill(child: _DropZone(uploading: _uploading > 0)),
-                    if (_mic != null)
-                      Positioned(left: 20, right: 20, bottom: 14, child: Center(child: DictateLive(_mic))),
+                      if (_dropping || _uploading > 0) Positioned.fill(child: _DropZone(uploading: _uploading > 0)),
+                      if (_mic != null)
+                        Positioned(left: 20, right: 20, bottom: 14, child: Center(child: DictateLive(_mic))),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// The terminal, with the 2D view's keypad and prompt box under it (hidden with it while a web page shows).
+  Widget _withKeypad(Widget terminal) {
+    if (!widget.keypad) return terminal;
+    final on = _ready && !isAsleep(worker?.status ?? WorkerStatus.exited);
+    final box = TextField(
+      key: const ValueKey('term-say'),
+      controller: _say,
+      enabled: on,
+      textInputAction: TextInputAction.send,
+      onSubmitted: (_) => _sendSay(),
+      style: heavy(16, weight: FontWeight.w500),
+      decoration: InputDecoration(
+        isDense: true,
+        hintText: 'Reply, or tell it what to do next…',
+        hintStyle: heavy(14, color: Swatch.muted, weight: FontWeight.w400),
+        contentPadding: canDictate ? const EdgeInsets.fromLTRB(10, 10, 44, 10) : null,
+      ),
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Expanded(child: terminal),
+        Container(
+          key: const ValueKey('term-keypad'),
+          margin: const EdgeInsets.only(top: 6, right: 6),
+          padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+          decoration: BoxDecoration(
+            color: Swatch.paper,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Swatch.ink, width: kBorder),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    for (final k in kKeypad)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 5),
+                        child: Semantics(
+                          label: k.title,
+                          child: SizedBox(
+                            width: 36,
+                            height: 42,
+                            child: OfficeButton(
+                              key: ValueKey('key-${k.label}'),
+                              label: k.label,
+                              tooltip: k.title,
+                              dense: true,
+                              onPressed: on ? () => _keypadKey(k.keys) : null,
+                            ),
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               ),
-            );
-          },
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: canDictate ? DictateField(controller: _say, enabled: on, line: true, child: box) : box,
+                  ),
+                  const SizedBox(width: 8),
+                  OfficeButton(
+                    key: const ValueKey('term-send'),
+                    label: 'Send',
+                    kind: BtnKind.primary,
+                    onPressed: on ? _sendSay : null,
+                  ),
+                ],
+              ),
+            ],
+          ),
         ),
-      ),
+      ],
     );
   }
 
@@ -640,20 +786,22 @@ class _TerminalWindowState extends State<_TerminalWindow> {
           tooltip: 'OpenCode models: Ctrl+X then M (use /models if custom bindings override it)',
           onPressed: _ready && !isAsleep(w.status) ? _openModels : null,
         ),
-      if (_mic != null) MicButton(_mic, label: 'Dictate', enabled: _ready && !isAsleep(w.status)),
+      // The keypad has an Esc of its own, and a 🎤 on its prompt box.
+      if (_mic != null && !widget.keypad) MicButton(_mic, label: 'Dictate', enabled: _ready && !isAsleep(w.status)),
       // The Esc key leaves the terminal, so this is how Esc reaches the program: to close a menu like
       // Claude's /skills, or to interrupt it. Ctrl+[ does the same from the keyboard.
-      OfficeButton(
-        key: const ValueKey('term-esc'),
-        label: '⎋ Esc',
-        tooltip: 'Send Esc to the terminal (Ctrl+[): closes a menu like /skills, or interrupts the agent. The Esc key on its own leaves the terminal',
-        onPressed: _ready && !isAsleep(w.status)
-            ? () {
-                _sendEsc();
-                _focus.requestFocus();
-              }
-            : null,
-      ),
+      if (!widget.keypad)
+        OfficeButton(
+          key: const ValueKey('term-esc'),
+          label: '⎋ Esc',
+          tooltip: 'Send Esc to the terminal (Ctrl+[): closes a menu like /skills, or interrupts the agent. The Esc key on its own leaves the terminal',
+          onPressed: _ready && !isAsleep(w.status)
+              ? () {
+                  _sendEsc();
+                  _focus.requestFocus();
+                }
+              : null,
+        ),
       if (widget.onChanges != null)
         OfficeButton(
           label: '🌿 Changes',

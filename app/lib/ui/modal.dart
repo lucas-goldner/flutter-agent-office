@@ -44,6 +44,9 @@ class ModalHandle {
   }
 }
 
+/// A phone's width, or a little more: see [ModalStack.phoneSheets].
+const double kPhoneWidth = 640;
+
 class ModalStack {
   ModalStack._();
 
@@ -63,6 +66,13 @@ class ModalStack {
 
   /// Whether one of the open windows is a book you're reading (the bookshelf).
   bool get readingNow => _stack.any((m) => m.reading);
+
+  /// On a phone on the 2D view (pages/lite_page.dart): the big windows (a terminal, a board) take the whole
+  /// screen, and the small ones stay dialogs.
+  bool phoneSheets = false;
+
+  /// Whether a screen this wide gets [phoneSheets].
+  bool sheetsAt(Size screen) => phoneSheets && screen.width <= kPhoneWidth;
 
   /// Where windows go: the office page's overlay. Set once by the page.
   void attach(OverlayState overlay) => _overlay = overlay;
@@ -171,11 +181,17 @@ class _BackdropState extends State<_Backdrop> {
             Positioned.fill(child: widget.child)
           else
             Positioned.fill(
-              child: SafeArea(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Center(child: widget.child),
-                ),
+              child: Builder(
+                builder: (context) {
+                  // A phone on the 2D view: the big windows fill the screen (see ModalWindow).
+                  final sheets = ModalStack.instance.sheetsAt(MediaQuery.sizeOf(context));
+                  return SafeArea(
+                    child: Padding(
+                      padding: EdgeInsets.all(sheets ? 0 : 16),
+                      child: Center(child: widget.child),
+                    ),
+                  );
+                },
               ),
             ),
         ],
@@ -224,21 +240,26 @@ class ModalWindow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final screen = MediaQuery.sizeOf(context);
-    final maxH = screen.height - 32;
+    // A phone on the 2D view: a big window (one with a height) is the whole screen, a small one a dialog
+    // 8px in from its edges (see ModalStack.phoneSheets).
+    final sheets = ModalStack.instance.sheetsAt(screen);
+    final full = sheets && height != null;
+    final inset = sheets && !full ? 8.0 : 0.0;
+    final maxH = full ? double.infinity : screen.height - (sheets ? 16 : 32);
     Widget content = Padding(padding: bodyPadding, child: body);
     if (scrollBody) content = SingleChildScrollView(child: content);
-    return ConstrainedBox(
-      constraints: BoxConstraints(maxWidth: width, maxHeight: maxH),
+    final window = ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: full ? double.infinity : width, maxHeight: maxH),
       child: SizedBox(
-        width: width,
-        height: height?.clamp(0, maxH),
+        width: full ? double.infinity : width,
+        height: full ? double.infinity : height?.clamp(0, maxH),
         child: Container(
           clipBehavior: Clip.antiAlias,
           decoration: BoxDecoration(
             color: background,
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: Swatch.ink, width: kBorder),
-            boxShadow: const [BoxShadow(color: Swatch.ink, offset: Offset(0, 6))],
+            borderRadius: BorderRadius.circular(full ? 0 : 20),
+            border: full ? null : Border.all(color: Swatch.ink, width: kBorder),
+            boxShadow: full ? null : const [BoxShadow(color: Swatch.ink, offset: Offset(0, 6))],
           ),
           child: Material(
             type: MaterialType.transparency,
@@ -306,6 +327,7 @@ class ModalWindow extends StatelessWidget {
         ),
       ),
     );
+    return inset > 0 ? Padding(padding: EdgeInsets.all(inset), child: window) : window;
   }
 }
 

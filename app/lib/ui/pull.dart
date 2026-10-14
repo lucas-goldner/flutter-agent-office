@@ -757,6 +757,9 @@ class BoardActions {
   /// Take the issue's card off the board, to carry to a desk or the queue.
   void pickUp(GhIssue issue) => scope.actions.pickUp(issue);
 
+  /// Not on the 2D view, where there's nobody to carry it.
+  bool get canPickUp => scope.actions is! NotInTheOffice;
+
   /// Put an issue on the 📋 task queue; a worker is seated for it when there's room.
   void queue(String prompt, String title, int issue, {AgentProvider? provider, String? model, AgentEffort? effort}) =>
       scope.net.send(
@@ -2840,7 +2843,7 @@ class _IssueWindowState extends State<_IssueWindow> {
                       : 'A worker picks it up by itself when a desk is free and there is room under the worker limit',
                   onPressed: onQueue ? null : _addToQueue,
                 ),
-              if (isOpen)
+              if (isOpen && actions.canPickUp)
                 OfficeButton(
                   label: '✋ Pick it up',
                   tooltip: 'Carry its card to an empty desk, a worker or the queue board, and press E there',

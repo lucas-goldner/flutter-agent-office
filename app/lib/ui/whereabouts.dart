@@ -17,6 +17,8 @@ import '../office/roof_logic.dart' show roofWhereabouts;
 /// In one of the garage's cars ([car], see CarsState.carOf): "🏎️ driving the Orange Lambo".
 String? whereabouts(PeerInfo p, [MapPlan? plan, ({int car, CarSeat seat})? car]) {
   if (p.doing != null && p.doing!.isNotEmpty) return p.doing;
+  // Not standing anywhere: in on the 2D view, from a phone, say.
+  if (p.lite == true) return '📱 on the 2D view';
   if (car != null && car.car >= 0 && car.car < cars.length) {
     return '🏎️ ${car.seat == CarSeat.driver ? 'driving' : 'riding in'} the ${cars[car.car].name}';
   }

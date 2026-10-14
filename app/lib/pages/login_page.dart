@@ -27,6 +27,9 @@ class _LoginPageState extends State<LoginPage> {
   /// The desktop app's office, e.g. http://localhost:4600.
   final _server = TextEditingController(text: desktopApp ? serverOrigin : '');
 
+  /// Where to go once in: the 2D view if that's where you were headed (see loginUrl), else the office.
+  final String _next = loginNext(pageQuery);
+
   /// Whether to ask for a name: once there are accounts. Optional while the shared password works.
   bool _askName = false;
   bool _shared = true;
@@ -41,7 +44,7 @@ class _LoginPageState extends State<LoginPage> {
     // address bar and trade it for a session. The key is after the #, so it never reaches a server log.
     final key = linkKey(locationHash);
     if (key != null) {
-      replaceUrl(locationPath);
+      replaceUrl('$locationPath$locationSearch');
       _signInWithLink(key);
     }
     _load();
@@ -50,7 +53,7 @@ class _LoginPageState extends State<LoginPage> {
   Future<void> _signInWithLink(String key) async {
     try {
       final r = await Api.postJson('/api/link', {'key': key});
-      if (r.ok) return goTo('/');
+      if (r.ok) return goTo(_next);
       if (mounted) setState(() => _error = r.error('Could not sign in'));
     } catch (e) {
       if (mounted) setState(() => _error = desktopApp ? _unreachable(e) : 'Server unreachable');
@@ -134,7 +137,7 @@ class _LoginPageState extends State<LoginPage> {
       final r = await Api.postJson('/api/login', {'name': name, 'password': _password.text});
       if (r.ok) {
         storageSet(kLoginNameKey, name);
-        goTo('/');
+        goTo(_next);
         return;
       }
       setState(() => _error = r.error('Could not sign in'));

@@ -16,7 +16,7 @@ import 'server.dart';
 typedef Profile = ({String name, String color, Look look});
 
 class OfficeSocket {
-  OfficeSocket({required this.profile, required this.floor, this.where});
+  OfficeSocket({required this.profile, required this.floor, this.where, this.lite = false});
 
   /// Who you are, read on every (re)connect.
   final Profile Function() profile;
@@ -26,6 +26,9 @@ class OfficeSocket {
 
   /// Where you are (or were, before this page), to be put back in the same spot on that floor.
   final SavedSpot? Function()? where;
+
+  /// On the 2D view: in the office without standing anywhere in it (see PeerInfo.lite).
+  final bool lite;
 
   WebSocket? _ws;
 
@@ -55,6 +58,7 @@ class OfficeSocket {
     };
     final f = floor();
     if (f != null) q['floor'] = f;
+    if (lite) q['lite'] = '1';
     // Back to the floor you were on (after a reload or a restart), in the spot you were in there.
     final at = where?.call();
     if (f != null && at != null && at.floor == f) {
@@ -111,7 +115,7 @@ class OfficeSocket {
     // Session expired? Go back to the door.
     try {
       final me = await Api.whoami();
-      if (me == null) return goTo('/login');
+      if (me == null) return goTo(loginUrl());
     } catch (_) {
       // offline; keep retrying
     }

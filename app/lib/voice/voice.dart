@@ -225,11 +225,12 @@ class Voice {
 
   /// Called whenever the set of peers changes.
   void syncPeers() {
-    for (final id in store.peers.keys) {
-      if (id != store.you && !_conns.containsKey(id)) _connect(id);
+    // Nobody on the 2D view has voice (see PeerInfo.lite), so there's nothing to connect to.
+    for (final p in store.peers.values) {
+      if (p.id != store.you && p.lite != true && !_conns.containsKey(p.id)) _connect(p.id);
     }
     for (final id in _conns.keys.toList()) {
-      if (!store.peers.containsKey(id)) _drop(id);
+      if (store.peers[id]?.lite ?? true) _drop(id);
     }
   }
 

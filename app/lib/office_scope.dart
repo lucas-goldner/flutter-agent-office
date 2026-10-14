@@ -47,6 +47,10 @@ abstract class OfficeActions {
   Future<void> signOut();
 }
 
+/// The actions of a view where you aren't standing anywhere in the office (the 2D view, pages/lite_page.dart):
+/// there's nobody there to carry a card or walk to a desk.
+abstract interface class NotInTheOffice {}
+
 class OfficeScope extends InheritedWidget {
   const OfficeScope({
     super.key,

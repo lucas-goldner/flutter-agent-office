@@ -692,6 +692,8 @@ class _PersonRow extends StatelessWidget {
       final walk = onWalkTo;
       final tip =
           '${store.onMyFloor(p) ? 'Walk over to' : 'Take the elevator to'} ${p.name}${sub != null ? ' ($sub)' : ''}';
+      // Nowhere in the office to walk to.
+      if (p.lite == true) return Tooltip(message: '${p.name} is on the 2D view', child: row);
       if (walk == null) return Tooltip(message: p.name, child: row);
       return Tooltip(
         message: tip,

@@ -12,6 +12,7 @@ import 'net/server.dart';
 import 'office_page.dart';
 import 'pages/claim_page.dart';
 import 'pages/join_page.dart';
+import 'pages/lite_page.dart';
 import 'pages/login_page.dart';
 import 'ui/modal.dart';
 import 'ui/theme.dart';
@@ -42,6 +43,8 @@ Widget _page() {
     '/login' => const LoginPage(),
     '/join' => const JoinPage(),
     '/claim' => const ClaimPage(),
+    // The 2D view: the workers, their terminals and the boards, without the 3D office (it checks the session itself).
+    '/lite' => const LitePage(),
     _ => const _SignedIn(child: OfficePage()),
   };
 }
@@ -94,7 +97,7 @@ class _SignedInState extends State<_SignedIn> {
     super.initState();
     Api.whoami()
         .then((me) {
-          if (me == null) return goReplace('/login');
+          if (me == null) return goReplace(loginUrl());
           if (mounted) setState(() => _ok = true);
         })
         .catchError((_) {

@@ -107,6 +107,9 @@ const _floorKey = 'agent-office.floor';
 
 void saveProfile(Profile p) => storageSet(_profileKey, jsonEncode(p.toJson()));
 
+/// Your name and colour without a look (the 2D view's): the 3D office still has you pick a character.
+void saveNameOnly(String name, String color) => storageSet(_profileKey, jsonEncode({'name': name, 'color': color}));
+
 /// The floor you were last on, to come back to it after a reload.
 String? lastFloor() => storageGet(_floorKey);
 

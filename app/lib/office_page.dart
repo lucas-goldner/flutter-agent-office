@@ -10,6 +10,7 @@ import 'package:flutter_scene/scene.dart' hide Material;
 import 'interop/pointer_lock.dart';
 import 'office/controller.dart';
 import 'ui/loading.dart';
+import 'ui/lite_suggest.dart';
 import 'world/character.dart' show Person;
 import 'office_scope.dart';
 import 'ui/arcade.dart';
@@ -385,6 +386,8 @@ class _OfficePageState extends State<OfficePage> {
               ],
               // Up from the start, over everything, until there's an office to see (ui/loading.dart).
               Positioned.fill(child: LoadingScreen(loading: c.loading)),
+              // On a phone, or where frames come slowly: the 2D view, over the loading screen too.
+              Positioned.fill(child: LiteOfferView(offer: c.liteOffer)),
             ],
           ),
         ),
