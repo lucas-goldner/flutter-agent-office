@@ -25,6 +25,7 @@ import '../state/store.dart';
 import '../world/laptop_screen.dart';
 import 'dictate.dart';
 import 'term_drops.dart';
+import 'term_tabs.dart';
 import '../interop/drops.dart';
 import 'modal.dart';
 import 'provider.dart';
@@ -545,43 +546,47 @@ class _TerminalWindowState extends State<_TerminalWindow> {
       bodyPadding: const EdgeInsets.fromLTRB(10, 8, 4, 4),
       title: _Title(w: w, project: store.project),
       headerExtras: w == null ? const [] : _headerExtras(w),
-      body: LayoutBuilder(
-        builder: (context, box) {
-          _hostChanged(box.biggest);
-          return Semantics(
-            label: '${w?.name ?? ''} terminal',
-            child: Listener(
-              onPointerDown: (e) => _downAt = e.buttons == kPrimaryButton ? e.localPosition : null,
-              onPointerUp: _pointerUp,
-              onPointerHover: _hover,
-              child: Stack(
-                children: [
-                  Positioned.fill(
-                    child: x.TerminalView(
-                      _term,
-                      key: _viewKey,
-                      mouseCursor: _overLink ? SystemMouseCursors.click : SystemMouseCursors.text,
-                      controller: _ctl,
-                      scrollController: _scroll,
-                      focusNode: _focus,
-                      autofocus: true,
-                      autoResize: false,
-                      theme: kTermTheme,
-                      textStyle: kTermStyle,
-                      cursorType: x.TerminalCursorType.block,
-                      shortcuts: _termShortcuts,
-                      onKeyEvent: _onKey,
-                      hardwareKeyboardOnly: false,
+      body: TermTabs(
+        workerId: widget.workerId,
+        focusTerm: _focus.requestFocus,
+        terminal: LayoutBuilder(
+          builder: (context, box) {
+            _hostChanged(box.biggest);
+            return Semantics(
+              label: '${w?.name ?? ''} terminal',
+              child: Listener(
+                onPointerDown: (e) => _downAt = e.buttons == kPrimaryButton ? e.localPosition : null,
+                onPointerUp: _pointerUp,
+                onPointerHover: _hover,
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: x.TerminalView(
+                        _term,
+                        key: _viewKey,
+                        mouseCursor: _overLink ? SystemMouseCursors.click : SystemMouseCursors.text,
+                        controller: _ctl,
+                        scrollController: _scroll,
+                        focusNode: _focus,
+                        autofocus: true,
+                        autoResize: false,
+                        theme: kTermTheme,
+                        textStyle: kTermStyle,
+                        cursorType: x.TerminalCursorType.block,
+                        shortcuts: _termShortcuts,
+                        onKeyEvent: _onKey,
+                        hardwareKeyboardOnly: false,
+                      ),
                     ),
-                  ),
-                  if (_dropping || _uploading > 0) Positioned.fill(child: _DropZone(uploading: _uploading > 0)),
-                  if (_mic != null)
-                    Positioned(left: 20, right: 20, bottom: 14, child: Center(child: DictateLive(_mic))),
-                ],
+                    if (_dropping || _uploading > 0) Positioned.fill(child: _DropZone(uploading: _uploading > 0)),
+                    if (_mic != null)
+                      Positioned(left: 20, right: 20, bottom: 14, child: Center(child: DictateLive(_mic))),
+                  ],
+                ),
               ),
-            ),
-          );
-        },
+            );
+          },
+        ),
       ),
     );
   }
