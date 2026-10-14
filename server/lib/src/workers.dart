@@ -13,6 +13,7 @@ import 'package:office_shared/shared.dart';
 import 'package:path/path.dart' as p;
 
 import 'agents.dart';
+import 'dsh.dart';
 import 'github.dart' show gh;
 import 'headless.dart';
 import 'history.dart';
@@ -144,6 +145,10 @@ class _Worker {
 
   final LiveInfo info;
   Pty? pty;
+
+  /// A DeepSeek Harness worker's ACP connection. It has no PTY: ACP updates are rendered into the
+  /// same headless terminal the other providers mirror a process into (see dsh.dart).
+  DshSession? dsh;
   HeadlessTerminal? term;
 
   /// clientId -> name
@@ -260,6 +265,9 @@ class WorkerManager implements QueueWorkers {
 
     /// The office's prompts and the worker everyone starts on, as set in ⚙️ Settings (see prompts.dart).
     PromptSource? prompts,
+
+    /// The DSH profile a DeepSeek Harness worker boots (default "acp").
+    String dshProfile = dshProfileDefault,
   }) : _env = env ?? Platform.environment,
        _capacity = capacity,
        _prompts = prompts,
@@ -267,7 +275,7 @@ class WorkerManager implements QueueWorkers {
     _trees = Worktrees(_dir);
     _statePath = p.join(_dataDir, 'workers.json');
     _office = officeCommand();
-    final floor = ProviderFloor(dataDir: _dataDir, office: _office, env: _env);
+    final floor = ProviderFloor(dataDir: _dataDir, office: _office, env: _env, dshProfile: dshProfile);
     for (final a in providerAdapters.values) {
       _setups[a.id] = a.prepare(floor);
     }
@@ -515,7 +523,7 @@ class WorkerManager implements QueueWorkers {
   String? resume(String id, [String? prompt]) {
     final w = _workers[id];
     if (w == null) return 'No such worker';
-    if (w.pty != null) return 'Worker is already running';
+    if (w.pty != null || w.dsh != null) return 'Worker is already running';
     w.info.status = WorkerStatus.starting;
     w.info.exitCode = null;
     final station = deskById[w.info.deskId]?.station;
@@ -551,21 +559,25 @@ class WorkerManager implements QueueWorkers {
     if (w.info.status == WorkerStatus.needsInput) {
       return fail('The ${w.info.name} is waiting on an answer in its terminal');
     }
-    if (w.pty == null) w.info.lastInput = LastInput(by: by, at: _now());
-    final err = w.pty != null ? prompt(w.info.id, clean, by) : resume(w.info.id, clean);
+    final running = w.pty != null || w.dsh != null;
+    if (!running) w.info.lastInput = LastInput(by: by, at: _now());
+    final err = running ? prompt(w.info.id, clean, by) : resume(w.info.id, clean);
     return err != null ? fail(err) : (info: w.info.view, hired: false, error: null);
   }
 
   /// The worker whose terminal holds this hook token: how a worker proves it's asking for itself.
   WorkerInfo? authenticate(String id, String token) {
     final w = _workers[id];
-    return w != null && w.pty != null && token.isNotEmpty && _safeEq(token, w.hookToken) ? w.info.view : null;
+    return w != null && (w.pty != null || w.dsh != null) && token.isNotEmpty && _safeEq(token, w.hookToken)
+        ? w.info.view
+        : null;
   }
 
   /// Starts every worker that isn't running: nobody should be found asleep at their desk.
   void wakeAll() {
+    // A DeepSeek Harness worker has no PTY but is still running: only the ones that are gone wake up.
     for (final w in List.of(_workers.values)) {
-      if (w.pty == null) resume(w.info.id);
+      if (w.pty == null && w.dsh == null) resume(w.info.id);
     }
   }
 
@@ -582,7 +594,10 @@ class WorkerManager implements QueueWorkers {
     w.scanTimer?.cancel();
     final proc = w.pty;
     w.pty = null; // so the exit handler knows this worker is gone and stays quiet
+    final session = w.dsh;
+    w.dsh = null;
     try {
+      session?.close();
       proc?.kill();
     } catch (_) {
       // already gone
@@ -665,9 +680,17 @@ class WorkerManager implements QueueWorkers {
   /// Keystrokes from [by]'s browser.
   void write(String id, String data, String by) {
     final w = _workers[id];
-    final pty = w?.pty;
-    if (w == null || pty == null) return;
-    pty.write(data);
+    if (w == null) return;
+    final pty = w.pty;
+    final session = w.dsh;
+    if (session != null) {
+      // ACP has no terminal: the session buffers these into a line and submits it on Enter.
+      session.writeInput(data);
+    } else if (pty != null) {
+      pty.write(data);
+    } else {
+      return;
+    }
     var changed = _typed(w, by);
     if (w.info.status == WorkerStatus.needsInput && !w.info.acked) {
       w.info.acked = true;
@@ -692,12 +715,17 @@ class WorkerManager implements QueueWorkers {
     final w = _workers[id];
     if (w == null) return 'No such worker';
     final pty = w.pty;
-    if (pty == null) return 'Worker is not running';
+    final session = w.dsh;
+    if (pty == null && session == null) return 'Worker is not running';
     final clean = text.replaceAll(RegExp(r'\r\n?'), '\n').trim();
     if (clean.isEmpty) return 'Empty prompt';
-    // Bracketed paste keeps multi-line prompts in one message, then Enter submits.
-    pty.write('\x1b[200~$clean\x1b[201~');
-    Timer(const Duration(milliseconds: 120), () => w.pty?.write('\r'));
+    if (session != null) {
+      session.prompt(clean);
+    } else {
+      // Bracketed paste keeps multi-line prompts in one message, then Enter submits.
+      pty!.write('\x1b[200~$clean\x1b[201~');
+      Timer(const Duration(milliseconds: 120), () => w.pty?.write('\r'));
+    }
     w.info.activity = _truncate(clean, 80);
     _notePrompt(w, clean);
     if (by != null) w.info.lastInput = LastInput(by: by, at: _now());
@@ -798,14 +826,15 @@ class WorkerManager implements QueueWorkers {
     final w = _workers[id];
     final pty = w?.pty;
     final term = w?.term;
-    if (w == null || pty == null || term == null) return;
+    // A DSH worker has no PTY to resize, but its terminal still fits the window it's shown in.
+    if (w == null || (pty == null && w.dsh == null) || term == null) return;
     final c = cols.floor().clamp(20, 400);
     final r = rows.floor().clamp(5, 200);
     if (c == w.info.cols && r == w.info.rows) return;
     w.info.cols = c;
     w.info.rows = r;
     try {
-      pty.resize(c, r);
+      pty?.resize(c, r);
       term.resize(c, r);
     } catch (_) {
       // pty may have exited between checks
@@ -912,6 +941,7 @@ class WorkerManager implements QueueWorkers {
   Future<void> shutdown([bool keep = false]) async {
     _closing = true;
     _stopping = !keep;
+    final closing = <Future<void>>[];
     _screenTimer.cancel();
     _usageTimer.cancel();
     _saveTimer.cancel();
@@ -921,6 +951,13 @@ class WorkerManager implements QueueWorkers {
       _scanUsage(w);
       // Before the process goes, so the next office shows what it was doing, not how it was stopped.
       if (w.unsaved) _saveScrollbackOf(w);
+      // A DSH child cannot outlive the office the way a hosted PTY can: close its session quiescently,
+      // and let the next office mark it offline and resume it (see docs/dsh-acp-integration.md).
+      final session = w.dsh;
+      if (session != null) {
+        w.dsh = null;
+        closing.add(session.close());
+      }
       if (keep && w.pty?.id != null) continue;
       // A restart only takes this one down because it runs in-process: the next office carries on its turn.
       if (keep && _midTurn(w)) w.interrupted = true;
@@ -933,6 +970,7 @@ class WorkerManager implements QueueWorkers {
       }
     }
     _persist();
+    await Future.wait(closing);
     if (keep) {
       await _host.detach();
     } else {
@@ -999,6 +1037,33 @@ class WorkerManager implements QueueWorkers {
       env['PATH'] = path != null && path.isNotEmpty ? '$queueBin:$path' : queueBin;
     }
     adapter?.usage?.locate?.call(_handleOf(w), cwd, env);
+
+    if (adapter?.transport == ProviderTransport.acp) {
+      // No PTY and no argv for prompts or resume: the office owns an ACP connection instead, and
+      // renders its updates into this same terminal (see dsh.dart).
+      final file = commandPath ?? shell;
+      final acpArgs = commandPath != null
+          ? args
+          : [
+              '-l',
+              '-i',
+              '-c',
+              ['exec', command, for (final a in args) shellQuote(a)].join(' '),
+            ];
+      _launchAcp(
+        w,
+        term,
+        file: file,
+        args: acpArgs,
+        cwd: cwd,
+        env: env,
+        resumeSessionId: resumeSessionId,
+        prompt: prompt,
+      );
+      _emitUpdate(w);
+      _persist();
+      return;
+    }
 
     Pty proc;
     try {
@@ -1146,6 +1211,104 @@ class WorkerManager implements QueueWorkers {
     });
   }
 
+  /// Starts (or resumes) a worker that runs over ACP rather than in a terminal (DeepSeek Harness, see
+  /// ProviderAdapter.transport). The session renders its transcript into the worker's terminal and
+  /// reports status, acted-out actions, usage and its session id; the office answers permission
+  /// requests from whoever is typing (see dsh.dart). Upstream's workers/acp.ts.
+  void _launchAcp(
+    _Worker w,
+    HeadlessTerminal term, {
+    required String file,
+    required List<String> args,
+    required String cwd,
+    required Map<String, String> env,
+    String? resumeSessionId,
+    String? prompt,
+  }) {
+    final info = w.info;
+    late final DshSession session;
+    session = DshSession(
+      DshLaunch(
+        file: file,
+        args: args,
+        cwd: cwd,
+        env: env,
+        model: info.model,
+        effort: info.effort,
+        resumeSessionId: resumeSessionId,
+        firstPrompt: prompt,
+      ),
+      DshEvents(
+        output: (data) {
+          if (w.dsh != session) return;
+          term.write(data);
+          w.screenDirty = true;
+          w.unsaved = true;
+          if (w.viewers.isNotEmpty) _events.data(info.id, data, w.viewers.keys.toList());
+        },
+        status: (status) {
+          if (w.dsh == session) _setStatus(w, status);
+        },
+        action: (action) {
+          if (w.dsh != session || info.action == action) return;
+          info.action = action;
+          _emitUpdate(w);
+        },
+        usage: (usage) {
+          if (w.dsh != session) return;
+          info.usage = usage;
+          _emitUpdate(w);
+          _persist();
+        },
+        session: (sessionId) {
+          if (w.dsh != session || info.sessionId == sessionId) return;
+          info.sessionId = sessionId;
+          _emitUpdate(w);
+          _persist();
+        },
+        prompted: (text) {
+          // A line typed into the terminal: there are no hooks for DSH, so the card learns from here.
+          if (w.dsh != session) return;
+          _notePrompt(w, text);
+          _emitUpdate(w);
+        },
+        exit: (code, error, quiet) => _acpExited(w, session, term, code, error, quiet),
+      ),
+    );
+    w.dsh = session;
+    session.start();
+  }
+
+  /// A DeepSeek Harness child ended: while the office is up, its desk says so and R resumes it.
+  void _acpExited(_Worker w, DshSession session, HeadlessTerminal term, int? code, String? error, bool quiet) {
+    final info = w.info;
+    if (w.dsh != session || _workers[info.id] != w) return; // sent home: stay quiet
+    w.dsh = null;
+    // The office is going down: the next office marks this worker offline and resumes it, so its
+    // status must stay as it was (see the restart difference in docs/dsh-acp-integration.md).
+    if (quiet || _closing) return;
+    void show(String text) {
+      term.write(text);
+      if (w.viewers.isNotEmpty) _events.data(info.id, text, w.viewers.keys.toList());
+    }
+
+    if (error != null && error.isNotEmpty) {
+      show('\r\n\x1b[31m[DeepSeek Harness: ${terminalSafe(_truncate(error, 300)).replaceAll('\n', ' ')}]\x1b[0m\r\n');
+      // It never got as far as a session: most often `dsh` is missing, or the profile will not boot.
+      if (info.sessionId == null) {
+        _events.toast('Could not start ${_command(info)}: ${_truncate(error, 200)}', ToastLevel.error);
+      }
+    }
+    info.exitCode = code ?? -1;
+    info.status = WorkerStatus.exited;
+    final hint = info.sessionId != null ? ' — press R to resume' : '';
+    show('\r\n\x1b[2m[${info.name} exited with code ${code ?? -1}$hint]\x1b[0m\r\n');
+    w.screenDirty = true;
+    w.unsaved = true;
+    _emitUpdate(w);
+    _persist();
+  }
+
   void _startFailed(_Worker w, String message) {
     final what = _command(w.info);
     final msg = '\r\n\x1b[31mFailed to start $what: $message\x1b[0m\r\n';
@@ -1227,7 +1390,7 @@ class WorkerManager implements QueueWorkers {
     }
     _emitUpdate(w);
     // What a restarted office picks the worker back up as, should its terminal outlive this one.
-    if (w.pty?.id != null) _persist();
+    if (w.pty?.id != null || w.dsh != null) _persist();
   }
 
   bool _syncViewers(_Worker w) {

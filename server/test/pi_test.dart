@@ -87,7 +87,7 @@ void main() {
     expect(isValidPiModel('sonnet:high'), isTrue);
     expect(isValidPiModel('openai/gpt-4.1'), isTrue);
     expect(isValidPiModel('--print'), isFalse);
-    expect(isValidPiModel('bad​model'), isFalse);
+    expect(isValidPiModel('bad\u200bmodel'), isFalse);
   });
 
   test('what reaches the Pi command line from a hook or the hire dialog is only ever plain values', () {

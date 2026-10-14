@@ -706,6 +706,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
       _FloorContext(
           agentCmd: cfg.agentCmd,
           agentArgs: cfg.agentArgs,
+          dshProfile: cfg.dshProfile,
           hook: HookEnv(url: 'http://127.0.0.1:$hookPort', token: ''),
           ledger: ledger,
           onEmit: toFloor,
@@ -2581,6 +2582,7 @@ class _FloorContext implements FloorContext {
   _FloorContext({
     required this.agentCmd,
     required this.agentArgs,
+    required this.dshProfile,
     required this.hook,
     required this.ledger,
     required this.onEmit,
@@ -2596,6 +2598,8 @@ class _FloorContext implements FloorContext {
   final String agentCmd;
   @override
   final List<String> agentArgs;
+  @override
+  final String dshProfile;
   @override
   final HookEnv hook;
   @override

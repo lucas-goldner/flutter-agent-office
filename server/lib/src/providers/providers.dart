@@ -10,6 +10,7 @@ import 'claude.dart';
 import 'codex.dart';
 import 'cursor.dart';
 import 'custom.dart';
+import 'dsh.dart';
 import 'grok.dart';
 import 'muse.dart';
 import 'opencode.dart';
@@ -20,6 +21,7 @@ export 'claude.dart';
 export 'codex.dart';
 export 'cursor.dart';
 export 'custom.dart';
+export 'dsh.dart';
 export 'grok.dart';
 export 'muse.dart';
 export 'opencode.dart';
@@ -32,6 +34,7 @@ const Map<AgentProvider, ProviderAdapter> providerAdapters = {
   AgentProvider.codex: CodexAdapter(),
   AgentProvider.grok: GrokAdapter(),
   AgentProvider.muse: MuseAdapter(),
+  AgentProvider.dsh: DshAdapter(),
   AgentProvider.pi: PiAdapter(),
   AgentProvider.cursor: CursorAdapter(),
   AgentProvider.custom: CustomAdapter(),

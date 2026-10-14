@@ -29,6 +29,9 @@ import 'worktrees.dart' show Worktrees;
 abstract interface class FloorContext {
   String get agentCmd;
   List<String> get agentArgs;
+
+  /// The DSH profile a DeepSeek Harness worker boots (`--dsh-profile`).
+  String get dshProfile;
   HookEnv get hook;
 
   /// Spend, across every floor.
@@ -153,6 +156,7 @@ class Floor {
       env: env,
       capacity: _ctx.capacity,
       prompts: _ctx.prompts,
+      dshProfile: _ctx.dshProfile,
     );
 
     github = GitHub(def.dir, (state) => _ctx.emit(this, GhIssuesMsg(state)), (state) {
