@@ -28,6 +28,7 @@ import 'package:office_shared/floors.dart';
 import 'package:office_shared/jukebox.dart';
 import 'package:office_shared/layout.dart' hide Elevator, Gong, Jukebox, Whiteboard;
 import 'package:office_shared/layout.dart' as lay show Elevator;
+import 'package:office_shared/palette.dart' show isPaletteKey;
 import 'package:office_shared/protocol.dart';
 import 'package:office_shared/rooftop.dart' show roof;
 import 'package:office_shared/status.dart';
@@ -45,6 +46,7 @@ import '../ui/help.dart';
 import '../ui/hud.dart';
 import '../ui/jukebox.dart';
 import '../ui/modal.dart';
+import '../ui/palette.dart';
 import '../ui/prompt.dart';
 import '../ui/provider.dart';
 import '../ui/pull.dart';
@@ -56,6 +58,7 @@ import '../ui/team.dart';
 import '../ui/accounts.dart';
 import '../ui/arcade.dart';
 import '../ui/terminal.dart';
+import '../ui/terminal_logic.dart' show isMacKeyboard;
 import '../ui/title.dart' show waitingElsewhere;
 import '../ui/upgrade.dart';
 import '../ui/whiteboard.dart';
@@ -92,6 +95,7 @@ import 'carry.dart';
 import 'hanging.dart';
 import 'rooms_hub.dart';
 import 'needs_you.dart';
+import 'palette_entries.dart';
 import 'roof.dart';
 import '../world/office/city.dart' show buildCity;
 
@@ -473,6 +477,8 @@ class OfficeController implements OfficeActions {
     net.status.listen((up) => connected.value = up);
     HardwareKeyboard.instance.addHandler(_onKeyUp);
     _unsubscribe.add(() => HardwareKeyboard.instance.removeHandler(_onKeyUp));
+    HardwareKeyboard.instance.addHandler(_onPaletteKey);
+    _unsubscribe.add(() => HardwareKeyboard.instance.removeHandler(_onPaletteKey));
     _messages = net.messages.listen(_onMessage);
 
     ready.value = true;
@@ -1361,6 +1367,7 @@ class OfficeController implements OfficeActions {
     if (p == null || id == store.you) return;
     if (!store.onMyFloor(p) && p.floor == null) return;
     if (player.seat != null) standUp();
+    _errand = null;
     _walkingTo = (id: id, replanAt: 0);
     if (store.onMyFloor(p)) {
       toast('🚶 Walking over to ${p.name}');
@@ -1378,8 +1385,109 @@ class OfficeController implements OfficeActions {
 
   void _stopWalking() {
     _walkingTo = null;
+    _errand = null;
     player.stopWalking();
   }
+
+  /// What you're on your way to (see [walkThen]): where to stand, what it's called, what to turn to and what
+  /// to do there.
+  ({PaletteSpot at, String what, PaletteSpot? face, void Function() then})? _errand;
+
+  /// Walks you over to [at] on this floor and does [then] when you get there, as if you'd walked up and
+  /// pressed E. Where there's no walking to be done (up on the roof, riding the elevator, on the ladder) it
+  /// just does it. A key of yours takes over, and then it doesn't happen.
+  void walkThen(PaletteSpot at, String what, void Function() then, {PaletteSpot? face}) {
+    if (roofHub.upTop || _riding != null || climber.active) return then();
+    ModalStack.instance.closeAll();
+    if (player.seat != null) standUp();
+    _stopWalking();
+    _errand = (at: at, what: what, face: face, then: then);
+    toast('🚶 Walking over to $what');
+    player.walkPath(wayTo((x: player.pos.x, y: player.pos.y, z: player.pos.z), (x: at.x, y: 0, z: at.z)));
+  }
+
+  void _errandEnd(PathEnd why) {
+    final e = _errand!;
+    _errand = null;
+    if (why == PathEnd.cancelled) return;
+    if (why == PathEnd.stuck) {
+      toast("🚧 Couldn't find a way over to ${e.what}, so here it is from where you are", ToastKind.warn);
+    }
+    final face = e.face;
+    if (why != PathEnd.stuck && face != null) {
+      _arrivedAt((x: face.x, y: 0, z: face.z));
+    } else {
+      _stopWalking();
+    }
+    e.then();
+  }
+
+  /// Ctrl+K (⌘K on a Mac): the command palette, from anywhere but a text box or a terminal, where the key is
+  /// theirs (in a shell, Ctrl+K cuts to the end of the line). In the palette's own box it puts it away.
+  bool _onPaletteKey(KeyEvent e) {
+    if (e is! KeyDownEvent) return false;
+    final hk = HardwareKeyboard.instance;
+    final press = (
+      key: e.character ?? e.logicalKey.keyLabel,
+      code: e.physicalKey == PhysicalKeyboardKey.keyK ? 'KeyK' : '',
+      ctrlKey: hk.isControlPressed,
+      altKey: hk.isAltPressed,
+      shiftKey: hk.isShiftPressed,
+      metaKey: hk.isMetaPressed,
+    );
+    if (!isPaletteKey(press, isMacKeyboard)) return false;
+    final focus = FocusManager.instance.primaryFocus;
+    final inPalette = paletteOpen() && identical(focus, paletteFocus);
+    if (!inPalette && (_typingIn(focus) || hud.typing)) return false;
+    togglePalette(() => paletteEntries(_paletteHost));
+    return true;
+  }
+
+  /// Whether [focus] is a text box or a terminal.
+  static bool _typingIn(FocusNode? focus) {
+    if (focus == null) return false;
+    if (focus.debugLabel == 'terminal') return true;
+    final ctx = focus.context;
+    if (ctx == null) return false;
+    var typing = false;
+    if (ctx.widget is EditableText) return true;
+    ctx.visitAncestorElements((el) {
+      if (el.widget is EditableText) typing = true;
+      return !typing;
+    });
+    return typing;
+  }
+
+  late final PaletteHost _paletteHost = PaletteHost(
+    store: store,
+    you: () => (x: player.pos.x, z: player.pos.z),
+    interactables: () => office.interactables,
+    walkThen: walkThen,
+    openTerminal: openWorkerTerminal,
+    hireAt: _hireAtDesk,
+    showQueue: showQueue,
+    showSettings: showSettings,
+    showSearch: showSearch,
+    invite: () {
+      if (store.invites) {
+        openTeam(scope);
+      } else if (store.me.admin) {
+        openAccounts(scope);
+      }
+    },
+    startHanging: _startHanging,
+    openBoard: (kind) => switch (kind) {
+      InteractKind.issues => openBoard(scope, BoardKind.issues),
+      InteractKind.pulls => openBoard(scope, BoardKind.pulls),
+      InteractKind.services => openServices(scope),
+      InteractKind.whiteboard => whiteboard.open(),
+      InteractKind.meeting => rooms.showMeeting(),
+      _ => null,
+    },
+    openIssue: (i) => openIssue(scope, i),
+    openPull: (p) => openPull(scope, p),
+    walkTo: walkTo,
+  );
 
   /// Where they are, sitting or standing.
   WalkSpot _whereIs(PeerInfo p) {
@@ -1419,6 +1527,7 @@ class OfficeController implements OfficeActions {
   }
 
   void _pathEnded(PathEnd why) {
+    if (_errand != null) return _errandEnd(why);
     final w = _walkingTo;
     if (w == null) return;
     if (why == PathEnd.cancelled) {
