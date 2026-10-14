@@ -182,8 +182,9 @@ DungeonView buildDungeon(DungeonKit kit, DungeonPlan d) {
   for (var z = b.minZ + 1.6; z < b.maxZ - 0.5; z += 2.6) {
     final spans = z > p0 - 0.2 && z < p1 + 0.2 ? [(b.minX, o0), (o1, b.maxX)] : [(b.minX, b.maxX)];
     for (final (a, c) in spans) {
-      if (c - a > 0.3)
+      if (c - a > 0.3) {
         still.add(slab((a, c, z - 0.16, z + 0.16), d.ceiling - 0.32, d.ceiling, kit.woodDark, shadow: false));
+      }
     }
   }
 

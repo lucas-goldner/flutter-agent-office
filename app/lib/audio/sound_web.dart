@@ -1208,6 +1208,124 @@ class OfficeSound implements DogSounds {
     }
   }
 
+  // ---- The castle's dungeon and the station's airlock (features/workers/sound.ts) ----------------
+
+  /// A cell door in the dungeon: its hinges groaning open (a rough, wavering squeak), or slamming shut on
+  /// someone with a clang of iron that rings on round the vault.
+  void cellDoor(double x, double y, double z, bool open) {
+    final ctx = _ctx;
+    if (ctx == null) return;
+    final t0 = ctx.currentTime + 0.01;
+    if (open) {
+      _count('cellDoor.open');
+      final out = _panner(Pos(x, y, z), 2, 1.1)..connect(_ambience);
+      final o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(420, t0);
+      o.frequency.linearRampToValueAtTime(640, t0 + 0.18);
+      o.frequency.linearRampToValueAtTime(380, t0 + 0.36);
+      final wobble = ctx.createOscillator();
+      wobble.frequency.value = 23;
+      final depth = ctx.createGain();
+      depth.gain.value = 40;
+      wobble.connect(depth);
+      depth.connect(o.frequency);
+      final g = ctx.createGain();
+      envelope(g.gain, t0, const [(0.04, 0.05), (0.3, 0.04), (0.4, 0)]);
+      o.to(biquad(ctx, 'bandpass', 1400, 2.5)).to(g).to(out);
+      for (final n in [o, wobble]) {
+        n.start(t0);
+        n.stop(t0 + 0.45);
+      }
+      return;
+    }
+    _count('cellDoor');
+    final out = _panner(Pos(x, y, z), 3, 1)..connect(_ambience);
+    _play(_pick(_buf.steps), gain: 0.9, rate: 0.45, dest: out);
+    _blip(out, t0, 95, 0.6, 0.25, 0.22);
+    // The bars ringing: a few out-of-tune partials, dying away slowly.
+    for (final (f, amp, len) in const [
+      (310.0, 0.07, 1.4),
+      (742.0, 0.05, 1.1),
+      (1270.0, 0.035, 0.8),
+      (2115.0, 0.02, 0.5),
+    ]) {
+      _tone(out, t0, f * _rand(0.97, 1.03), 0.995, len, amp, 'triangle');
+    }
+    _clink(out, t0 + 0.02, _rand(1600, 1900), 0.06);
+  }
+
+  /// Someone thrown down on the straw.
+  void thud(double x, double y, double z) {
+    final ctx = _ctx;
+    if (ctx == null) return;
+    _count('thud');
+    final out = _panner(Pos(x, y, z), 2, 1.1)..connect(_ambience);
+    _play(_pick(_buf.steps), gain: 0.7, rate: 0.5, dest: out);
+    _blip(out, ctx.currentTime + 0.005, 120, 0.5, 0.16, 0.14);
+  }
+
+  /// A station's airlock: one of its doors sliding (a hiss and a clunk), its alarm (three rising whoops),
+  /// or the outer hatch blowing: a bang, and the air rushing out and thinning to nothing.
+  void airlock(double x, double y, double z, String what) {
+    final ctx = _ctx;
+    if (ctx == null) return;
+    _count('airlock.$what');
+    final out = _panner(Pos(x, y, z), 3, 1)..connect(_ambience);
+    final t0 = ctx.currentTime + 0.005;
+    if (what == 'alarm') {
+      for (var i = 0; i < 3; i++) {
+        final o = ctx.createOscillator();
+        o.type = 'square';
+        o.frequency.setValueAtTime(520, t0 + i * 0.55);
+        o.frequency.linearRampToValueAtTime(880, t0 + i * 0.55 + 0.4);
+        final g = ctx.createGain();
+        envelope(g.gain, t0 + i * 0.55, const [(0.03, 0.05), (0.38, 0.05), (0.45, 0)]);
+        o.to(biquad(ctx, 'lowpass', 1800, 0.7)).to(g).to(out);
+        o.start(t0 + i * 0.55);
+        o.stop(t0 + i * 0.55 + 0.5);
+      }
+      return;
+    }
+    final blow = what == 'blow';
+    final air = _noise(_buf.white, loop: true);
+    final tone = biquad(ctx, 'bandpass', blow ? 900 : 2600, 0.8);
+    final g = ctx.createGain();
+    if (!blow) {
+      // Pneumatics: a short hiss, and the door home with a clunk.
+      envelope(g.gain, t0, const [(0.03, 0.09), (0.3, 0.04), (0.42, 0)]);
+      _play(_pick(_buf.steps), when: t0 + 0.38, gain: 0.45, rate: 0.5, dest: out);
+      _blip(out, t0 + 0.38, 140, 0.6, 0.14, 0.1);
+    } else {
+      // The bang of the hatch, then everything in the chamber leaving at once.
+      tone.frequency.setValueAtTime(700, t0);
+      tone.frequency.exponentialRampToValueAtTime(3200, t0 + 0.5);
+      tone.frequency.exponentialRampToValueAtTime(500, t0 + 2.6);
+      envelope(g.gain, t0, const [(0.03, 0.5), (0.5, 0.3), (2.8, 0)]);
+      _play(_pick(_buf.steps), when: t0, gain: 0.9, rate: 0.4, dest: out);
+      _blip(out, t0, 80, 0.5, 0.35, 0.3);
+    }
+    air.to(tone).to(g).to(out);
+    air.start(t0);
+    air.stop(t0 + (blow ? 3 : 0.5));
+  }
+
+  /// A pitched blip of a given wave (the dungeon bars' partials).
+  void _tone(web.AudioNode dest, double when, double freq, double ratio, double len, double gain, String type) {
+    final ctx = _ctx!;
+    final o = ctx.createOscillator();
+    o.type = type;
+    o.frequency.setValueAtTime(freq, when);
+    o.frequency.exponentialRampToValueAtTime(freq * ratio, when + len);
+    final g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, when);
+    g.gain.exponentialRampToValueAtTime(gain, when + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.0001, when + len);
+    o.to(g).to(dest);
+    o.start(when);
+    o.stop(when + len + 0.02);
+  }
+
   /// Hic! One too many.
   void hiccup() {
     final ctx = _ctx;

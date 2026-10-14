@@ -65,6 +65,14 @@ double yawOf(vm.Matrix4 m) {
   return math.atan2(f.x, f.z);
 }
 
+/// Where each of [here] goes when [waiting] (the one who's waited longest first) line up in [spots]
+/// spots: its spot in line (0 at the front), or null, its seat. Whoever isn't here doesn't take a spot.
+Map<String, int?> lineGoals(List<String> waiting, Iterable<String> here, int spots) {
+  final present = here.toSet();
+  final order = waiting.where(present.contains).take(spots).toList();
+  return {for (final id in present) id: order.contains(id) ? order.indexOf(id) : null};
+}
+
 class Court {
   Court(this._parent, this._plan, this._nav, this._ground, this._footstep)
     : interactables = [
@@ -128,11 +136,9 @@ class Court {
   /// Who's waiting on someone, the one who's waited longest first: they line up in that order, as many as
   /// there are spots.
   void line(List<String> waiting) {
-    final spots = _plan.lineup.length;
-    final order = waiting.where(_people.containsKey).take(spots).toList();
+    final goals = lineGoals(waiting, _people.keys, _plan.lineup.length);
     for (final c in _people.values) {
-      final i = order.indexOf(c.id);
-      final goal = i >= 0 ? i : null;
+      final goal = goals[c.id];
       if (goal == c.goal) continue;
       c.pace = _walk;
       _walkTo(c, goal);

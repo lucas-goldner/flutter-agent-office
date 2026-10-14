@@ -103,6 +103,9 @@ import 'needs_you.dart';
 import 'palette_entries.dart';
 import 'roof.dart';
 import 'worlds.dart';
+import 'send_home.dart';
+import '../world/jail.dart';
+import '../world/adrift.dart';
 import '../world/world.dart' show DeskView, OfficeWorld, World, WorldDevice, streetOf;
 
 import 'package:office_shared/maps/maps.dart' show MapPlan, levelRoute, officeMap, seatHereOn;
@@ -257,6 +260,34 @@ class OfficeController implements OfficeActions {
 
   /// Whether the building's on the office's own map (the elevator, the balcony, the lounge…).
   bool get inOffice => worlds.inOffice;
+
+  /// Workers locked up in the dungeon, on a map that has one, wasting away in their cells; or, on a
+  /// station, the same ones adrift outside its airlock.
+  late final Jail jail = Jail(() => store.jail, store.officeNow, _dressKept, labels);
+  late final Drifters adrift = Drifters(() => store.jail, store.officeNow, _dressKept, labels);
+
+  /// Workers sent home on a map with a script for it (the castle's Kingsguard marching them down to the
+  /// dungeon, the station's Security to the airlock).
+  late final Sendoffs sendoffs = Sendoffs(
+    parent: root,
+    ground: groundHere,
+    sounds: _SendoffSounds(this),
+    onUp: (deskId) {
+      final desk = world.desks[deskId];
+      if (desk != null && store.workerAtDesk(deskId) == null) desk.vacancy.visible = true;
+      _arrangeBeanbags();
+    },
+    world: () => world,
+    jail: jail,
+    adrift: adrift,
+  );
+
+  /// How someone the office has kept is dressed: the map's outfit, and as worn out as it had got working.
+  void _dressKept(Worker model, Prisoner p) {
+    model
+      ..setOutfit(plan.outfit == 'peasant' ? 'peasant' : null)
+      ..setAge(_agedBy(p.workedMs ?? 0));
+  }
 
   /// Voice chat and screen sharing (the TV, the thumbnails, mouths and proximity volume).
   late final OfficeVoice voiceRoom;
@@ -2028,6 +2059,7 @@ class OfficeController implements OfficeActions {
       var v = _workerViews[w.id];
       if (v == null) {
         departures.vacate(w.deskId);
+        sendoffs.vacate(w.deskId);
         final model = Worker(w.name, w.color, labels)
           ..setCostume(_theme)
           ..setOutfit(plan.outfit == 'peasant' ? 'peasant' : null)
@@ -2191,17 +2223,27 @@ class OfficeController implements OfficeActions {
   double _agedAt = 0;
 
   /// A worker sent home on a map with a script for it: true when the script has it (see send_home.dart).
-  bool _sendOff(String id, _WorkerView v, DeskView desk, Pt? up) => false;
+  bool _sendOff(String id, _WorkerView v, DeskView desk, Pt? up) {
+    final send = plan.sendHome;
+    if (send == null || (send.keeps && !store.jail.prisoners.any((p) => p.id == id))) return false;
+    sendoffs.add(id, v.model, v.laptop, desk, up);
+    return true;
+  }
 
   /// Nobody's being seen off any more (a floor arriving, a change of map).
-  void _clearSendoffs() {}
+  void _clearSendoffs() => sendoffs.clear();
 
   /// Whoever the floor has kept: locked up in its dungeon, in their cells, or adrift outside its airlock.
-  void _syncJail() {}
+  void _syncJail() {
+    jail.sync(world.dungeon, plan.sendHome);
+    adrift.sync(world.airlock, plan.sendHome);
+  }
 
   /// Once every desk is taken, bean bags come out for the workers who don't fit.
   void _arrangeBeanbags() {
-    final appeared = world.setBeanbags(beanbagsOut((id) => store.workerAtDesk(id) != null || departures.seated(id)));
+    final appeared = world.setBeanbags(
+      beanbagsOut((id) => store.workerAtDesk(id) != null || departures.seated(id) || sendoffs.seated(id)),
+    );
     // One came out right where you're standing: you end up on top of it.
     final p = player.pos;
     for (final c in appeared) {
@@ -3717,6 +3759,7 @@ class OfficeController implements OfficeActions {
       ...[for (final r in _remotes.values) r.person.root.position],
       ...departures.positions(),
       ...?worlds.court?.positions(),
+      ...sendoffs.positions(),
     ]);
     if (inOffice) _officeTick(t, dt);
     _checkSmokeBreak(now);
@@ -3759,7 +3802,11 @@ class OfficeController implements OfficeActions {
   }
 
   /// Each frame, while you're on a map of its own: whoever the map is seeing off, locked up or adrift.
-  void _sendoffsTick(double dt, double t) {}
+  void _sendoffsTick(double dt, double t) {
+    sendoffs.update(dt, t);
+    jail.update(dt, t, player.camPos);
+    adrift.update(dt, t, player.camPos);
+  }
 
   /// Each frame, while the building's the office: its jukebox, and the ladder and poles between floors.
   void _officeTick(double t, double dt) {
@@ -3878,4 +3925,22 @@ class OfficeController implements OfficeActions {
   }
 
   double _d2(double x, double z) => math.pow(x - player.camPos.x, 2) + math.pow(z - player.camPos.z, 2).toDouble();
+}
+
+/// What a sendoff is heard by: the office's sounds.
+class _SendoffSounds implements SendoffSounds {
+  _SendoffSounds(this.c);
+  final OfficeController c;
+
+  @override
+  void step(double x, double y, double z) => c.sound.stepAt(x, z, y);
+
+  @override
+  void door(vm.Vector3 at, bool open) => c.sound.cellDoor(at.x, at.y, at.z, open);
+
+  @override
+  void thud(vm.Vector3 at) => c.sound.thud(at.x, at.y, at.z);
+
+  @override
+  void airlock(vm.Vector3 at, String what) => c.sound.airlock(at.x, at.y, at.z, what);
 }

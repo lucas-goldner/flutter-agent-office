@@ -331,8 +331,9 @@ class _WetGlass {
     _since += dt;
     _spawn += rain * 70 * dt;
     for (; _spawn >= 1; _spawn--) {
-      if (_drops.length < 160)
+      if (_drops.length < 160) {
         _drops.add(_Drop(rand(0, _n.toDouble()), rand(0, _n.toDouble()), rand(0.8, 2.2), rand(4, 12)));
+      }
     }
     for (final d in _drops) {
       d.age += dt;

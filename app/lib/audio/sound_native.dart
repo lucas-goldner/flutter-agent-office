@@ -721,6 +721,30 @@ class OfficeSound implements DogSounds {
   }
 
   /// Hic! One too many.
+  // ---- The castle's dungeon and the station's airlock -------------------------------------------
+
+  /// A cell door in the dungeon: its hinges groaning open, or slamming shut on someone with a clang of
+  /// iron that rings on round the vault.
+  void cellDoor(double x, double y, double z, bool open) {
+    if (!_ready) return;
+    _count(open ? 'cellDoor.open' : 'cellDoor');
+    _play(open ? 'cellDoor.open' : 'cellDoor.shut', at: Pos(x, y, z), ref: open ? 2 : 3, rolloff: open ? 1.1 : 1);
+  }
+
+  /// Someone thrown down on the straw.
+  void thud(double x, double y, double z) {
+    if (!_ready) return;
+    _count('thud');
+    _play('thud', at: Pos(x, y, z), ref: 2, rolloff: 1.1);
+  }
+
+  /// A station's airlock: one of its doors sliding, its alarm, or the outer hatch blowing.
+  void airlock(double x, double y, double z, String what) {
+    if (!_ready) return;
+    _count('airlock.$what');
+    _play('airlock.$what', at: Pos(x, y, z), ref: 3, rolloff: 1);
+  }
+
   void hiccup() {
     if (!_ready) return;
     _count('hiccup');

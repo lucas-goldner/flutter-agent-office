@@ -215,6 +215,12 @@ void main() {
       sensible('thunder', r.thunder(1, 0.45, true), minRms: 0.02, maxPeak: 1);
       sensible('pour', r.pour(), minRms: 0.002, maxPeak: 0.3);
       sensible('hiccup', r.hiccup(), minRms: 0.005, maxPeak: 0.3);
+      sensible('cell door open', r.cellDoorOpen(), minRms: 0.002, maxPeak: 0.3);
+      sensible('cell door shut', r.cellDoorShut(), minRms: 0.005, maxPeak: 1);
+      sensible('thud', r.thud(), minRms: 0.005, maxPeak: 1);
+      for (final what in ['door', 'alarm', 'blow']) {
+        sensible('airlock $what', r.airlock(what), minRms: 0.002, maxPeak: what == 'blow' ? 1.5 : 1);
+      }
     });
 
     test('the gong rings at its fundamental, and a merge outlasts a hit', () {

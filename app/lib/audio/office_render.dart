@@ -489,6 +489,96 @@ class OfficeRender {
     return out;
   }
 
+  // ---- The castle's dungeon and the station's airlock (features/workers/sound.ts) ------------------
+
+  /// A cell door's hinges groaning open: a rough, wavering squeak (the ladder's hatch, opening).
+  Float32List cellDoorOpen() {
+    final out = _buf(0.5);
+    final n = out.length;
+    const t0 = 0.01;
+    // 420 Hz up to 640 and down to 380, wobbling ±40 Hz at 23 Hz.
+    final f = Param(420)..setValueAtTime(420, t0);
+    for (var t = 0.005; t <= 0.45; t += 0.005) {
+      final base = t <= 0.18
+          ? 420 + (640 - 420) * t / 0.18
+          : (t <= 0.36 ? 640 + (380 - 640) * (t - 0.18) / 0.18 : 380.0);
+      f.linearRampToValueAtTime(base + 40 * math.sin(2 * math.pi * 23 * t), t0 + t);
+    }
+    final o = biquad(_osc(n, Wave.sawtooth, f, start: t0, stop: t0 + 0.45), sr, BiquadType.bandpass, 1400, 2.5);
+    mixInto(out, gain(o, sr, Param(1)..envelope(t0, const [(0.04, 0.05), (0.3, 0.04), (0.4, 0)])));
+    return out;
+  }
+
+  /// A cell door slamming shut on someone: a clang of iron that rings on round the vault.
+  Float32List cellDoorShut() {
+    final out = _buf(1.6);
+    final n = out.length;
+    const t0 = 0.005;
+    mixInto(out, _sample(n, _pick(samples.steps), start: t0, rate: 0.45), k: 0.9);
+    _blip(out, t0, 95, 0.6, 0.25, 0.22);
+    // The bars ringing: a few out-of-tune partials, dying away slowly.
+    for (final (f, amp, len) in const [
+      (310.0, 0.07, 1.4),
+      (742.0, 0.05, 1.1),
+      (1270.0, 0.035, 0.8),
+      (2115.0, 0.02, 0.5),
+    ]) {
+      _blip(out, t0, f * _rand(0.97, 1.03), 0.995, len, amp, Wave.triangle);
+    }
+    _clink(out, t0 + 0.02, _rand(1600, 1900), 0.06);
+    return out;
+  }
+
+  /// Someone thrown down on the straw.
+  Float32List thud() {
+    final out = _buf(0.5);
+    const t0 = 0.005;
+    mixInto(out, _sample(out.length, _pick(samples.steps), start: t0, rate: 0.5), k: 0.7);
+    _blip(out, t0, 120, 0.5, 0.16, 0.14);
+    return out;
+  }
+
+  /// A station's airlock: one of its doors sliding (a hiss and a clunk), its alarm (three rising whoops),
+  /// or the outer hatch blowing: a bang, and the air rushing out and thinning to nothing.
+  Float32List airlock(String what) {
+    const t0 = 0.005;
+    if (what == 'alarm') {
+      final out = _buf(1.7);
+      final n = out.length;
+      for (var i = 0; i < 3; i++) {
+        final at = t0 + i * 0.55;
+        final f = Param(520)
+          ..setValueAtTime(520, at)
+          ..linearRampToValueAtTime(880, at + 0.4);
+        final o = biquad(_osc(n, Wave.square, f, start: at, stop: at + 0.5), sr, BiquadType.lowpass, 1800, 0.7);
+        mixInto(out, gain(o, sr, Param(1)..envelope(at, const [(0.03, 0.05), (0.38, 0.05), (0.45, 0)])));
+      }
+      return out;
+    }
+    final blow = what == 'blow';
+    final out = _buf(blow ? 3.1 : 0.6);
+    final n = out.length;
+    final air = _white(n, start: t0, stop: t0 + (blow ? 3 : 0.5));
+    if (!blow) {
+      // Pneumatics: a short hiss, and the door home with a clunk.
+      final hiss = biquad(air, sr, BiquadType.bandpass, 2600, 0.8);
+      mixInto(out, gain(hiss, sr, Param(1)..envelope(t0, const [(0.03, 0.09), (0.3, 0.04), (0.42, 0)])));
+      mixInto(out, _sample(n, _pick(samples.steps), start: t0 + 0.38, rate: 0.5), k: 0.45);
+      _blip(out, t0 + 0.38, 140, 0.6, 0.14, 0.1);
+      return out;
+    }
+    // The bang of the hatch, then everything in the chamber leaving at once.
+    final f = Param(700)
+      ..setValueAtTime(700, t0)
+      ..exponentialRampToValueAtTime(3200, t0 + 0.5)
+      ..exponentialRampToValueAtTime(500, t0 + 2.6);
+    final rush = biquadAuto(air, sr, BiquadType.bandpass, f, 0.8);
+    mixInto(out, gain(rush, sr, Param(1)..envelope(t0, const [(0.03, 0.5), (0.5, 0.3), (2.8, 0)])));
+    mixInto(out, _sample(n, _pick(samples.steps), start: t0, rate: 0.4), k: 0.9);
+    _blip(out, t0, 80, 0.5, 0.35, 0.3);
+    return out;
+  }
+
   // ---- Loops: the room, the fridge, the roof, the rain, typing ---------------------------------------
 
   /// A seamless loop of [seconds]: renders a little more and crossfades the end into the start.
@@ -665,6 +755,12 @@ Map<String, Float32List> renderBank(int sr, Bank bank, [int seed = 0]) {
       many('creak', 4, r.creak);
       many('pour', 2, r.pour);
       many('hiccup', 2, r.hiccup);
+      many('cellDoor.open', 2, r.cellDoorOpen);
+      many('cellDoor.shut', 2, r.cellDoorShut);
+      many('thud', 2, r.thud);
+      for (final what in const ['door', 'alarm', 'blow']) {
+        out['airlock.$what'] = r.airlock(what);
+      }
       out['arcade.land'] = r.arcade('land');
       out['arcade.over'] = r.arcade('over');
       for (var lines = 0; lines <= 4; lines++) {

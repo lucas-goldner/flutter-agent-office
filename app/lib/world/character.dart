@@ -30,6 +30,7 @@ import 'worker_pr.dart';
 import 'player.dart' show kHips;
 import 'toon.dart';
 import 'worker_acts.dart';
+import 'worker_jail.dart';
 
 enum Pose { stand, walk, sit, type }
 
@@ -430,6 +431,37 @@ class Person {
     }
   }
 
+  /// Keeps a hand out in front, on the shoulder of someone they're marching along (or lets go).
+  void holdOn(bool on) => _gripping = on;
+  bool _gripping = false;
+
+  /// What they're saying in a bubble over their head, and for how much longer.
+  ({WorldLabel label, double left})? _speech;
+
+  /// Says something in a bubble over their head for [seconds] (the one before goes).
+  void say(String text, [double seconds = 3.5]) {
+    hush();
+    _speech = (
+      label: _labels.add(
+        WorldLabel(
+          anchor: root,
+          offset: vm.Vector3(0, bubbleY, 0),
+          alignment: Alignment.center,
+          child: TagPill(text, bg: '#fffaf3', size: 34),
+        ),
+      ),
+      left: seconds,
+    );
+  }
+
+  /// Stops saying it.
+  void hush() {
+    final s = _speech;
+    if (s == null) return;
+    _labels.remove(s.label);
+    _speech = null;
+  }
+
   /// Puts [o] on them: on their head, on their body, in their right hand ('hand') or their left ('offhand').
   /// Forward is +z, so their right arm is the one on -x (see [reach]).
   void wear(Node o, String on) => switch (on) {
@@ -739,6 +771,21 @@ class Person {
       _armL.z = _lerp(_armL.z, 0.22, reach);
       if (_reachT >= kReachTime) _reachT = -1;
     }
+    if (_gripping && !(_card?.held ?? false)) {
+      // The right arm out and a little down, onto the shoulder of whoever's in front.
+      final k = math.min(1.0, dt * 10);
+      _armL.x = _lerp(_armL.x, -1.15, k);
+      _armL.z = _lerp(_armL.z, 0.3, k);
+    }
+    final speech = _speech;
+    if (speech != null) {
+      final left = speech.left - dt;
+      if (left <= 0) {
+        hush();
+      } else {
+        _speech = (label: speech.label, left: left);
+      }
+    }
     // Lean into the reach a little.
     _body.x = reach * 0.12;
     if (_mug.visible) _mug.rotation = euler(_armR.x, _armR.y, _armR.z)..inverse();
@@ -768,6 +815,7 @@ class Person {
   /// Takes the name tag down. Call when the person leaves.
   void dispose() {
     _endEmote();
+    hush();
     _labels.remove(_label);
     _label = null;
     _labels.remove(_doing);
@@ -1126,7 +1174,150 @@ class Worker {
   /// How fast it walks, next to a fresh worker: a worn-out one shuffles.
   double get pace => 1 - 0.3 * _age;
 
+  /// Its name, as its tag shows it (with a ☠️ or 💀 once it's dead in a cell).
+  String _label = '';
+
+  /// Locked up in a dungeon (see [setJailed]): how thin it's got, whether it's starved to death yet, and how
+  /// far it has rotted since; which way it fell, its bones, and the crosses over its eyes.
+  Jailed? _jailed;
+  double _fell = 1;
+  Node? _skeleton;
+  final List<Node> _crosses = [];
+
+  /// Seconds left of what it's muttering in its cell.
+  double _mutterT = 0;
+
+  /// Locked up in a dungeon for good (see office_shared's maps/dungeon.dart): sitting slumped on the floor of
+  /// its cell, thinner the longer it's been there ([Jailed.thin], 0–1), then dead, keeled over, then rotting
+  /// down to its bones ([Jailed.rot], 0–1). Its light's out, and nothing it was doing shows any more.
+  void setJailed(Jailed k) {
+    final was = _jailed;
+    _jailed = k;
+    if (was == null) {
+      bouncing = false;
+      _cheerT = 0;
+      _twirlT = -1;
+      _dancing = null;
+      _papers.group.visible = _globe.group.visible = false;
+      setToonColor(_bulb, hex(statusBulb[WorkerStatus.exited]!));
+      setEmissive(_bulb, const Color(0xFF000000));
+      _labels.remove(_bubble);
+      _bubble = null;
+      _bubbleKey = 'jailed';
+      _fell = _rng.nextBool() ? -1 : 1;
+    }
+    // Pale and sallow as it starves, grey-green once it's dead, and darker as it rots.
+    var skin = mixColor(_color, kStarved, 0.55 * k.thin);
+    if (k.dead) skin = mixColor(skin, kDead, 0.55 + 0.35 * k.rot);
+    setToonColor(_skin, skin);
+    if (k.dead && _crosses.isEmpty) _crosses.addAll(crossedEyes(_body.node));
+    for (final (e, _) in _eyes) {
+      e.visible = !k.dead;
+    }
+    for (final c in _crosses) {
+      c.visible = k.dead;
+    }
+    if (k.dead && k.rot > 0.2 && _skeleton == null) root.add(_skeleton = bones());
+    int stage(Jailed? j) => j == null ? -1 : (!j.dead ? 0 : (j.rot < 1 ? 1 : 2));
+    final now = stage(k);
+    if (now != stage(was)) {
+      final bare = _label.replaceFirst(RegExp(r'^(☠️|☠|💀) '), '');
+      setName(
+        now == 1
+            ? '☠️ $bare'
+            : now == 2
+            ? '💀 $bare'
+            : bare,
+      );
+    }
+  }
+
+  /// Mutters something in its cell (only while it's alive).
+  void mutter(String text, [double seconds = 4]) {
+    final j = _jailed;
+    if (j == null || j.dead) return;
+    _labels.remove(_bubble);
+    _bubble = _labels.add(
+      WorldLabel(
+        anchor: root,
+        offset: vm.Vector3(0, 1.5, 0),
+        alignment: Alignment.center,
+        child: TagPill(text, bg: '#e9ecef', size: 30),
+      ),
+    );
+    _mutterT = seconds;
+  }
+
+  /// In its cell: slumped against the wall, breathing slow, or keeled over and rotting.
+  void _languish(Jailed k, double dt, double t) {
+    final thin = k.thin, dead = k.dead, rot = k.rot;
+    final girth = 1 - 0.48 * thin;
+    // What's left of its flesh as it rots, shrinking away off its bones.
+    final flesh = dead ? math.max(0.02, 1 - 0.95 * rot) : 1.0;
+    _body.node.visible = flesh > 0.08;
+    final breath = dead ? 0.0 : math.sin(t * 1.1 + _phase) * 0.025 * (1 - 0.5 * thin);
+    _body.node.scale = vm.Vector3(girth * flesh, (1 + breath) * (dead ? 0.35 + 0.65 * flesh : 1), girth * flesh);
+    for (var i = 0; i < _feet.length; i++) {
+      _feet[i].position = vm.Vector3(i > 0 ? 0.13 : -0.13, 0.12, 0.2);
+    }
+    if (dead) {
+      // On its side on the straw, where it fell.
+      final lie = _fell * 1.4;
+      _body
+        ..x = 0.1
+        ..y = 0
+        ..z = lie;
+      _body.node.position = vm.Vector3(_fell * -0.04, 0.3 * girth * flesh - 0.06, 0);
+      _armL
+        ..x = -0.4
+        ..y = 0
+        ..z = -0.3;
+      _armR
+        ..x = -0.2
+        ..y = 0
+        ..z = 0.5;
+    } else {
+      // Sat against the wall, head hung, arms limp in its lap, swaying a little now and then.
+      _body
+        ..x = 0.18 + 0.32 * thin + math.sin(t * 0.37 + _phase) * 0.03
+        ..y = 0
+        ..z = math.sin(t * 0.23 + _phase) * 0.05;
+      _body.node.position = vm.Vector3(0, -0.08, 0);
+      _armL
+        ..x = -0.35
+        ..y = 0
+        ..z = -0.12;
+      _armR
+        ..x = -0.35
+        ..y = 0
+        ..z = 0.12;
+      for (final p in _pupils) {
+        p.position = vm.Vector3(p.position.x, 0.66 - 0.02 * thin, p.position.z);
+      }
+    }
+    _body.apply();
+    _armL.apply();
+    _armR.apply();
+    final skeleton = _skeleton;
+    if (skeleton != null) {
+      skeleton.visible = dead && rot > 0.2;
+      skeleton.position = _body.node.position;
+      skeleton.rotation = _body.node.rotation;
+    }
+    _bulbMesh.scale = vm.Vector3.all(1);
+    _blink(dt, dead ? 1 : 1 - 0.55 * thin);
+    if (_mutterT > 0) {
+      _mutterT -= dt;
+      if (_mutterT <= 0) {
+        _labels.remove(_bubble);
+        _bubble = null;
+      }
+    }
+    _nameTag?.offset = vm.Vector3(0, dead ? 0.95 : 1.4, 0);
+  }
+
   void setName(String name) {
+    _label = name;
     _labels.remove(_nameTag);
     _nameTag = _labels.add(
       WorldLabel(
@@ -1234,9 +1425,11 @@ class Worker {
 
   WorkerTask? get task => _task;
 
-  /// On its way out: says something else over its head in place of its farewell.
+  /// On its way out: says something else over its head in place of its farewell (or whatever was over it,
+  /// before it packed up).
   void say(String text) {
-    if (_leaving == null) return;
+    _bubbleKey = 'said';
+    _bubbleIsCard = false;
     _labels.remove(_bubble);
     _bubble = _labels.add(
       WorldLabel(
@@ -1370,6 +1563,8 @@ class Worker {
   }
 
   void update(double dt, double t) {
+    final j = _jailed;
+    if (j != null) return _languish(j, dt, t);
     final l = _leaving;
     if (l != null) return _carry(l, dt, t);
     final d = _dancing;

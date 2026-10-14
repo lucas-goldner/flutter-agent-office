@@ -112,9 +112,21 @@ abstract interface class DungeonSite {
 abstract interface class AirlockSite {
   AirlockPlan get plan;
 
-  /// Opens (1) or shuts (0) its inner door and its outer hatch.
-  void setInner(double open);
-  void setOuter(double open);
+  /// Slides the inner door up into the hull: 0 shut, 1 open.
+  void inner(double open);
+
+  /// Parts the outer hatch: 0 shut, 1 open.
+  void outer(double open);
+
+  /// Its warning lights, flashing while someone's about to go.
+  void alarm(bool on);
+
+  /// Where its inner door and its outer hatch are, to hear them.
+  vm.Vector3 get doorAt;
+  vm.Vector3 get hatchAt;
+
+  /// Out in space: whoever's adrift goes in here.
+  Node get outside;
 }
 
 abstract class World {
