@@ -43,7 +43,8 @@ abstract interface class MeetingWorkers {
 
 /// Git for the meeting's own worktree: made when it starts, tidied away once everyone has gone home.
 abstract interface class MeetingTrees {
-  ({WorkerWorktree? worktree, String? error}) create(String slug);
+  /// `note` says when commits the project has were left out of it (see Worktrees.create).
+  ({WorkerWorktree? worktree, String? note, String? error}) create(String slug);
   Future<WorktreeState> inspect(WorktreeRef wt);
 
   /// [cleanup] is worktree or all. Returns what went wrong, if anything.
@@ -56,7 +57,7 @@ class GitMeetingTrees implements MeetingTrees {
   final Worktrees _trees;
 
   @override
-  ({WorkerWorktree? worktree, String? error}) create(String slug) => _trees.create(slug);
+  ({WorkerWorktree? worktree, String? note, String? error}) create(String slug) => _trees.create(slug);
   @override
   Future<WorktreeState> inspect(WorktreeRef wt) => _trees.inspect(wt);
   @override
@@ -401,6 +402,8 @@ class MeetingRoom {
       final made = trees.create('meeting-$slug-${id.substring(0, 4)}');
       if (made.worktree == null) return made.error ?? "Couldn't make the meeting's worktree";
       worktree = made.worktree;
+      final note = made.note;
+      if (note != null) _events.toast("🌿 The meeting's worktree $note", ToastLevel.info);
     }
     final m = _Meeting(
       id: id,

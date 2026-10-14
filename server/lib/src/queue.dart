@@ -31,6 +31,9 @@ abstract interface class QueueWorkers {
 
   /// Resolves with a line about what became of the worker's worktree.
   Future<({String? note, String? error})> kill(String id);
+
+  /// Fetches what a new worktree starts from; null when there's nothing to wait for (see Worktrees.fetch).
+  Future<void>? fetchBase();
 }
 
 class QueueEvents {
@@ -439,18 +442,8 @@ class TaskQueue {
   /// is looking at its terminal), and return its seat. Workers with a linked PR go first — their work
   /// is delivered.
   String? _recycleDesk() {
-    final byId = {for (final w in _workers.list()) w.id: w};
-    final candidates =
-        [
-          for (final t in _tasks)
-            if (t.status == TaskStatus.done && t.workerId != null && byId.containsKey(t.workerId))
-              (t: t, w: byId[t.workerId]!),
-        ].where((c) => _finished.contains(c.w.status) && c.w.viewers.isEmpty).toList()..sort((a, b) {
-          final byPr = (b.t.pr != null ? 1 : 0) - (a.t.pr != null ? 1 : 0);
-          return byPr != 0 ? byPr : (a.t.finishedAt ?? 0) - (b.t.finishedAt ?? 0);
-        });
-    if (candidates.isEmpty) return null;
-    final pick = candidates.first;
+    final pick = _recyclable();
+    if (pick == null) return null;
     final done = _workers.kill(pick.w.id);
     _events.toast(
       '📋 ${pick.w.name} went home after ${_label(pick.t)} to make room for the next task',
@@ -465,6 +458,21 @@ class TaskQueue {
     return pick.w.deskId;
   }
 
+  /// The finished worker [_recycleDesk] would send home, if there is one.
+  ({_Task t, WorkerInfo w})? _recyclable() {
+    final byId = {for (final w in _workers.list()) w.id: w};
+    final candidates =
+        [
+          for (final t in _tasks)
+            if (t.status == TaskStatus.done && t.workerId != null && byId.containsKey(t.workerId))
+              (t: t, w: byId[t.workerId]!),
+        ].where((c) => _finished.contains(c.w.status) && c.w.viewers.isEmpty).toList()..sort((a, b) {
+          final byPr = (b.t.pr != null ? 1 : 0) - (a.t.pr != null ? 1 : 0);
+          return byPr != 0 ? byPr : (a.t.finishedAt ?? 0) - (b.t.finishedAt ?? 0);
+        });
+    return candidates.firstOrNull;
+  }
+
   void _seat() {
     var changed = false;
     for (final t in _tasks) {
@@ -477,7 +485,16 @@ class TaskQueue {
       // workers going home makes room. Over the limit (it was just lowered), it waits for people to send some home.
       final room = _events.room?.call() ?? double.infinity;
       if (room < 0) break;
-      final desk = (room > 0 ? _freeDesk() : null) ?? _recycleDesk();
+      final free = room > 0 ? _freeDesk() : null;
+      if (free == null && _recyclable() == null) break;
+      // Its worktree starts from what's on GitHub now, PRs merged since included: fetch that first,
+      // and come back to seat it once it's in.
+      final fetching = _useWorktree ? _workers.fetchBase() : null;
+      if (fetching != null) {
+        unawaited(fetching.then((_) => pump()));
+        break;
+      }
+      final desk = free ?? _recycleDesk();
       if (desk == null) break;
       final note = _useWorktree ? (_events.worktreeNote?.call() ?? prompts['queue.worktree']!.text) : '';
       final r = _workers.spawn(

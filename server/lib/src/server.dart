@@ -443,6 +443,20 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
   final floors = <String, Floor>{};
   Floor? floorOf(_Client c) => c.peer.floor != null ? floors[c.peer.floor] : null;
 
+  /// Runs [go] once a worktree made on [floor] would start from what's on GitHub now (see
+  /// Worktrees.fetch): right away when that was just fetched, else after a fetch, if [c] and the
+  /// floor are still there.
+  void withFreshBase(_Client c, Floor floor, void Function() go) {
+    final fetching = floor.workers.fetchBase();
+    if (fetching == null) return go();
+    unawaited(
+      fetching.then((_) {
+        if (c.out || !c.open || floors[floor.id] != floor) return;
+        go();
+      }),
+    );
+  }
+
   /// The floor a worker sits on. Worker ids are unique across the building.
   Floor? workerFloor(String workerId) {
     for (final f in floors.values) {
@@ -1703,32 +1717,40 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         final model = msg.containsKey('model') ? _str(msg['model'], openCodeModelMax + 1) : null;
         final effort = AgentEffort.tryParse(msg['effort']);
         final prompt = _str(msg['prompt'], 20000);
-        final r = floor.workers.spawn(
-          _str(msg['deskId'], 32),
-          who,
-          prompt.isEmpty ? null : prompt,
-          msg['worktree'] == true,
-          kind,
-          provider,
-          model,
-          effort,
-        );
-        final w = r.worker;
-        final issue = kind == WorkerKind.agent ? _issueNumber(msg['issue']) : null;
-        if (w == null) {
-          warn(c, r.error);
-        } else {
-          toastFloor(
-            floor,
-            kind == WorkerKind.shell
-                ? '$who opened a shell at a desk'
-                : '$who hired ${w.name}${issue != null
-                      ? ' for issue #$issue'
-                      : (w.prompt ?? '').isNotEmpty
-                      ? ' with a task'
-                      : ''}',
+        void hire() {
+          final r = floor.workers.spawn(
+            _str(msg['deskId'], 32),
+            who,
+            prompt.isEmpty ? null : prompt,
+            msg['worktree'] == true,
+            kind,
+            provider,
+            model,
+            effort,
           );
-          if (issue != null) takeIssue(c, floor, issue);
+          final w = r.worker;
+          final issue = kind == WorkerKind.agent ? _issueNumber(msg['issue']) : null;
+          if (w == null) {
+            warn(c, r.error);
+          } else {
+            toastFloor(
+              floor,
+              kind == WorkerKind.shell
+                  ? '$who opened a shell at a desk'
+                  : '$who hired ${w.name}${issue != null
+                        ? ' for issue #$issue'
+                        : (w.prompt ?? '').isNotEmpty
+                        ? ' with a task'
+                        : ''}',
+            );
+            if (issue != null) takeIssue(c, floor, issue);
+          }
+        }
+
+        if (msg['worktree'] == true) {
+          withFreshBase(c, floor, hire);
+        } else {
+          hire();
         }
       case 'worker.resume':
         final w = worker(msg['workerId']);
@@ -1852,7 +1874,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
           model: msg.containsKey('model') && msg['model'] != null ? _str(msg['model'], openCodeModelMax + 1) : null,
           effort: AgentEffort.tryParse(msg['effort']),
         );
-        warn(c, floor.meetings.start(request, who));
+        withFreshBase(c, floor, () => warn(c, floor.meetings.start(request, who)));
       case 'meeting.stop':
         final floor = here();
         if (floor != null) warn(c, floor.meetings.stop(who));

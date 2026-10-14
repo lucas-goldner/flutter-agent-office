@@ -549,26 +549,31 @@ class Changes {
     final branch = abbrev == null || abbrev.isEmpty ? 'HEAD' : abbrev;
     final onBranch = branch != 'HEAD';
     final baseBranch = _baseBranch;
-    String? ref;
+    var refs = <String>[];
     var label = 'HEAD';
     if (baseBranch != null &&
         baseBranch.isNotEmpty &&
         branch != baseBranch &&
         ((await _gitMaybe(['rev-parse', '--verify', '--quiet', 'refs/heads/$baseBranch'], t.cwd)) ?? '').isNotEmpty) {
-      ref = baseBranch;
+      // Origin's copy too, whichever is newer: a worktree starts from PRs merged there that the
+      // project may never have pulled (see Worktrees.create), and they aren't this worker's changes.
+      final remote = 'refs/remotes/origin/$baseBranch';
+      final hasRemote = ((await _gitMaybe(['rev-parse', '--verify', '--quiet', remote], t.cwd)) ?? '').isNotEmpty;
+      refs = hasRemote ? [baseBranch, remote] : [baseBranch];
       label = baseBranch;
     } else if (t.worktreeBase != null && t.worktreeBase!.isNotEmpty && branch != baseBranch) {
-      ref = t.worktreeBase;
+      refs = [t.worktreeBase!];
       label = t.worktreeBase!.length > 7 ? t.worktreeBase!.substring(0, 7) : t.worktreeBase!;
     } else {
       // On the base branch itself: what isn't pushed yet, when it tracks a remote.
       final up = await _gitMaybe(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'], t.cwd);
       if (up != null && up.isNotEmpty) {
-        ref = up;
+        refs = [up];
         label = up;
       }
     }
-    final mb = ref != null ? await _gitMaybe(['merge-base', ref, 'HEAD'], t.cwd) : null;
+    // With two refs, git takes the merge base with a merge of them both: the newer one's, as a rule.
+    final mb = refs.isNotEmpty ? await _gitMaybe(['merge-base', 'HEAD', ...refs], t.cwd) : null;
     final commit = mb != null && mb.isNotEmpty ? mb : head;
     final prBase = onBranch && baseBranch != null && baseBranch.isNotEmpty && branch != baseBranch ? baseBranch : null;
     return (commit: commit, label: label, branch: onBranch ? branch : null, prBase: prBase);

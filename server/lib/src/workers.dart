@@ -411,6 +411,11 @@ class WorkerManager implements QueueWorkers {
       ),
   ];
 
+  /// Fetches the branch the project is on, so a worktree made next starts from what's on GitHub now
+  /// (see Worktrees.fetch). Null when there's nothing to wait for.
+  @override
+  Future<void>? fetchBase() => _trees.fetch();
+
   @override
   bool deskOccupied(String deskId) => _workers.values.any((w) => w.info.deskId == deskId);
 
@@ -486,6 +491,8 @@ class WorkerManager implements QueueWorkers {
       final made = _trees.create('${name.toLowerCase()}-${id.substring(0, 4)}');
       if (made.error != null) return fail(made.error!);
       wt = made.worktree;
+      final note = made.note;
+      if (note != null) _events.toast("🌿 $name's worktree $note", ToastLevel.info);
     }
     final trimmed = prompt?.trim();
     final info = LiveInfo(

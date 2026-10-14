@@ -53,18 +53,109 @@ class Worktrees {
   /// The project dir with symlinks resolved, so it compares with the paths git prints.
   final String _root;
 
-  /// A new branch and worktree at the project's current HEAD. `from` is the branch the project was
-  /// on, which the worker's pull request targets. Returns what went wrong as `error`.
-  ({WorkerWorktree? worktree, String? error}) create(String slug) {
+  /// A fetch this recent is fresh enough for the next worktree: a burst of hires shares one.
+  static const fetchFreshMs = 15000;
+  static const fetchTimeoutMs = 15000;
+  int _fetchedAt = 0;
+  Future<void>? _fetching;
+
+  /// The last fetch's error, so the office's log says it once rather than on every hire.
+  String? _fetchError;
+
+  /// A new branch and worktree, from the latest of the branch the project is on (see [_startPoint]).
+  /// `from` is that branch, which the worker's pull request targets; [note] says when commits the
+  /// project has were left out. Returns what went wrong as `error`.
+  ({WorkerWorktree? worktree, String? note, String? error}) create(String slug) {
     try {
-      final base = _gitSync(['rev-parse', 'HEAD']);
       final from = currentBranch();
+      final start = _startPoint(from);
       final rel = p.join(worktreesDir, slug);
       final branch = '$branchPrefix$slug';
-      _gitSync(['worktree', 'add', '-b', branch, rel, base]);
-      return (worktree: WorkerWorktree(path: rel, branch: branch, base: base, from: from), error: null);
+      _gitSync(['worktree', 'add', '-b', branch, rel, start.base]);
+      return (
+        worktree: WorkerWorktree(path: rel, branch: branch, base: start.base, from: from),
+        note: start.note,
+        error: null,
+      );
     } catch (err) {
-      return (worktree: null, error: 'Could not create a git worktree: ${gitError(err)}');
+      return (worktree: null, note: null, error: 'Could not create a git worktree: ${gitError(err)}');
+    }
+  }
+
+  /// Brings origin's copy of the branch the project is on up to date, so the next worktree starts
+  /// from what's really there (a pull request merged since, say) rather than from a checkout nobody
+  /// pulled. Completes either way: offline, or with no origin, worktrees start from what's here. Null
+  /// when there's nothing to wait for (a fetch this recent, or no branch to fetch).
+  Future<void>? fetch() {
+    final fetching = _fetching;
+    if (fetching != null) return fetching;
+    if (DateTime.now().millisecondsSinceEpoch - _fetchedAt < fetchFreshMs) return null;
+    final from = currentBranch();
+    if (from == null || !_hasOrigin()) return null;
+    return _fetching = () async {
+      try {
+        // Never stop to ask for a password: there's nobody at the office's terminal to type it.
+        await _git(
+          ['fetch', '--quiet', '--no-tags', 'origin', from],
+          null,
+          const Duration(milliseconds: fetchTimeoutMs),
+          {'GIT_TERMINAL_PROMPT': '0'},
+        );
+        _fetchError = null;
+      } catch (err) {
+        // Its first complaint says what's wrong; the last line is advice about access rights.
+        final printed = err is GitException ? err.stderr : '';
+        final why =
+            printed.split('\n').where((l) => RegExp(r'^(fatal|error):').hasMatch(l)).firstOrNull ?? gitError(err);
+        if (why != _fetchError) {
+          stderr.writeln(
+            "agent-office: couldn't fetch origin/$from in $_dir, so new worktrees start from what's here: $why",
+          );
+        }
+        _fetchError = why;
+      } finally {
+        _fetchedAt = DateTime.now().millisecondsSinceEpoch;
+        _fetching = null;
+      }
+    }();
+  }
+
+  bool _hasOrigin() {
+    try {
+      return _gitSync(['remote', 'get-url', 'origin']).isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Where a worktree starts: origin's copy of [from], which its pull request goes to, so it has every
+  /// PR merged there even if nobody pulled them into the project. HEAD instead when it already has all
+  /// of that (it's ahead with commits not pushed yet), or when origin doesn't have the branch.
+  ({String base, String? note}) _startPoint(String? from) {
+    final head = _gitSync(['rev-parse', 'HEAD']);
+    if (from == null) return (base: head, note: null);
+    String remote;
+    try {
+      remote = _gitSync(['rev-parse', '--verify', '--quiet', 'refs/remotes/origin/$from^{commit}']);
+    } catch (_) {
+      return (base: head, note: null);
+    }
+    if (_isAncestor(remote, head)) return (base: head, note: null);
+    if (_isAncestor(head, remote)) return (base: remote, note: null);
+    // Both moved on: the PR goes to origin's, so start there and say what's left behind.
+    final n = _number(_gitSync(['rev-list', '--count', head, '--not', remote]));
+    return (
+      base: remote,
+      note: "starts from origin/$from, without the $n commit${n == 1 ? '' : 's'} on $from that origin doesn't have",
+    );
+  }
+
+  bool _isAncestor(String a, String b) {
+    try {
+      _gitSync(['merge-base', '--is-ancestor', a, b]);
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 
@@ -75,6 +166,59 @@ class Worktrees {
       return b == 'HEAD' ? null : b;
     } catch (_) {
       return null;
+    }
+  }
+
+  /// Where a branch still is: in the project, only on origin (it was pushed), or nowhere.
+  LostBranch branchState(String branch) {
+    bool has(String ref) {
+      try {
+        _gitSync(['rev-parse', '--verify', '--quiet', '$ref^{commit}']);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    return has('refs/heads/$branch')
+        ? LostBranch.here
+        : has('refs/remotes/origin/$branch')
+        ? LostBranch.origin
+        : LostBranch.gone;
+  }
+
+  /// Puts back a worktree whose folder was deleted outside the office, where it was: on its branch
+  /// while that's still here, else on origin's copy of it, else on the branch made again from where
+  /// it started (`base`, or HEAD when even that commit is gone). Says which, or what went wrong.
+  Future<({LostBranch? from, String? error})> restore(WorktreeRef wt) async {
+    final path = wt.path;
+    if (path == null) return (from: null, error: 'it has no folder to put back');
+    final abs = p.join(_dir, path);
+    try {
+      // Git still lists the deleted folder, and won't check its branch out anywhere else while it does.
+      await _git(['worktree', 'prune']);
+      final from = branchState(wt.branch);
+      switch (from) {
+        case LostBranch.here:
+          await _git(['worktree', 'add', abs, wt.branch]);
+        case LostBranch.origin:
+          await _git(['worktree', 'add', '-b', wt.branch, abs, 'refs/remotes/origin/${wt.branch}']);
+        case LostBranch.gone:
+          var base = 'HEAD';
+          final saved = wt.base;
+          if (saved != null) {
+            try {
+              await _git(['cat-file', '-e', '$saved^{commit}']);
+              base = saved;
+            } catch (_) {
+              // that commit is gone too
+            }
+          }
+          await _git(['worktree', 'add', '-b', wt.branch, abs, base]);
+      }
+      return (from: from, error: null);
+    } catch (err) {
+      return (from: null, error: gitError(err));
     }
   }
 
@@ -185,11 +329,16 @@ class Worktrees {
     return '${r.stdout}'.trim();
   }
 
-  Future<String> _git(List<String> args, [String? cwd]) async {
-    final proc = await Process.start('git', args, workingDirectory: cwd ?? _dir);
+  Future<String> _git(
+    List<String> args, [
+    String? cwd,
+    Duration timeout = const Duration(seconds: 60),
+    Map<String, String>? environment,
+  ]) async {
+    final proc = await Process.start('git', args, workingDirectory: cwd ?? _dir, environment: environment);
     proc.stdin.close().ignore();
     var timedOut = false;
-    final timer = Timer(const Duration(seconds: 60), () {
+    final timer = Timer(timeout, () {
       timedOut = true;
       proc.kill();
     });

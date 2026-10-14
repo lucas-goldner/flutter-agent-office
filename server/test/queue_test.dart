@@ -1,3 +1,4 @@
+import 'dart:async';
 // Port of tests/queue.test.ts.
 import 'dart:convert';
 import 'dart:io';
@@ -58,6 +59,16 @@ class FakeWorkers implements QueueWorkers {
     );
     workers.add(worker);
     return (worker: worker, error: null);
+  }
+
+  /// What [fetchBase] hands the queue: a fetch in flight, or null for nothing to wait for.
+  Future<void>? fetching;
+  int fetches = 0;
+
+  @override
+  Future<void>? fetchBase() {
+    fetches++;
+    return fetching;
   }
 
   @override
@@ -368,6 +379,64 @@ void main() {
     final none = fixture();
     none.open(worktree: true, worktreeNote: () => '').add('Fix it', 'Ada');
     expect(none.workers[0].prompt, 'Fix it');
+  });
+
+  test('a worktree task waits for the fetch of what its worktree starts from, then sits down', () async {
+    final dir = Directory.systemTemp.createTempSync('office-queue-');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final manager = FakeWorkers(AgentProvider.claude);
+    final fetched = Completer<void>();
+    manager.fetching = fetched.future;
+    final q = TaskQueue(
+      dir.path,
+      manager,
+      true,
+      QueueEvents(
+        update: (_) {},
+        toast: (_, _) {},
+        claimIssue: (_) async => null,
+        refreshGitHub: () {},
+        hiringPaused: () => null,
+        emptied: () {},
+      ),
+    );
+    addTearDown(q.shutdown);
+    q.add('Fix login', 'Tester');
+    q.add('Fix logout', 'Tester');
+    expect(manager.workers, isEmpty);
+    expect(q.state().tasks[0].status, TaskStatus.queued);
+    q.pump();
+    expect(manager.workers, isEmpty);
+    manager.fetching = null;
+    fetched.complete();
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+    // One fetch for the pair of them.
+    expect(manager.workers.length, 2);
+    expect([for (final t in q.state().tasks) t.status], [TaskStatus.running, TaskStatus.running]);
+  });
+
+  test("a queue that has nowhere to seat anyone doesn't fetch", () {
+    final dir = Directory.systemTemp.createTempSync('office-queue-');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final manager = FakeWorkers(AgentProvider.claude)..fetching = Completer<void>().future;
+    final q = TaskQueue(
+      dir.path,
+      manager,
+      true,
+      QueueEvents(
+        update: (_) {},
+        toast: (_, _) {},
+        claimIssue: (_) async => null,
+        refreshGitHub: () {},
+        hiringPaused: () => null,
+        emptied: () {},
+        room: () => 0,
+      ),
+    );
+    addTearDown(q.shutdown);
+    q.add('Fix login', 'Tester');
+    expect(manager.fetches, 0);
   });
 }
 
