@@ -150,6 +150,8 @@ agent-office accounts role ada member
 agent-office accounts password on          # if every admin is ever locked out
 ```
 
+**Everyone on their own Claude and GitHub.** With an account, the workers you hire run on your own Claude plan, and the office acts on GitHub as you: comments, merges, labels, claimed issues, commits, pushes and pull requests are yours, with your git name and GitHub noreply email. **☰ → 🔐 Your sign-ins** opens the first time you come in: **Sign in with Claude** gives you Claude's sign-in page and takes back the code it shows, **Sign in with GitHub** shows a one-time code for github.com/login/device, or paste a token from `claude setup-token` (or an API key) or a GitHub token. A 🐚 shell at a desk runs as you too, so `claude auth login` typed there works. Hiring a Claude worker, queueing a task, calling a meeting or asking a board agent needs your own Claude sign-in first. Each account's sign-ins live in `.agent-office/homes/<account>/` (their own `CLAUDE_CONFIG_DIR`, `GH_CONFIG_DIR` and `GIT_CONFIG_GLOBAL`), and revoking the account deletes them. Admins can pick the office machine's own instead. On the shared password, with no account, everything runs on the machine's own `claude` and `gh` as before.
+
 ```
 agent-office [dir] [options]
 
@@ -165,11 +167,14 @@ agent-office [dir] [options]
       --self-signed       Serve HTTPS with a generated self-signed cert
       --trust-proxy       Trust X-Forwarded-* (behind Caddy/nginx)
       --turn <url>        Add a TURN server for voice, e.g. turn:user:pass@host:3478
+                          (env AGENT_OFFICE_TURN, several separated by spaces)
       --budget <usd>      Daily tracked Claude Code budget (OpenCode/Codex excluded)
       --budget-pause      ...and nobody can hire a new worker until the next day
       --webhook <url>     Post to this Slack / Discord webhook when a worker needs input or finishes
       --city <name>       Put the office in a real city: its sun and live weather (open-meteo.com)
       --weather <kind>    Pin the weather: clear, cloudy, rain, storm, snow or fog
+      --real-time-sky     Start the sky on the real clock, not a day an hour (env AGENT_OFFICE_SKY_CLOCK=real;
+                          ⚙️ Settings can switch it)
 
 agent-office prune [dir] [-n|--dry-run] [-f|--force]
 
@@ -181,6 +186,13 @@ agent-office accounts [list | invite [name] [--admin] | revoke <name> | role <na
 
   Invite, list and revoke people's own accounts, and switch the shared password
   off or on. Works while the office runs.
+
+agent-office tunnel [office@address | url] [--port <n>] [--office-port <n>] [--name <name>] [--password <pw>] [--no-open] [--insecure] [-- <ssh options>]
+
+  On your own computer, for an office that runs somewhere else: every web server
+  a worker starts there opens on the same port here, by itself, and closes when
+  the worker stops it. Given an SSH address it opens the tunnel to the office too.
+  See docs/tunnel.md.
 ```
 
 ## Choosing an agent
@@ -313,9 +325,37 @@ Useful options for `up`:
 - Pass `--claude-token "$(claude setup-token)"`, which uses your Claude subscription, or `--anthropic-api-key <key>`.
 - Do nothing, and the first worker jumps with *"Claude isn't signed in — type /login"*. Open its terminal and run `/login`.
 
-**GitHub.** By default, your local `gh auth token` is used to sign in the GitHub CLI on the machine. It's needed for private repos, the issue and PR boards, and for workers to push branches and open PRs. Anyone who can use the office can use that token, so pass `--github-token <fine-grained token>` or `--no-github-token` if that's too much.
+That's the office's own sign-in, which workers use while you're in on the office password. Once teammates have [accounts](#accounts), each of them signs in to their own Claude in **☰ → 🔐 Your sign-ins**.
+
+**GitHub.** By default, your local `gh auth token` is used to sign in the GitHub CLI on the machine. The office uses it to list and clone your repos and to read the issue and PR boards. On the office password, commenting, merging, pushing and opening PRs use it too; people with accounts do those as themselves. Anyone who can use the office can use that token, so pass `--github-token <fine-grained token>` or `--no-github-token` if that's too much.
+
+**On Tailscale?** `deploy/aws.sh up --tailscale` puts the office on your tailnet at `https://agent-office.<your-tailnet>.ts.net` instead of behind SSH tunnels, and each worker's web server at `https://agent-office.<your-tailnet>.ts.net:<port>`: see [docs/aws.md](docs/aws.md#tailscale).
+
+**Workers' web servers on your own computer.** Run `agent-office tunnel office@<your-office-ip>` (or plain `agent-office tunnel` while `deploy/aws.sh open` runs) and leave it running: every web server a worker starts opens on the same port on your computer, by itself, and closes again when the worker stops it. See [docs/tunnel.md](docs/tunnel.md).
+
+## Other clouds
+
+The same office, one script each. Each one keeps the office off the internet: it listens on loopback and everyone reaches it through an SSH tunnel (teammates invited from **👥 Invite**).
+
+| Where | Script | How it runs |
+|---|---|---|
+| Azure VMs | [`deploy/azure.sh`](docs/azure.md) | A VM set up by `deploy/provision.sh`, like AWS: `up`, `open`, `pause`, `invite`, `update`… |
+| Railway | [`deploy/railway.sh`](docs/railway.md) | A container (`deploy/container/`), everything on a volume, SSH through Railway's TCP proxy |
+| Fly.io | [`deploy/fly.sh`](docs/fly.md) | The same container on a Fly machine with a volume, SSH on the app's own IP |
+| Dokploy | [`deploy/dokploy.sh`](docs/dokploy.md) | The same container on your Dokploy server, uploaded from this checkout |
+| Coolify | [`deploy/coolify.sh`](docs/coolify.md) | The same container, built by your Coolify v4 from this repository |
+
+The container installs the office's newest release with `install.sh` while it builds (no Node.js); its scripts need `jq` on your computer. Anything else: [`deploy/provision.sh`](docs/self-hosting.md) sets up any Ubuntu or Debian server with one line, behind SSH, on your own domain with `--domain`, or on your tailnet with `--tailscale`.
 
 ## Running it on a VPS for your team
+
+On an Ubuntu or Debian server, one line installs and runs it (see [docs/self-hosting.md](docs/self-hosting.md)):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lucas-goldner/flutter-agent-office/main/deploy/provision.sh | bash
+```
+
+Or by hand:
 
 The simplest private setup needs no certificates at all. Run `agent-office --host 127.0.0.1` and have everyone connect with `ssh -L 4600:localhost:4600 you@server`, then open http://localhost:4600. Browsers treat `localhost` as secure, so voice and screen sharing work.
 
@@ -395,8 +435,9 @@ browser (Flutter web) ──HTTPS/WSS──▶ agent-office (Dart)
 - **Shared terminals.** Each worker's PTY lives in `agent-office-ptys` (`server/lib/src/ptyhost.dart`), a detached process the server starts for each floor and talks to over a Unix socket in that project's `.agent-office/`. On SIGTERM the server leaves the PTYs running there, and the next server takes them back with a snapshot of each screen. Hooks that fire in between retry until it's up. If no server comes back within 30 minutes, the PTYs are ended. The server mirrors each PTY in a headless xterm. People who open the terminal get a serialized snapshot, then the live stream. Laptops get compact per-row diffs a few times a second. The PTY takes the size of whoever is typing.
 - **Scrollback and search.** Every 15 seconds, for each worker that printed something new, and again as the office shuts down, its last 3,000 lines are serialized, colors included, to `.agent-office/scrollback/<worker>.ansi`. A worker that starts again (after a restart, or when you resume it) gets its old lines replayed into its terminal first, then a dim *office restarted* line. The chat is appended to `.agent-office/chat.jsonl` and trimmed to the last 1,000 messages. `GET /api/search?q=` matches case-insensitively, treating runs of whitespace as one space, over the chat and each worker's terminal buffer. It returns the newest lines first, each distinct line once. The browser finds the hit again in its own copy of the terminal and scrolls to it.
 - **Cost.** Hooks carry no usage, but each one names the session's transcript (`~/.claude/projects/<dir>/<session>.jsonl`). The office reads what gets appended to it, and to the subagent transcripts next to it: every assistant message records the API's token usage and the model, which the office prices from its own table (cache writes and reads included). When a session ends, Claude Code appends its own tally (`cost-state`), and the worker's numbers snap to that, which also covers calls that never reach the transcript. Per-worker totals are saved with the worker, and `.agent-office/usage.json` keeps the office's all-time and per-day spend, so nothing is lost on a restart or when a worker is sent home. On an office deployed with `deploy/aws.sh`, put `AGENT_OFFICE_BUDGET=20` (and `AGENT_OFFICE_BUDGET_PAUSE=1`) in `/etc/agent-office/env` and restart the service.
-- **Sky.** The server decides the weather and tells everyone (`server/lib/src/sky.dart`), and each browser works out where the sun is from that and its own clock. Without `--city`, the office sits in the middle of the host's time zone at 40° north (34° south if its clocks go forward in January), and the weather changes every 20 to 50 minutes, with the season's odds. With `--city` (a name, or `lat,lon`), it asks open-meteo.com for the place once and for its current weather every 15 minutes; no key is needed, and nothing but the city's name and coordinates is sent. The office has no roof, so the sun and the sky light the rooms too. At night the office's toon material (`app/assets/materials/toon.fmat`) puts lamplight back in the office and the garage, and pools of light around the lamps nearest you (`app/lib/world/sky_model.dart`, `sky_view.dart`). A server on AWS keeps UTC, so on an office deployed with `deploy/aws.sh`, put `AGENT_OFFICE_CITY="Portland, Oregon"` in `/etc/agent-office/env` and restart the service.
-- **Services.** Every 4 seconds the office lists the TCP ports its user's processes listen on (`ss`, or `lsof` on macOS). It credits each port to the worker whose terminal started it. It goes by the process tree first. For a server that detached from it, it uses the `AGENT_OFFICE_WORKER_ID` the process inherited (Linux), then whether it runs inside that worker's worktree. Ports that answer HTTP are shown. A request for `localhost:<port>` that reaches the office's own port (that's what a service tunnel does) is relayed to that server, WebSockets included, so hot reload works.
+- **Sky.** The server decides the weather and tells everyone (`server/lib/src/sky.dart`), and each browser works out where the sun is from that and the office's clock, sped up so a whole day and night go by every hour (`skyTime` in `packages/office_shared/lib/sun.dart`), or on the real time of day with `--real-time-sky` or ⚙️ Settings (kept for everyone in `sky-clock.json`). With `--city`, the place the last forecast found is kept in `sky-place.json`, so a restart is already there. Without `--city`, the office sits in the middle of the host's time zone at 40° north (34° south if its clocks go forward in January), and the weather changes every 20 to 50 minutes, with the season's odds. With `--city` (a name, or `lat,lon`), it asks open-meteo.com for the place once and for its current weather every 15 minutes; no key is needed, and nothing but the city's name and coordinates is sent. The office has no roof, so the sun and the sky light the rooms too. At night the office's toon material (`app/assets/materials/toon.fmat`) puts lamplight back in the office and the garage, and pools of light around the lamps nearest you (`app/lib/world/sky_model.dart`, `sky_view.dart`). A server on AWS keeps UTC, so on an office deployed with `deploy/aws.sh`, put `AGENT_OFFICE_CITY="Portland, Oregon"` in `/etc/agent-office/env` and restart the service.
+- **Services.** Every 4 seconds the office lists the TCP ports its user's processes listen on (`ss`, or `lsof` on macOS). It credits each port to the worker whose terminal started it. It goes by the process tree first. For a server that detached from it, it uses the `AGENT_OFFICE_WORKER_ID` the process inherited (Linux), then whether it runs inside that worker's worktree. Ports that answer HTTP are shown. A request for `localhost:<port>` that reaches the office's own port (that's what a service tunnel does) is relayed to that server, WebSockets included, so hot reload works (`server/lib/src/relay.dart`). On a Tailscale office (`AGENT_OFFICE_TAILSCALE_HOST`), a request for `<office>.ts.net:<port>` is relayed the same way, and the office has Tailscale Serve point exactly the workers' ports at itself through the `agent-office-serve` helper (`tailnet.dart`). `agent-office tunnel` (`server/lib/src/tunnel/`) asks for the list every 2 seconds (`GET /api/services`), listens on each port on your computer, and sends what arrives with its own session and an `x-agent-office-service: <port>` header.
+- **Drops.** A file dropped or pasted into a worker's terminal goes to `POST /api/term/drop` and is kept in `.agent-office/drops/<worker>/` (25 MB at most) until the worker goes home; the terminal types its path, shell-escaped.
 - **Pictures.** WebGL can only draw an image from another site if that site sends CORS headers, and most don't. So the office fetches each picture itself (`/api/image`, images up to 15 MB) and serves it from its own origin. Any image link works, and a picture on a worker's dev server does too. Browsers shrink each one to 1024 px before it goes on the wall.
 - **Whiteboard.** It syncs the way Excalidraw's own live collaboration does. Every change bumps an element's version, each browser sends the elements it changed over the office's socket, and everyone merges what arrives with Excalidraw's `reconcileElements`, keeping the newer copy of each element (equal versions go to the lower random nonce, so every copy agrees). The office applies the same rule to its own copy and saves it in the floor's `.agent-office/whiteboard/elements.json`. Deleted elements are kept for a week so a deletion reaches everyone. Pictures go up once over HTTP (`/api/whiteboard/file`, up to 6 MB each) and are fetched by id, a hash of the picture. Excalidraw, a few MB of JavaScript, only loads when someone opens the whiteboard or a floor has a drawing to show on the board, and its fonts are served by the office rather than a CDN.
 - **Task queue.** `queue.json` holds the tasks and their providers in order. A task is seated when a desk is free and fewer than the limit are busy (a worker that is starting, ready, working or waiting for input). It finishes when its worker ends its turn (Claude/Codex `Stop` hooks or OpenCode's idle event), stops, or is sent home. The PR is matched by GitHub's closing-issue references (`closes #12`) or by the worker's branch.
@@ -404,7 +445,7 @@ browser (Flutter web) ──HTTPS/WSS──▶ agent-office (Dart)
 - **The gong.** Each time the office fetches the PR list, a PR that was open last time and is merged now rings the gong. A merge from the PR window rings as soon as `gh pr merge` returns, and isn't rung again when the list catches up. Anything else shows up at the next fetch: about every 90 seconds while someone is on the floor, and right after a queue task finishes. The gong is synthesized like the other sounds, so the volume and mute under **⚙️** apply to it.
 - **Jukebox.** Each floor's `jukebox.json` says only what's on and when it started, so it keeps playing through a restart. Every browser plays it for itself: a tune is decided note by note by its bar and step, so starting from the same moment is enough for everyone to hear the same thing. To agree on that moment, each page pings the office a few times on arriving and keeps the quickest answer to line its clock up with the office's. A tune is drums, bass, an FM electric piano and a melody picked from the chord tones, with record crackle and tape wobble, in 32-bar rounds. It's scheduled a second ahead on a timer rather than each frame, which lets it carry on in a background tab. It goes through a panner at the jukebox and a filter that muffles it with distance. Most streams can't be routed through Web Audio without CORS, so a stream plays in a plain `<audio>` element, turned down by hand on the same distance curve. An audio file seeks to where everyone else is.
 - **Floors.** `floors.json` in the office's `.agent-office/` lists the floors: each one's checkout and colors. Adding one runs `gh repo view` (does this login see it, and what's its exact name), then `gh repo clone` into the projects folder; a checkout that's already there from the same repository is used as it is. Each floor runs its own workers, GitHub boards, queue and changes watcher in its checkout. A floor nobody is on, with nothing running, asks GitHub about its boards every 10 minutes instead of every 90 seconds. People get only the moves, worker updates and terminal frames of the floor they're on; the chat, voice connections and the budget are the building's.
-- **State.** The office's `.agent-office/` (in `~/agent-office`, or in the project you started it in) holds the password, the signing secret, the accounts and open invites (`accounts.json`), the floors (`floors.json`), the chat and the spend. Each floor's checkout has its own `.agent-office/` with the hook settings, the saved workers and their scrollback, the task queue, the pictures on the walls (`decor.json`), the dog's name (`dog.json`), the jukebox (`jukebox.json`) and the whiteboard (`whiteboard/`). It is added to `.git/info/exclude` automatically, so it never shows up in `git status`.
+- **State.** The office's `.agent-office/` (in `~/agent-office`, or in the project you started it in) holds the password, the signing secret, the accounts and open invites (`accounts.json`), each account's own Claude, GitHub and git sign-ins (`homes/<account>/`), the floors (`floors.json`), the chat and the spend. Each floor's checkout has its own `.agent-office/` with the hook settings, the saved workers and their scrollback, the task queue, the pictures on the walls (`decor.json`), the dog's name (`dog.json`), the jukebox (`jukebox.json`) and the whiteboard (`whiteboard/`). It is added to `.git/info/exclude` automatically, so it never shows up in `git status`.
 
 ## Security notes
 
@@ -415,7 +456,9 @@ Anyone who can sign in can drive Claude Code, OpenCode or Codex in that director
 - Only enable `--trust-proxy` behind a proxy that appends `X-Forwarded-For` (Caddy and nginx both do). The office uses the rightmost hop.
 - Run the office as a dedicated, unprivileged user, in the project you mean to share.
 - The WebSocket checks the session cookie and the `Origin` header. The hook endpoint only listens on loopback and needs a random per-worker token.
-- Service tunnels are relayed only to web servers a worker started, and only with an office session. The office's own cookies are stripped before a request reaches that server. A server you started yourself outside the office is never listed or relayed.
+- Service tunnels are relayed only to web servers a worker started, and only with an office session. The office's own cookies are stripped before a request reaches that server. A server you started yourself outside the office is never listed or relayed. A request `agent-office tunnel` sends (`x-agent-office-service`) is only ever relayed to a worker's server: when nothing serves its port, it gets the *Not running* page, never the office's own pages. The tunnel's ports listen on loopback only and take `localhost` names only.
+- Workers hired by an account run on that account's own sign-ins, and never see the machine's own Claude or GitHub credentials (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `GH_TOKEN` and the like are taken out of their environment). Pasted tokens go into the account's folder (0600), never on a command line. Every worker still runs as the same OS user, so per-person sign-ins keep work attributed and plans separate; they don't keep teammates' secrets from each other.
+- On a Tailscale office, Tailscale's access controls decide who reaches the machine, and they reach every port that listens on all interfaces, not just the office. The `agent-office-serve` helper the office runs as root only ever points a port above 1023 at the office's own port.
 - Workers don't inherit the office password or any parent agent-session variables.
 - The picture fetcher (`/api/image`) needs an office session. It fetches any http(s) link it's given, from the office's machine. That gives nobody new reach: anyone signed in can already run `curl` from a shell worker. Pictures are served with a sandboxing `Content-Security-Policy`, so an SVG can't run script on the office's origin.
 
