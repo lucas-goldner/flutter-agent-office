@@ -38,6 +38,17 @@ class Api {
     return ApiResult(res.statusCode, _decode(res.body));
   }
 
+  /// Sends [bytes] as the body, of type [contentType] (a file dropped into a terminal).
+  static Future<ApiResult> postBytes(String path, List<int> bytes, String contentType) async {
+    final res = await _client.post(
+      serverUri(path),
+      headers: {'content-type': contentType, ...serverHeaders()},
+      body: bytes,
+    );
+    takeSessionCookie(res.headers);
+    return ApiResult(res.statusCode, _decode(res.body));
+  }
+
   static Future<String?> getText(String path) async {
     final res = await _client.get(serverUri(path), headers: serverHeaders());
     return res.statusCode == 200 ? res.body : null;

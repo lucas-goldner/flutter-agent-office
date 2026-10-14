@@ -24,6 +24,8 @@ import 'package:office_shared/status.dart';
 import '../state/store.dart';
 import '../world/laptop_screen.dart';
 import 'dictate.dart';
+import 'term_drops.dart';
+import '../interop/drops.dart';
 import 'modal.dart';
 import 'provider.dart';
 import 'terminal_logic.dart';
@@ -131,6 +133,12 @@ class _TerminalWindowState extends State<_TerminalWindow> {
   final _policy = TermSizePolicy();
   final _subs = <StreamSubscription<Object?>>[];
   late final void Function() _stopPaste;
+  late final void Function() _stopDrops;
+  late final void Function() _stopPastedFiles;
+
+  /// Files on their way up to the office, and files dragged over the page (see [_insertFiles]).
+  int _uploading = 0;
+  bool _dropping = false;
   bool _ready = false;
   TerminalFind? _pendingFind;
 
@@ -200,6 +208,16 @@ class _TerminalWindowState extends State<_TerminalWindow> {
       if (_typing.isEmpty || !mounted) return;
       setState(_pruneTyping);
     });
+    // Files dropped anywhere while the terminal is open, or a screenshot pasted into it, go up to the office
+    // and the terminal types where they are. Watched before the text paste, which would take the picture.
+    _stopPastedFiles = watchPastedFiles(() => _focus.hasFocus, _insertFiles);
+    _stopDrops = watchDrops(
+      active: () => mounted && widget.modal.isTop,
+      over: (on) {
+        if (mounted && on != _dropping) setState(() => _dropping = on);
+      },
+      dropped: _insertFiles,
+    );
     _stopPaste = interceptPaste(() => _focus.hasFocus, (text) {
       _sayTyping();
       _sendSize(typing: true);
@@ -220,6 +238,8 @@ class _TerminalWindowState extends State<_TerminalWindow> {
     store.topic(Topic.peers).removeListener(_refreshPeers);
     _typingTimer?.cancel();
     _stopPaste();
+    _stopDrops();
+    _stopPastedFiles();
     _mic?.dispose();
     _resizeDebounce?.cancel();
     widget.scope.net.send(WorkerDetachCmd(widget.workerId));
@@ -381,6 +401,25 @@ class _TerminalWindowState extends State<_TerminalWindow> {
     widget.modal.close();
   }
 
+  /// Uploads files dropped or pasted in, and pastes their paths as a terminal does with a file dragged into
+  /// it: Claude Code attaches a picture.
+  Future<void> _insertFiles(List<DroppedFile> files) async {
+    if (files.isEmpty) return;
+    setState(() => _uploading++);
+    try {
+      final typed = await uploadDrops(store.floor, widget.workerId, files);
+      if (!mounted) return;
+      _sayTyping();
+      _sendSize(typing: true);
+      _term.paste(typed);
+      _focus.requestFocus();
+    } on DropError catch (e) {
+      toast(e.message, ToastKind.warn);
+    } finally {
+      if (mounted) setState(() => _uploading--);
+    }
+  }
+
   KeyEventResult _onKey(FocusNode node, KeyEvent e) {
     if (e is! KeyDownEvent && e is! KeyRepeatEvent) return KeyEventResult.ignored;
     // Ctrl+Space, held: push to talk.
@@ -535,6 +574,7 @@ class _TerminalWindowState extends State<_TerminalWindow> {
                       hardwareKeyboardOnly: false,
                     ),
                   ),
+                  if (_dropping || _uploading > 0) Positioned.fill(child: _DropZone(uploading: _uploading > 0)),
                   if (_mic != null)
                     Positioned(left: 20, right: 20, bottom: 14, child: Center(child: DictateLive(_mic))),
                 ],
@@ -626,6 +666,30 @@ class _TerminalWindowState extends State<_TerminalWindow> {
       ),
     ];
   }
+}
+
+/// Over the terminal while files are dragged over the page, or going up to the office.
+class _DropZone extends StatelessWidget {
+  const _DropZone({required this.uploading});
+  final bool uploading;
+
+  @override
+  Widget build(BuildContext context) => IgnorePointer(
+    child: Container(
+      key: const ValueKey('term-drop'),
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: Swatch.termBg.withValues(alpha: 0.82),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Swatch.accent, width: 3),
+      ),
+      child: Text(
+        uploading ? '⏳ Putting it in the terminal…' : '📎 Drop screenshots or files here to put them in the terminal',
+        textAlign: TextAlign.center,
+        style: heavy(16, color: Colors.white),
+      ),
+    ),
+  );
 }
 
 /// A viewer's face in the header: their initials on their colour, bobbing with a ✎ while they type.

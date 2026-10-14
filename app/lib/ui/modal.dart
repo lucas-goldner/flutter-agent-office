@@ -29,6 +29,9 @@ class ModalHandle {
 
   bool get closed => _closed;
 
+  /// The window on top: the one keys and drops go to.
+  bool get isTop => !_closed && _stack._stack.isNotEmpty && identical(_stack._stack.last, this);
+
   void close() {
     if (_closed) return;
     _closed = true;
