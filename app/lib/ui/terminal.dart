@@ -690,30 +690,22 @@ class _TerminalWindowState extends State<_TerminalWindow> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: [
-                    for (final k in kKeypad)
-                      Padding(
-                        padding: const EdgeInsets.only(right: 5),
-                        child: Semantics(
-                          label: k.title,
-                          child: SizedBox(
-                            width: 36,
-                            height: 42,
-                            child: OfficeButton(
-                              key: ValueKey('key-${k.label}'),
-                              label: k.label,
-                              tooltip: k.title,
-                              dense: true,
-                              onPressed: on ? () => _keypadKey(k.keys) : null,
-                            ),
-                          ),
+              // Nine keys across a phone (390 px), each a share of the row.
+              Row(
+                children: [
+                  for (final (i, k) in kKeypad.indexed)
+                    Expanded(
+                      child: Padding(
+                        padding: EdgeInsets.only(left: i == 0 ? 0 : 4),
+                        child: _Key(
+                          key: ValueKey('key-${k.label}'),
+                          label: k.label,
+                          title: k.title,
+                          onPressed: on ? () => _keypadKey(k.keys) : null,
                         ),
                       ),
-                  ],
-                ),
+                    ),
+                ],
               ),
               const SizedBox(height: 8),
               Row(
@@ -819,6 +811,50 @@ class _TerminalWindowState extends State<_TerminalWindow> {
       ),
     ];
   }
+}
+
+/// A key on the 2D view's keypad: it types into the terminal without taking the focus, so a phone's
+/// keyboard stays down.
+class _Key extends StatelessWidget {
+  const _Key({super.key, required this.label, required this.title, required this.onPressed});
+  final String label;
+  final String title;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+    message: title,
+    child: Semantics(
+      button: true,
+      label: title,
+      excludeSemantics: true,
+      child: Material(
+        color: onPressed == null ? Swatch.paper2 : Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(10),
+          side: const BorderSide(color: Swatch.ink, width: kBorder),
+        ),
+        child: InkWell(
+          canRequestFocus: false,
+          borderRadius: BorderRadius.circular(10),
+          onTap: onPressed,
+          child: SizedBox(
+            height: 42,
+            child: Center(
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  style: heavy(15, color: onPressed == null ? Swatch.muted : Swatch.ink, weight: FontWeight.w900),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 /// Over the terminal while files are dragged over the page, or going up to the office.

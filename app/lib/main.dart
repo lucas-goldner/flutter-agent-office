@@ -32,8 +32,16 @@ class AgentOfficeApp extends StatelessWidget {
     title: 'Agent Office',
     debugShowCheckedModeBanner: false,
     theme: officeTheme(),
-    home: navigation == null ? _page() : const _Routed(),
+    home: navigation == null ? null : const _Routed(),
+    // A page the office served: the one for its path, as one route named after the address, so the address
+    // stays (/lite, /login?next=/lite) and a reload comes back to the same page. With `home`, the navigator
+    // reported '/' instead, and a reload of /lite opened the 3D office.
+    onGenerateInitialRoutes: navigation == null ? (name) => [_route(RouteSettings(name: name))] : null,
+    onGenerateRoute: navigation == null ? _route : null,
   );
+
+  static Route<void> _route(RouteSettings settings) =>
+      PageRouteBuilder(settings: settings, pageBuilder: (context, _, _) => _page());
 }
 
 /// The page for the current path.
