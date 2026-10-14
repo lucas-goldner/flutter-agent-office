@@ -5,7 +5,9 @@ import 'package:flutter/material.dart';
 
 import '../interop/browser.dart';
 import '../office_scope.dart';
+
 import 'package:office_shared/protocol.dart';
+
 import '../state/store.dart';
 import 'commands.dart';
 import 'confirm.dart';
@@ -139,8 +141,7 @@ class _AccountsWindowState extends State<_AccountsWindow> with ListenTo {
         ),
         if (_status != null) StatusBox(_status!.$1, kind: _status!.$2),
         if (_fresh != null) CommandBlock(inviteLink(_fresh!, _origin), top: 10),
-        if (store.invites)
-          const Note('On this office they also need a way in: add their GitHub keys under 👥 Invite.', top: 8),
+        if (store.invites) const Note('On this office they also need a way in first: see 👥 Invite teammates.', top: 8),
         SectionHeading('People', count: s.accounts.length),
         for (final a in s.accounts) _account(a, s, me),
         if (s.accounts.isEmpty)

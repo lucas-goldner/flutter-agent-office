@@ -6,7 +6,9 @@ import 'package:flutter/material.dart';
 import '../interop/browser.dart';
 import '../interop/open_link.dart';
 import '../office_scope.dart';
+
 import 'package:office_shared/protocol.dart';
+
 import '../state/store.dart';
 import 'commands.dart';
 import 'hud_parts.dart' show cssColor;
@@ -14,8 +16,19 @@ import 'modal.dart';
 import 'theme.dart';
 import 'window_parts.dart';
 
+/// The page's own host name, to tell whether it came over the office's Tailscale network.
+String get _hostname => Uri.parse(serverOrigin).host;
+
+/// Whether this page came over the office's Tailscale network, where every server has its own link.
+bool _direct(ServicesState s) => onTailnet(s.tailnet, _hostname);
+
+/// Where worker's server [port] opens from this page: its own link on the tailnet, or through a tunnel.
+String serviceLink(ServicesState s, int port) =>
+    serviceUrl(port, secure: isSecure, tailnet: _direct(s) ? s.tailnet : null);
+
 ModalHandle openServices(OfficeScope scope) =>
-    ModalStack.instance.show((modal) => _ServicesWindow(scope: scope, modal: modal))..doing = '🌐 at the services board';
+    ModalStack.instance.show((modal) => _ServicesWindow(scope: scope, modal: modal))
+      ..doing = '🌐 at the services board';
 
 class _ServicesWindow extends StatefulWidget {
   const _ServicesWindow({required this.scope, required this.modal});
@@ -43,32 +56,37 @@ class _ServicesWindowState extends State<_ServicesWindow> with ListenTo, Ticking
 
   Future<void> _pick(ServiceInfo svc) async {
     setState(() => _picked = svc.port);
-    final ok = await copyText(serviceTunnel(store.services, svc.port, _os, secure: isSecure));
+    final s = store.services;
+    final ok = await copyText(
+      _direct(s) ? serviceLink(s, svc.port) : serviceTunnel(s, svc.port, _os, secure: isSecure),
+    );
     if (mounted) setState(() => _copied = ok ? svc.port : null);
   }
 
   @override
   Widget build(BuildContext context) {
     final s = store.services;
+    final direct = _direct(s);
     return ModalWindow(
       modal: widget.modal,
       width: 760,
       title: const Text('🌐 Services'),
       headerExtras: [
-        SegButtons<Os>(
-          options: [for (final o in Os.values) (o, osLabel[o]!)],
-          value: _os,
-          onPick: (o) => setState(() {
-            _os = o;
-            _copied = null;
-          }),
-        ),
+        if (!direct)
+          SegButtons<Os>(
+            options: [for (final o in Os.values) (o, osLabel[o]!)],
+            value: _os,
+            onPick: (o) => setState(() {
+              _os = o;
+              _copied = null;
+            }),
+          ),
       ],
       body: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: _body(s)),
-      footer: const Row(
+      footer: Row(
         children: [
           FooterNote(
-            'Tunnels go through the office, so the office password still guards every page. Keep the terminal open while you look.',
+            direct ? 'Every link goes through the office, so the office sign-in still guards every page.' : 'Tunnels go through the office, so the office password still guards every page. Keep the terminal open while you look.',
           ),
         ],
       ),
@@ -76,12 +94,16 @@ class _ServicesWindowState extends State<_ServicesWindow> with ListenTo, Ticking
   }
 
   List<Widget> _body(ServicesState s) {
+    final direct = _direct(s);
     final out = <Widget>[
-      const Note(
-        'Web servers the workers are running. Click one to copy a command that opens it on your computer — run it in a terminal and the page opens by itself.',
+      Note(
+        direct
+            ? 'Web servers the workers are running. Each has its own link on your Tailscale network: open it, or click the row to copy it for someone else on the network.'
+            : 'Web servers the workers are running. Click one to copy a command that opens it on your computer — run it in a terminal and the page opens by itself.',
         top: 0,
       ),
       const SizedBox(height: 12),
+      if (!direct && officeElsewhere(s, _hostname)) _AutoTunnel(autoTunnel(serverOrigin)),
     ];
     if (s.items.isEmpty) {
       out.add(
@@ -117,7 +139,14 @@ class _ServicesWindowState extends State<_ServicesWindow> with ListenTo, Ticking
       out.add(
         Padding(
           padding: const EdgeInsets.only(bottom: 8),
-          child: _ServiceRow(svc, store: store, on: _picked == svc.port, onTap: () => _pick(svc)),
+          child: _ServiceRow(
+            svc,
+            store: store,
+            url: serviceLink(s, svc.port),
+            direct: direct,
+            on: _picked == svc.port,
+            onTap: () => _pick(svc),
+          ),
         ),
       );
     }
@@ -125,7 +154,18 @@ class _ServicesWindowState extends State<_ServicesWindow> with ListenTo, Ticking
     for (final i in s.items) {
       if (i.port == _picked) svc = i;
     }
-    if (svc != null) {
+    if (svc != null && direct) {
+      final url = serviceLink(s, svc.port);
+      out.add(
+        _copied == svc.port
+            ? StatusBox(
+                "✅ Copied $url. Anyone on the network who's signed in to the office can open it.",
+                kind: StatusKind.ok,
+                top: 4,
+              )
+            : StatusBox('The link for :${svc.port}: $url', top: 4),
+      );
+    } else if (svc != null) {
       final url = serviceUrl(svc.port, secure: isSecure);
       final cmd = serviceTunnel(s, svc.port, _os, secure: isSecure);
       out.add(
@@ -141,6 +181,7 @@ class _ServicesWindowState extends State<_ServicesWindow> with ListenTo, Ticking
     } else if (_picked != null) {
       out.add(StatusBox('The server on :$_picked stopped.', kind: StatusKind.error, top: 4));
     }
+    if (direct) return out;
     out.add(
       s.ssh != null
           ? Note(
@@ -150,7 +191,7 @@ class _ServicesWindowState extends State<_ServicesWindow> with ListenTo, Ticking
                 const TextSpan(
                   text: 'It uses the same SSH access as the office. Not invited yourself (you set the office up)? Run ',
                 ),
-                codeSpan('deploy/aws.sh service <port>'),
+                codeSpan('${deployScript(s.deploy)} service <port>'),
                 const TextSpan(text: ' instead.'),
               ],
             )
@@ -170,10 +211,59 @@ class _ServicesWindowState extends State<_ServicesWindow> with ListenTo, Ticking
   }
 }
 
+/// `agent-office tunnel`: every worker's server opens on your own computer by itself (#273).
+class _AutoTunnel extends StatelessWidget {
+  const _AutoTunnel(this.command);
+  final String command;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    key: const ValueKey('svc-auto'),
+    margin: const EdgeInsets.only(bottom: 12),
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+    decoration: BoxDecoration(
+      color: Swatch.paper2,
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(color: Swatch.ink, width: kBorder),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('⚡ Open them all, by themselves', style: heavy(14)),
+        Note(
+          '',
+          top: 4,
+          rich: [
+            const TextSpan(
+              text: 'Run this on your computer and leave it running. Every server a worker starts opens on the same port there (',
+            ),
+            codeSpan('localhost:5173'),
+            const TextSpan(text: ' is the worker’s), and closes when the worker stops it. It needs the '),
+            codeSpan('agent-office'),
+            const TextSpan(text: ' command on your computer: the install line in the README.'),
+          ],
+        ),
+        CommandBlock(command),
+      ],
+    ),
+  );
+}
+
 class _ServiceRow extends StatefulWidget {
-  const _ServiceRow(this.svc, {required this.store, required this.on, required this.onTap});
+  const _ServiceRow(
+    this.svc, {
+    required this.store,
+    required this.url,
+    required this.direct,
+    required this.on,
+    required this.onTap,
+  });
   final ServiceInfo svc;
   final Store store;
+  final String url;
+
+  /// On the office's Tailscale network: the row copies its link, not a tunnel command.
+  final bool direct;
   final bool on;
   final VoidCallback onTap;
 
@@ -188,7 +278,7 @@ class _ServiceRowState extends State<_ServiceRow> {
   Widget build(BuildContext context) {
     final svc = widget.svc;
     final w = widget.store.workers[svc.workerId];
-    final url = serviceUrl(svc.port, secure: isSecure);
+    final url = widget.url;
     final meta = [
       w?.name ?? 'A worker',
       if (w?.worktree != null) '🌿 ${w!.worktree!.branch}',
@@ -196,7 +286,7 @@ class _ServiceRowState extends State<_ServiceRow> {
       'started ${timeAgo(svc.since)}',
     ].join(' · ');
     return Tooltip(
-      message: 'Copy the tunnel command',
+      message: widget.direct ? 'Copy the link' : 'Copy the tunnel command',
       waitDuration: const Duration(milliseconds: 700),
       child: MouseRegion(
         cursor: SystemMouseCursors.click,
@@ -252,7 +342,9 @@ class _ServiceRowState extends State<_ServiceRow> {
                 const SizedBox(width: 12),
                 SmallButton(
                   label: 'Open ↗',
-                  tooltip: 'Open $url (needs the tunnel, unless the office runs on this computer)',
+                  tooltip: widget.direct
+                      ? 'Open $url'
+                      : 'Open $url (needs the tunnel, unless the office runs on this computer)',
                   onPressed: () => openInNewTab(url),
                 ),
               ],

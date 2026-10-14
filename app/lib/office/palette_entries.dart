@@ -9,9 +9,8 @@ import 'package:office_shared/layout.dart';
 import 'package:office_shared/protocol.dart';
 
 import '../interop/open_link.dart';
-import '../interop/browser.dart' show isSecure;
 import '../state/store.dart';
-import '../ui/commands.dart' show serviceUrl;
+import '../ui/services.dart' show serviceLink;
 import '../ui/modal.dart' show toast, ToastKind;
 import '../ui/palette.dart';
 import '../ui/worker_text.dart' show statusLabel;
@@ -273,7 +272,7 @@ List<PaletteRow> paletteEntries(PaletteHost h) {
         detail: [':${svc.port}', if (title.isNotEmpty) svc.command, ?store.workers[svc.workerId]?.name].join(' · '),
         keywords: ['${svc.port}'],
         // As its Open ↗ button does. Walking there shows the board instead.
-        open: () => openInNewTab(serviceUrl(svc.port, secure: isSecure)),
+        open: () => openInNewTab(serviceLink(store.services, svc.port)),
         walk: servicesBoard == null
             ? null
             : () => h.walkThen(

@@ -50,9 +50,39 @@ String inviteMessage(TeamState t, Os os, String? projectName) {
   return kept.join('\n').trim();
 }
 
+/// On an office on a Tailscale network: the link, and how to get onto the network.
+String tailnetMessage(TeamState t, String? projectName) => [
+  "You're invited to the ${projectName ?? 'our'} Agent Office: https://${t.tailnet}",
+  '',
+  "It's on our Tailscale network. If you aren't on it yet: install Tailscale (https://tailscale.com/download), sign in, and accept the invite I send you from Tailscale. Then open the link and sign in with the office password, or the account link you get from me.",
+].join('\n');
+
+/// Tailscale's admin console, where someone is let onto the network.
+const tailscaleAdmin = 'https://login.tailscale.com/admin';
+
+/// How to run the script that deployed the office (deploy/azure.sh --name x), for the commands the
+/// panels suggest: deploy/aws.sh when the office doesn't know.
+String deployScript(String? deploy) => deploy ?? 'deploy/aws.sh';
+
+/// Whether this page came over the office's Tailscale network ([hostname] is the page's), where every
+/// worker's server has its own link.
+bool onTailnet(String? tailnet, String hostname) => tailnet != null && tailnet.isNotEmpty && hostname == tailnet;
+
+/// Whether the office is likely on another machine than this browser, so its workers' ports aren't
+/// already here.
+bool officeElsewhere(ServicesState s, String hostname) =>
+    s.ssh != null || !RegExp(r'^(?:localhost|127\.0\.0\.1|\[::1\]|::1)$').hasMatch(hostname);
+
+/// The command that opens every worker's server on someone's own computer by itself, as each one starts
+/// (`agent-office tunnel`). It reaches the office the way this page did ([origin]).
+String autoTunnel(String origin) =>
+    origin == 'http://localhost:4600' ? 'agent-office tunnel' : 'agent-office tunnel $origin';
+
 /// Where a worker's server opens once tunnelled: the tunnel lands on the office's own port, so it
-/// speaks whatever the office speaks.
-String serviceUrl(int port, {bool secure = false}) => '${secure ? 'https' : 'http'}://localhost:$port';
+/// speaks whatever the office speaks. On the office's Tailscale network ([tailnet]), Tailscale Serve
+/// points `<office>.ts.net:<port>` at the office, which relays it by the port.
+String serviceUrl(int port, {bool secure = false, String? tailnet}) =>
+    tailnet != null ? 'https://$tailnet:$port' : '${secure ? 'https' : 'http'}://localhost:$port';
 
 /// One command that tunnels `localhost:<port>` to the office, which relays it to the worker's
 /// server, and opens it once the tunnel is up. It uses the same SSH access as the office itself.

@@ -3,8 +3,11 @@
 
 import 'package:flutter/material.dart';
 
+import '../interop/open_link.dart';
 import '../office_scope.dart';
+
 import 'package:office_shared/protocol.dart';
+
 import '../state/store.dart';
 import 'commands.dart';
 import 'confirm.dart';
@@ -91,6 +94,8 @@ class _TeamWindowState extends State<_TeamWindow> with ListenTo {
             )
           : t.unavailable != null
           ? Text(t.unavailable!, style: heavy(16, weight: FontWeight.w700))
+          : t.tailnet != null
+          ? _tailnet(t)
           : _body(t),
       footer: t == null || t.unavailable != null
           ? null
@@ -103,7 +108,9 @@ class _TeamWindowState extends State<_TeamWindow> with ListenTo {
                 CopyButton(
                   label: '✉️ Copy invite message',
                   kind: BtnKind.primary,
-                  text: () => inviteMessage(t, _os, store.project?.name),
+                  text: () => t.tailnet != null
+                      ? tailnetMessage(t, store.project?.name)
+                      : inviteMessage(t, _os, store.project?.name),
                 ),
               ],
             ),
@@ -170,26 +177,85 @@ class _TeamWindowState extends State<_TeamWindow> with ListenTo {
           ],
         ],
       ),
-      Note(
-        '',
-        top: 8,
-        rich: [
-          const TextSpan(text: "SSH only answers IP addresses you allowed. If theirs isn't, run "),
-          codeSpan('deploy/aws.sh allow <their-ip>'),
-          const TextSpan(text: ' (or '),
-          codeSpan('allow anywhere'),
-          const TextSpan(text: ') on your machine.'),
-        ],
-      ),
-      SectionHeading('Invited', count: t.members.length),
-      for (final m in t.members) _member(m),
-      if (t.members.isEmpty)
-        Text(
-          'Nobody yet',
-          style: heavy(13, color: Swatch.muted, weight: FontWeight.w600),
+      // Railway's TCP proxy (an address with a port of its own) answers every IP; AWS's firewall doesn't.
+      if (!(t.ssh ?? '').startsWith('ssh://'))
+        Note(
+          '',
+          top: 8,
+          rich: [
+            const TextSpan(text: "SSH only answers IP addresses you allowed. If theirs isn't, run "),
+            codeSpan('${deployScript(t.deploy)} allow <their-ip>'),
+            const TextSpan(text: ' (or '),
+            codeSpan('allow anywhere'),
+            const TextSpan(text: ') on your machine.'),
+          ],
         ),
+      ..._members(t, 'Invited'),
     ],
   );
+
+  List<Widget> _members(TeamState t, String heading) => [
+    SectionHeading(heading, count: t.members.length),
+    for (final m in t.members) _member(m),
+    if (t.members.isEmpty)
+      Text(
+        'Nobody yet',
+        style: heavy(13, color: Swatch.muted, weight: FontWeight.w600),
+      ),
+  ];
+
+  /// Tailscale decides who gets in: the panel says how to let someone onto the network.
+  Widget _tailnet(TeamState t) {
+    final url = 'https://${t.tailnet}';
+    InlineSpan link(String path, String text) => WidgetSpan(
+      alignment: PlaceholderAlignment.baseline,
+      baseline: TextBaseline.alphabetic,
+      child: InkWell(
+        onTap: () => openInNewTab('$tailscaleAdmin/$path'),
+        child: Text(
+          text,
+          style: heavy(13, color: Swatch.accent).copyWith(decoration: TextDecoration.underline),
+        ),
+      ),
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const FieldLabel('Everyone on your Tailscale network opens'),
+        CommandBlock(url, top: 0),
+        const Note(
+          'Nothing to run and no terminal to keep open. It comes over HTTPS, so voice and screen sharing work.',
+          top: 8,
+        ),
+        Padding(
+          padding: const EdgeInsets.only(top: 18),
+          child: Text(
+            "SOMEONE WHO ISN'T ON IT",
+            style: heavy(14, weight: FontWeight.w900).copyWith(letterSpacing: 0.56),
+          ),
+        ),
+        Note(
+          '',
+          top: 6,
+          rich: [
+            const TextSpan(text: "Share this one machine with them: on Tailscale's "),
+            link('machines', 'Machines'),
+            const TextSpan(text: ' page, open '),
+            codeSpan(t.tailnet!.split('.').first),
+            const TextSpan(
+              text: ', choose Share… and send them the link. Once they accept, they reach this machine and nothing else of yours. Or add them to your network under ',
+            ),
+            link('users', 'Users'),
+            const TextSpan(text: '.'),
+          ],
+        ),
+        if (_status != null) StatusBox(_status!.$1, kind: _status!.$2),
+        if (t.error != null) StatusBox(t.error!, kind: StatusKind.error),
+        // People invited before the office went on the tailnet can still tunnel in, until they're removed.
+        if (t.members.isNotEmpty) ..._members(t, 'Invited by SSH key'),
+      ],
+    );
+  }
 
   Widget _member(TeamMember m) => Padding(
     padding: const EdgeInsets.only(bottom: 6),
