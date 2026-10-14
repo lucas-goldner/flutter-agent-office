@@ -62,3 +62,25 @@ the groups' reports:
 - `provision.sh` still needs `deploy/aws.sh` (upstream's #145 made it standalone with Caddy).
 - Windows (#78, #102): the PTY layer is Unix-only.
 - `docs/` came from upstream as-is and still describes the Node install in places.
+
+
+# Second port: upstream's 77 commits (44aecc1..852e2ab) — done
+
+Upstream's history up to 852e2ab is merged with `-s ours` (nothing of its TypeScript tree is taken), so
+`git log --no-merges $(git merge-base HEAD upstream/main)..upstream/main` lists only what's new next time.
+The plan the groups followed is `docs/UPSTREAM_PORT_2_PLAN.md`. Branches: `port2/shared`, then two chains
+`port2/s1..s4` (server) and `port2/c1..c5` (client), merged in `port2/all`.
+
+Ported: every harness (Grok, Muse, DeepSeek over ACP, Pi, Cursor) with models and efforts; the
+office-workers command and MCP server; multi-repo workers; self-opened PRs; clone progress; per-account
+sign-ins; `agent-office tunnel`; screenshot drops; deploy scripts (Azure, Railway, Fly.io, Dokploy,
+Coolify, Tailscale) for the Dart release; maps (castle, dungeon, space station); desk signs and the back
+office; garage cars, the scenic loop, darts and axes; GLB models (dogs, kitchen, lounge, plants, desk
+props) with a loading screen; first-person body and hands; lamplight, sky clock, holiday outfits,
+footsteps; settings with categories, the command palette, dictation, terminal tabs, the needs-you
+beacon; and `/lite`.
+
+Known gaps (engine limits, see each group's commits): no shadow maps or CPU skinning (dog drop per clip
+by eye, no "walls take no shadows"); one fog distance for the whole view; space backdrop drawn as far
+geometry with baked light; no wireframe (holo globe as rings); desktop drag-and-drop/paste of files and
+the 🎤 on desktop are web-only; deploy scripts checked with `bash -n`/shellcheck, not run for real.
