@@ -508,6 +508,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         addedBy: d.addedBy,
         addedAt: d.addedAt,
         cloning: true,
+        clone: building.cloneProgress(d.id),
         workers: 0,
         busy: 0,
         waiting: 0,
@@ -832,6 +833,18 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
   for (final def in List.of(building.list())) {
     openFloor(def);
   }
+  // Clones keep the elevator's progress up to date, and ones the last office left running carry on.
+  building.watchClones(floorsChanged);
+  building.resumeClones((def, error) {
+    floorsChanged();
+    if (def == null) {
+      stderr.writeln('agent-office: $error');
+      return toastAll('🛗 $error', ToastLevel.warn);
+    }
+    if (openFloor(def) == null) return;
+    stdout.writeln("  the ${def.name} floor's clone finished (${def.dir})");
+    toastAll('🛗 New floor: ${def.name}, added by ${def.addedBy}');
+  });
   // Workers still running from the last office are back at their desks before anyone walks in.
   await Future.wait([for (final f in floors.values) f.ready]);
 
@@ -1675,7 +1688,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
               .add(repo, who, (def) {
                 floorsChanged();
                 toastAll('🛗 $who is adding a floor for ${def.repo ?? def.name}…');
-              })
+              }, c.accountId)
               .then((r) {
                 floorsChanged();
                 final def = r.floor;
@@ -1713,6 +1726,20 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
           ballChanged(floor);
         } else {
           sendTo(c, BallMsg(floor.court.state()));
+        }
+      case 'floor.cancel':
+        final admin = meOf(c.accountId).admin;
+        final id = _str(msg['floor'], 64);
+        final def = building.pending().where((d) => d.id == id).firstOrNull;
+        final err = building.cancel(
+          id,
+          '$who stopped the clone',
+          (owner) => admin || (owner != null && owner == c.accountId),
+        );
+        if (err != null) {
+          warn(c, err);
+        } else {
+          toastAll('🛗 $who stopped cloning ${def?.repo ?? def?.name ?? 'a floor'}');
         }
       case 'floor.remove':
         // Everyone's workers on it stop: admins do it.
@@ -2719,6 +2746,8 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     machine.stop();
     sky.stop();
     themes.stop();
+    // A restart leaves clones running for the next office to pick up; closing for good stops them.
+    building.shutdown(keep);
     final closing = [for (final f in floors.values) f.shutdown(keep)];
     ledger.flush();
     limits.close();

@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:office_shared/shared.dart';
 import 'package:path/path.dart' as p;
 
+import 'clone.dart';
 import 'github.dart';
 
 /// A floor as floors.json keeps it.
@@ -43,7 +44,20 @@ class FloorDef {
 /// How long the list of repositories `gh` can see is reused before it's asked again.
 const int _reposTtlMs = 5 * 60000;
 const int _maxRepos = 1000;
-const Duration _cloneTimeout = Duration(minutes: 30);
+
+/// A floor on its way: its clone, and who can stop it besides admins.
+class _Pending {
+  _Pending(this.def, {this.owner, this.empty = false});
+
+  final FloorDef def;
+  CloneRun? run;
+
+  /// The account that added it.
+  final String? owner;
+
+  /// GitHub says the repository has no commits yet, so there's nothing to check out.
+  final bool empty;
+}
 
 final RegExp _idRe = RegExp(r'^[a-z0-9-]{1,40}$');
 
@@ -65,10 +79,20 @@ class Building {
     this._dataDir,
 
     /// Where new floors are cloned unless another folder was picked.
-    this._defaultProjectsDir,
-  ) : _file = p.join(_dataDir, 'floors.json'),
-      _pickedFile = p.join(_dataDir, 'projects-folder.json'),
-      _localFile = p.join(_dataDir, 'local-floor.json') {
+    this._defaultProjectsDir, {
+
+    /// Clones run in this terminal (`agent-office setup`), showing git's own progress and asking
+    /// there if ssh or git has a question, rather than watched by the office.
+    this.terminal = false,
+
+    /// How clones are watched (tests shorten these).
+    this.cloneStall = cloneStallTime,
+    this.cloneTick = const Duration(seconds: 1),
+  }) : _file = p.join(_dataDir, 'floors.json'),
+       _pickedFile = p.join(_dataDir, 'projects-folder.json'),
+       _localFile = p.join(_dataDir, 'local-floor.json'),
+       _clonesFile = p.join(_dataDir, 'cloning.json'),
+       _logsDir = p.join(_dataDir, 'clones') {
     _load();
     _picked = _loadPicked(_pickedFile);
     _localOff = _loadPicked(_localFile);
@@ -82,8 +106,19 @@ class Building {
   _Picked? _picked;
   final List<FloorDef> _defs = [];
 
-  /// Floors being cloned, by lower-cased repo. Not saved until the clone is there.
-  final Map<String, FloorDef> _cloning = {};
+  final bool terminal;
+  final Duration cloneStall;
+  final Duration cloneTick;
+
+  /// Floors being cloned, by lower-cased repo. Not in floors.json until the clone is there, but in cloning.json.
+  final Map<String, _Pending> _cloning = {};
+  final String _clonesFile;
+
+  /// Where clones write their progress.
+  final String _logsDir;
+
+  /// Hears when a clone gets further along.
+  void Function()? _cloneChanged;
   ({int at, Future<List<RepoChoice>> repos})? _repoCache;
 
   /// The checkout the office was started in (see ensureLocal), and the repository it's a checkout of.
@@ -134,7 +169,88 @@ class Building {
   List<FloorDef> list() => _defs;
 
   /// Floors on their way: shown in the elevator, but nobody can ride there yet.
-  List<FloorDef> pending() => [..._cloning.values];
+  List<FloorDef> pending() => [for (final x in _cloning.values) x.def];
+
+  /// How a floor on its way is getting on, once git says.
+  CloneProgress? cloneProgress(String id) => _pendingFloor(id)?.run?.progress;
+
+  /// [fn] hears whenever a clone gets further along (at most once a second each).
+  void watchClones(void Function() fn) => _cloneChanged = fn;
+
+  /// Stops a floor's clone before it's there, if [may] lets whoever's asking stop one `owner` added.
+  /// git tidies away what it had cloned, and add() resolves to [why]. Returns why it can't, if it can't.
+  String? cancel(String id, String why, bool Function(String? owner) may) {
+    final x = _pendingFloor(id);
+    if (x == null) return _defs.any((d) => d.id == id) ? 'That floor is already there' : 'No such floor';
+    if (!may(x.owner)) return 'Only admins, or whoever added it, can stop a floor on its way';
+    final run = x.run;
+    if (run == null) return "There's no clone to stop yet — try again in a moment";
+    run.stop(why);
+    return null;
+  }
+
+  /// Picks up the clones an office before this one left running (it restarted mid-clone): each goes
+  /// on as a floor on its way, and [done] hears how it ended (the floor, or why there's none). One
+  /// that finished with no office watching becomes its floor now.
+  void resumeClones(void Function(FloorDef? floor, String? error) done) {
+    for (final s in _loadClones()) {
+      final repo = normalizeRepo(s.repo);
+      if (repo == null || _defs.any((d) => sameRepo(d.repo, repo)) || _cloning.containsKey(repo.toLowerCase())) {
+        dropLog(s.log);
+        continue;
+      }
+      final def = _newDef(s.name, repo, s.dir, s.addedBy);
+      final pending = _Pending(def, owner: s.owner, empty: s.empty);
+      final run = CloneRun.adopt(
+        s.pid,
+        s.log,
+        group: s.group,
+        changed: () => _cloneChanged?.call(),
+        stall: cloneStall,
+        tick: cloneTick,
+      );
+      if (run == null) {
+        dropLog(s.log);
+        if (_checkoutAt(def.dir, repo, pending.empty) != null) {
+          done(null, 'Cloning $repo stopped when the office restarted — add it again');
+          continue;
+        }
+        _defs.add(def);
+        _save();
+        done(def, null);
+        continue;
+      }
+      pending.run = run;
+      _cloning[repo.toLowerCase()] = pending;
+      unawaited(
+        run.done.then((end) {
+          final err = _settle(pending, end);
+          _cloning.remove(repo.toLowerCase());
+          _saveClones();
+          if (err == null) {
+            _defs.add(def);
+            _save();
+          }
+          done(err == null ? def : null, err);
+        }),
+      );
+    }
+    _saveClones();
+  }
+
+  /// The office is closing: its clones stop, or with [keep] (a restart) carry on for the next office to pick up.
+  void shutdown(bool keep) {
+    for (final x in _cloning.values) {
+      if (keep) {
+        x.run?.release();
+      } else {
+        x.run?.stop('The office closed before the clone finished');
+      }
+    }
+    if (keep) return;
+    _cloning.clear();
+    _saveClones();
+  }
 
   /// Makes the checkout the office was started in a floor, if it isn't one yet: `agent-office <dir>`
   /// has always meant that project. Once someone takes it off the building it stays off (the office
@@ -183,8 +299,8 @@ class Building {
     if (def == null) {
       return (
         floor: null,
-        error: _cloning.values.any((d) => d.id == id)
-            ? "That floor is still being cloned — take it off once it's there"
+        error: _pendingFloor(id) != null
+            ? "That floor is still being cloned — stop it, or take it off once it's there"
             : 'No such floor',
       );
     }
@@ -199,8 +315,14 @@ class Building {
 
   /// Clones a repository into the projects folder and adds it as a floor. `started` hears about the
   /// floor as soon as the clone begins; resolves to the finished floor, or to why there's none. A
-  /// checkout that's already where the clone would go is used as it is.
-  Future<({FloorDef? floor, String? error})> add(String input, String by, void Function(FloorDef def) started) async {
+  /// checkout that's already where the clone would go is used as it is. [account] (whoever's adding it)
+  /// can stop the clone, as admins can.
+  Future<({FloorDef? floor, String? error})> add(
+    String input,
+    String by,
+    void Function(FloorDef def) started, [
+    String? account,
+  ]) async {
     ({FloorDef? floor, String? error}) fail(String e) => (floor: null, error: e);
     final wanted = normalizeRepo(input);
     if (wanted == null) return fail('Pick a repository, or type it as owner/name');
@@ -220,9 +342,11 @@ class Building {
     }
     // Asking GitHub first says whether this login can see it at all, and gets the name's real case.
     String repo;
+    var empty = false;
     try {
-      final view = jsonDecode(await gh(['repo', 'view', wanted, '--json', 'nameWithOwner'], _dataDir, 30000));
+      final view = jsonDecode(await gh(['repo', 'view', wanted, '--json', 'nameWithOwner,isEmpty'], _dataDir, 30000));
       repo = normalizeRepo(view is Map ? view['nameWithOwner'] : null) ?? wanted;
+      empty = view is Map && view['isEmpty'] == true;
     } catch (err) {
       return fail("Couldn't find $wanted on GitHub: ${err is GhError ? err.message : err}");
     }
@@ -233,13 +357,15 @@ class Building {
     final dest = p.join(projectsDir, owner, name);
     if (_defs.any((d) => _resolve(d.dir) == dest)) return fail('$dest is already a floor');
     final def = _newDef(name, repo, dest, by);
-    _cloning[key] = def;
+    final pending = _Pending(def, owner: account, empty: empty);
+    _cloning[key] = pending;
     started(def);
     try {
-      final err = await _cloneInto(repo, dest);
+      final err = await _clone(pending);
       if (err != null) return fail(err);
     } finally {
       _cloning.remove(key);
+      _saveClones();
     }
     _defs.add(def);
     _save();
@@ -262,8 +388,120 @@ class Building {
     return repos;
   }
 
+  /// Clones a floor on its way, or checks that what's already there is its repository. Resolves to an error, if any.
+  Future<String?> _clone(_Pending x) async {
+    final dest = x.def.dir;
+    final repo = x.def.repo!;
+    final there = _checkoutAt(dest, repo, x.empty);
+    // Cloned before (a floor that was taken off the list, or by hand): move back in.
+    if (there == null) return null;
+    if (there != _none) return there;
+    try {
+      Directory(p.dirname(dest)).createSync(recursive: true);
+    } catch (err) {
+      return "Couldn't make ${p.dirname(dest)}: ${err is FileSystemException ? err.message : err}";
+    }
+    if (terminal) return _cloneHere(repo, dest);
+    try {
+      Directory(_logsDir).createSync(recursive: true);
+      if (!Platform.isWindows) Process.runSync('chmod', ['700', _logsDir]);
+    } catch (err) {
+      return "Couldn't make $_logsDir: ${err is FileSystemException ? err.message : err}";
+    }
+    final started = await CloneRun.start(
+      repo,
+      dest,
+      p.join(_logsDir, '${repo.replaceFirst('/', '__')}.log'),
+      changed: () => _cloneChanged?.call(),
+      stall: cloneStall,
+      tick: cloneTick,
+      gh: ghCommand,
+    );
+    final run = started.run;
+    if (run == null) return started.error;
+    x.run = run;
+    _saveClones();
+    return _settle(x, await run.done);
+  }
+
+  /// Whether a clone that ended left its checkout: an error if it didn't.
+  String? _settle(_Pending x, CloneEnd end) {
+    final run = x.run;
+    if (run != null) dropLog(run.log);
+    if (end.stopped != null) return end.stopped;
+    // Its exit code isn't the word on it (it ran detached): the checkout is.
+    if (_checkoutAt(x.def.dir, x.def.repo!, x.empty) == null) return null;
+    return "Couldn't clone ${x.def.repo}: ${whyCloneFailed(end.output)}";
+  }
+
+  _Pending? _pendingFloor(String id) => _cloning.values.where((x) => x.def.id == id).firstOrNull;
+
+  /// The clones under way, as cloning.json keeps them for the next office to pick up (see resumeClones).
+  List<
+    ({
+      int pid,
+      int? group,
+      String log,
+      String? owner,
+      bool empty,
+      String name,
+      String? repo,
+      String dir,
+      String addedBy,
+    })
+  >
+  _loadClones() {
+    try {
+      final saved = jsonDecode(File(_clonesFile).readAsStringSync());
+      if (saved is! List) return const [];
+      return [
+        for (final s in saved)
+          if (s is Map &&
+              s['pid'] is int &&
+              (s['pid'] as int) > 0 &&
+              s['log'] is String &&
+              // Its log is one of ours (it gets deleted), in .agent-office/clones.
+              p.dirname(s['log'] as String) == _logsDir &&
+              s['dir'] is String &&
+              p.isAbsolute(s['dir'] as String) &&
+              s['name'] is String)
+            (
+              pid: s['pid'] as int,
+              group: s['group'] is int ? s['group'] as int : null,
+              log: s['log'] as String,
+              owner: s['owner'] is String ? s['owner'] as String : null,
+              empty: s['empty'] == true,
+              name: s['name'] as String,
+              repo: s['repo'] is String ? s['repo'] as String : null,
+              dir: s['dir'] as String,
+              addedBy: s['addedBy'] is String ? s['addedBy'] as String : '?',
+            ),
+      ];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// Keeps the clones under way in cloning.json, so the next office can pick them up after a restart.
+  void _saveClones() {
+    final saved = [
+      for (final x in _cloning.values)
+        if (x.run case final run?)
+          {...x.def.toJson(), 'pid': run.pid, 'group': run.group, 'log': run.log, 'owner': ?x.owner, 'empty': x.empty},
+    ];
+    try {
+      if (saved.isNotEmpty) {
+        _writePrivate(_clonesFile, const JsonEncoder.withIndent('  ').convert(saved));
+      } else if (File(_clonesFile).existsSync()) {
+        File(_clonesFile).deleteSync();
+      }
+    } catch (err) {
+      stderr.writeln("agent-office: couldn't save $_clonesFile: $err");
+    }
+  }
+
   FloorDef _newDef(String name, String? repo, String dir, String by) {
-    final all = [..._defs, ..._cloning.values];
+    final all = [..._defs, for (final x in _cloning.values) x.def];
     final taken = {for (final d in all) d.id};
     var base = name.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-').replaceAll(RegExp(r'^-+|-+$'), '');
     if (base.length > 32) base = base.substring(0, 32);
@@ -424,43 +662,53 @@ String? originRepo(String dir) {
   }
 }
 
-/// Clones `repo` to `dest`, or checks that what's already there is that repository. Resolves to an error, if any.
-Future<String?> _cloneInto(String repo, String dest) async {
+/// [_checkoutAt]: nothing is there yet.
+const _none = 'none';
+
+/// What's at [dest]: nothing yet ([_none]), a checkout of [repo] (null), or why it's in the way. A
+/// clone that was cut off has its origin but no commit checked out; an [empty] repository has none to.
+String? _checkoutAt(String dest, String repo, bool empty) {
   final type = FileSystemEntity.typeSync(dest);
-  if (type != FileSystemEntityType.notFound) {
-    if (type != FileSystemEntityType.directory) return "$dest is already there and isn't a folder";
-    if (Directory(dest).listSync().isNotEmpty) {
-      // Cloned before (a floor that was taken off the list, or by hand): move back in.
-      return sameRepo(originRepo(dest), repo)
-          ? null
-          : "$dest already exists and isn't a checkout of $repo — move it out of the way first";
-    }
+  if (type == FileSystemEntityType.notFound) return _none;
+  if (type != FileSystemEntityType.directory) return "$dest is already there and isn't a folder";
+  if (Directory(dest).listSync().isEmpty) return _none;
+  if (!sameRepo(originRepo(dest), repo)) {
+    return "$dest already exists and isn't a checkout of $repo — move it out of the way first";
   }
-  try {
-    Directory(p.dirname(dest)).createSync(recursive: true);
-  } catch (err) {
-    return "Couldn't make ${p.dirname(dest)}: ${err is FileSystemException ? err.message : err}";
+  if (!empty && !_hasCommit(dest)) {
+    return "$dest is a clone of $repo that didn't finish — delete that folder and add the floor again";
   }
+  return null;
+}
+
+bool _hasCommit(String dir) {
   try {
-    final proc = await Process.start('gh', ['repo', 'clone', repo, dest], workingDirectory: p.dirname(dest));
-    var killed = false;
-    final timer = Timer(_cloneTimeout, () {
-      killed = true;
-      proc.kill();
-    });
-    final out = proc.stdout.drain<void>();
-    final err = proc.stderr.transform(const Utf8Decoder(allowMalformed: true)).join();
+    return Process.runSync('git', [
+          'rev-parse',
+          '--verify',
+          '--quiet',
+          'HEAD^{commit}',
+        ], workingDirectory: dir).exitCode ==
+        0;
+  } catch (_) {
+    return false;
+  }
+}
+
+/// Clones [repo] to [dest] in this terminal: git shows its progress, and ssh or git can ask here.
+/// Resolves to an error, if any.
+Future<String?> _cloneHere(String repo, String dest) async {
+  try {
+    final proc = await Process.start(
+      ghCommand,
+      ['repo', 'clone', repo, dest],
+      workingDirectory: p.dirname(dest),
+      mode: ProcessStartMode.inheritStdio,
+    );
     final code = await proc.exitCode;
-    timer.cancel();
-    await out;
-    final stderrText = await err;
-    if (code == 0 && !killed) return null;
-    final raw = stderrText.isNotEmpty ? stderrText : 'Command failed: gh repo clone $repo $dest';
-    final lines = raw.trim().split('\n').where((l) => l.isNotEmpty).toList();
-    final why = lines.sublist(lines.length > 2 ? lines.length - 2 : 0).join(' ');
-    return "Couldn't clone $repo: ${why.isNotEmpty ? why : 'gh failed'}";
+    return code == 0 ? null : "Couldn't clone $repo: gh failed (exit $code)";
   } on ProcessException catch (e) {
-    return "Couldn't clone $repo: ${e.errorCode == 2 ? 'spawn gh ENOENT' : e.message}";
+    return e.errorCode == 2 ? "The GitHub CLI (gh) isn't installed on this machine" : "Couldn't run gh: ${e.message}";
   }
 }
 
