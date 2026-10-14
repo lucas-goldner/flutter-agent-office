@@ -17,7 +17,9 @@ office that ran on the Node server carries on with its data, sessions and worker
   in `lib/src` are the pieces it wires together: `workers.dart` and `ptys.dart`/`ptyhost.dart` the
   workers and their terminals (each agent provider an adapter in `providers/`, the manager never
   asking which one a worker runs; DeepSeek Harness runs over ACP in `dsh.dart` instead of a terminal),
-  `floor.dart` everything one floor (project) has, `config.dart`,
+  `floor.dart` everything one floor (project) has (with `floorplan.dart` its desk signs and back office,
+  `garage.dart` its cars and `jail.dart` the workers a map keeps), `maps.dart` the building's map (map.json
+  and the maps of your own in .agent-office/maps/), `config.dart`,
   `auth.dart` and `accounts.dart` settings and sign-in, and so on.
 - `test/` is `package:test`: `dart test` (several minutes; the PTY tests start real hosts, each compiled
   under `dart run`).
