@@ -73,6 +73,12 @@ class PlacesHub {
     _wasUp = up;
   }
 
+  /// Off in the elevator: away from the eyepiece, back from the line.
+  void stopAll() {
+    telescope.exit();
+    thrower.stop();
+  }
+
   /// A message from the office about one of these places.
   void onMessage(ServerMsg msg) => bar.onMessage(msg);
 

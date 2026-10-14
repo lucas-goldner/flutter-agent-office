@@ -194,7 +194,11 @@ void main() {
       r.keys({'S'});
       r.frames(1);
       expect(r.player.seat, isNull);
-      expect(overlaps(bench, r.player.pos.x, r.player.pos.z), isFalse, reason: 'stood inside the bench at ${r.player.pos}');
+      expect(
+        overlaps(bench, r.player.pos.x, r.player.pos.z),
+        isFalse,
+        reason: 'stood inside the bench at ${r.player.pos}',
+      );
       r.keys({});
       r.frames(30);
       expect(r.player.pos.y, 0, reason: 'still on the balcony');
@@ -207,5 +211,19 @@ void main() {
     for (final bad in ['couch:3', 'couch:', 'couch', 'sofa:0', 'couch:-1', 'couch:1.5', '']) {
       expect(seatAt(bad), isNull, reason: bad);
     }
+  });
+
+  test('down in the garage, the camera stays on this side of its back and west walls (#169)', () {
+    final r = Rig([]);
+    final p = r.player
+      ..setView(ViewMode.third)
+      ..camDist = 4
+      // Looking at the north-west corner from inside it: the camera would go out through both walls.
+      ..camYaw = -3 * math.pi / 4;
+    p.pos.setValues(Floor.minX + 1, streetY, Floor.minZ + 1);
+    p.updateCamera(snap: true);
+    expect(p.camPos.x, greaterThanOrEqualTo(Floor.minX + 0.4 - 1e-6));
+    expect(p.camPos.z, greaterThanOrEqualTo(Floor.minZ + 0.4 - 1e-6));
+    expect(p.camPos.y, lessThan(-slab), reason: 'under the garage ceiling');
   });
 }

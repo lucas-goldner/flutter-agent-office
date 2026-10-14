@@ -367,7 +367,9 @@ class OfficeController implements OfficeActions {
   bool _firstWelcome = true;
   String _bootVersion = '';
   UpgradePhase? _upgradePhase;
-  ({String floor, Timer timer})? _riding;
+
+  /// A ride under way; [garage] is down to the garage under the floor.
+  ({String floor, Timer timer, bool garage})? _riding;
 
   /// Up the ladder or down a pole to another floor, while it comes.
   ({String floor, Grip how, Timer timer})? _climbing;
@@ -708,7 +710,8 @@ class OfficeController implements OfficeActions {
             _placeAt((x: mine.x, y: mine.y, z: mine.z, rotY: mine.rotY));
             _arrive(back: true);
           } else {
-            _placeInCar((x: mine.x, z: mine.z));
+            // The car you were in (or nearest): the garage's, if you were down there.
+            _placeInCar((x: mine.x, z: mine.z), !roofHub.upTop && mine.y < -slab - 1);
             _arrive();
           }
           _devPlace();
@@ -828,13 +831,13 @@ class OfficeController implements OfficeActions {
 
   // ---- Floors & the elevator --------------------------------------------------------------------
 
-  /// In the car, facing out through the doors: where you are when you arrive on a floor.
-  void _placeInCar([({double x, double z})? at]) {
+  /// In the car, facing out through the doors: where you are when you arrive on a floor, or down in the [garage].
+  void _placeInCar([({double x, double z})? at, bool garage = false]) {
     if (!inOffice) return _placeAtSpawn();
     final spot = at != null && inElevator(at.x, at.z)
         ? at
         : (x: lay.Elevator.x, z: (ElevatorCar.minZ + ElevatorCar.maxZ) / 2);
-    _placeAt((x: spot.x, y: 0, z: spot.z, rotY: 0));
+    _placeAt((x: spot.x, y: garage ? player.street : 0, z: spot.z, rotY: 0));
   }
 
   /// On your feet at [at], facing its rotY and looking straight ahead.
@@ -898,7 +901,7 @@ class OfficeController implements OfficeActions {
   }
 
   @override
-  void showElevator() => openElevator(scope, ride: ride);
+  void showElevator() => openElevator(scope, ride: ride, downstairs: downstairs);
 
   // ---- The HUD: a few buttons on the top bar, everything else in the ☰ menu (#100) -------------
 
@@ -1137,7 +1140,7 @@ class OfficeController implements OfficeActions {
     ModalStack.instance.closeAll();
     hanger.cancel();
     if (player.seat != null) standUp();
-    _riding = (floor: floorId, timer: Timer(const Duration(seconds: 10), _rideFailed));
+    _riding = (floor: floorId, timer: Timer(const Duration(seconds: 10), _rideFailed), garage: false);
     player.enabled = false;
     player.input.clear();
     fade.value = true;
@@ -1169,29 +1172,71 @@ class OfficeController implements OfficeActions {
     return false;
   }
 
-  /// Rides the elevator to another floor. From outside the car, you step in while the lights are down.
+  /// Rides the elevator to another floor, up to the roof or down to the garage ([garageStop]). From
+  /// outside the car, you step in while the lights are down. Between your floor and the garage under it
+  /// you stay on that floor, just further down the shaft (or back up it); from the roof, the garage is
+  /// the bottom floor's.
   @override
-  void ride(String floorId) {
-    if (_riding != null || _climbing != null || floorId == store.floor) return;
+  void ride(String to) {
+    final garage = to == garageStop;
+    final floorId = garage ? (roofHub.upTop || store.floor == null ? _builtFloors().firstOrNull?.id : store.floor) : to;
+    if (_riding != null || _climbing != null || floorId == null) return;
+    if (floorId == store.floor && garage == downstairs()) return;
     // Another floor is somewhere else: a walk over to someone here ends (walkTo rides on with its own).
     if (!_walkRide) _stopWalking();
     ModalStack.instance.closeAll();
     hanger.cancel();
     climber.abort();
+    places.stopAll();
+    rooms.golf.stop();
     final inside = inElevator(player.pos.x, player.pos.z);
-    _riding = (floor: floorId, timer: Timer(const Duration(seconds: 10), _rideFailed));
+    final within = floorId == store.floor;
+    _riding = (floor: floorId, timer: Timer(const Duration(seconds: 10), _rideFailed), garage: garage);
     player.enabled = false;
     player.input.clear();
-    roofHub.lift().setOpen(false);
+    lift().setOpen(false);
     // Wait for the doors to shut on you, then dim the lights and go.
     Timer(Duration(milliseconds: inside ? 650 : 0), () {
       fade.value = true;
       Timer(const Duration(milliseconds: 320), () {
-        _placeInCar(inside ? (x: player.pos.x, z: player.pos.z) : null);
-        net.send(FloorGoCmd(floorId));
+        _placeInCar(inside ? (x: player.pos.x, z: player.pos.z) : null, garage && within);
+        if (within) {
+          Timer(const Duration(milliseconds: 700), _rodeWithin);
+        } else {
+          // Down to the garage from the roof: the bottom floor, and down its shaft once it's here (see _arrive).
+          net.send(
+            FloorGoCmd(floorId, at: garage ? (x: player.pos.x, y: streetBelow(0), z: player.pos.z, rotY: 0) : null),
+          );
+        }
       });
     });
   }
+
+  /// Down to the garage under your floor, or back up from it: still the same floor, so the lights come
+  /// up and the doors open.
+  void _rodeWithin() {
+    final r = _riding;
+    if (r == null) return;
+    r.timer.cancel();
+    _riding = null;
+    fade.value = false;
+    _doorsOpen();
+  }
+
+  /// There: the doors open onto it, with a ding.
+  void _doorsOpen() {
+    Timer(const Duration(milliseconds: 450), () {
+      lift().setOpen(true);
+      sound.ding(Ding.done);
+      player.enabled = !ModalStack.instance.open;
+    });
+  }
+
+  /// Down in the garage (or out on the street) under the floor you're on.
+  bool downstairs() => !roofHub.upTop && inOffice && player.pos.y < -slab - 1;
+
+  /// The elevator where you are: the office's, its stop down in the garage, or the one up on the roof.
+  Elevator lift() => !roofHub.upTop && downstairs() ? office.garageLift : roofHub.lift();
 
   /// Someone blew the floor you're on off the building (💣 in the elevator): a flash, smoke and
   /// debris and the screen shaking, then the lights go down and you ride to the next floor.
@@ -1240,7 +1285,7 @@ class OfficeController implements OfficeActions {
     if (_riding == null) return;
     _riding = null;
     fade.value = false;
-    roofHub.lift().setOpen(store.floor != null);
+    lift().setOpen(store.floor != null);
     player.enabled = !ModalStack.instance.open;
   }
 
@@ -1594,6 +1639,8 @@ class OfficeController implements OfficeActions {
     if (climber.active) climber.abort();
     final r = _riding;
     if (r != null) {
+      // Down to the garage: into the car at the bottom of the shaft, now that the street is where this floor has it.
+      if (r.garage && store.floor != null) _placeInCar((x: player.pos.x, z: player.pos.z), true);
       r.timer.cancel();
       _riding = null;
     }
@@ -1608,15 +1655,11 @@ class OfficeController implements OfficeActions {
     fade.value = false;
     if (back) {
       // The doors stand open, the way the last one out left them.
-      roofHub.lift().setOpen(true);
+      lift().setOpen(true);
       player.enabled = !ModalStack.instance.open;
       return;
     }
-    Timer(const Duration(milliseconds: 450), () {
-      roofHub.lift().setOpen(true);
-      sound.ding(Ding.done);
-      player.enabled = !ModalStack.instance.open;
-    });
+    _doorsOpen();
   }
 
   void _paintPrs() {
@@ -3165,8 +3208,9 @@ class OfficeController implements OfficeActions {
   // ---- Targeting and the hint -------------------------------------------------------------------
 
   Interactable? _pickTarget() {
-    // Everything you can use is upstairs; down on the street you're under it all.
-    if (player.pos.y < -slab - 1) return null;
+    // Nearly everything you can use is upstairs; down on the street you're under it all, but for the
+    // elevator's stop in the garage.
+    final below = player.pos.y < -slab - 1;
     Interactable? best;
     var bestD = double.infinity;
     final up = roofHub.usable;
@@ -3174,6 +3218,7 @@ class OfficeController implements OfficeActions {
     for (final list in up != null ? [up] : here) {
       for (final it in list) {
         if (it.off) continue;
+        if (below != (it.y ?? 0) < -slab - 1) continue;
         // Up on the loft, or down underneath it.
         if (((it.y ?? 0) - player.pos.y).abs() > 1.5) continue;
         final d = math.sqrt(math.pow(it.x - player.pos.x, 2) + math.pow(it.z - player.pos.z, 2));
@@ -3320,6 +3365,16 @@ class OfficeController implements OfficeActions {
         );
       case InteractKind.whiteboard:
         return whiteboardHint(othersDrawing(store.drawing, store.you, store.peers));
+      case InteractKind.elevator when identical(it, office.garageLift.interactable):
+        final f = store.currentFloor();
+        return (
+          'garage|${f?.name}|${store.floors.length}',
+          [
+            const HintTitle('🛗 Elevator'),
+            HintAside(f != null ? 'Garage · up to ${clip(f.name, 24)}' : 'Garage'),
+            const HintKey('E', 'Choose a floor'),
+          ],
+        );
       case InteractKind.elevator:
         final f = store.currentFloor();
         final n = store.floors.length;

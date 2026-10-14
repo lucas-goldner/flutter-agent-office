@@ -88,6 +88,7 @@ class Tower {
     _deck = tc('#e8a87c');
     _cornice = tc('#fffaf3');
     _behind = toonUnique(hex('#2b2d42'));
+    _concrete = flat('#d3d6dd');
     _dark = tc('#a9d8f5');
     // Glass you can't see into; at night some of it glows, as though someone upstairs is still at it.
     _lit = [
@@ -117,7 +118,19 @@ class Tower {
 
   final Node group = Node(name: 'tower');
   final List<Collider> _colliders;
-  late final Material _paint, _band, _frame, _alu, _ink, _wood, _deck, _cornice, _behind, _dark, _glint, _railGlass;
+  late final Material _paint,
+      _band,
+      _frame,
+      _alu,
+      _ink,
+      _wood,
+      _deck,
+      _cornice,
+      _behind,
+      _concrete,
+      _dark,
+      _glint,
+      _railGlass;
   late final List<Material> _lit;
   late final Material _curb, _steel, _steelDark, _beacon, _stage, _black, _led, _truss, _barWood, _counter, _shelf;
   late final Material _pergola, _parasol;
@@ -352,6 +365,20 @@ class Tower {
           ),
         );
       }
+    }
+    // Down in the garage (the elevator goes there), the bottom floor's slab over it, seen from
+    // underneath: on that floor it's stack.dart's.
+    if (floorIndex > 0 && floorIndex < count) {
+      parts.add(
+        mesh(
+          transformed(planeXY(_B.maxX - _B.minX, _B.maxZ - _B.minZ), rotX(math.pi / 2)),
+          _concrete,
+          (_B.minX + _B.maxX) / 2,
+          -floorIndex * storey - slab,
+          (_B.minZ + _B.maxZ) / 2,
+          false,
+        ),
+      );
     }
     // On top, a cornice, and the rooftop bar over it; but up on the roof, it's the roof's own.
     final top = plan.top;

@@ -2,12 +2,13 @@
 // trees, neighbours and clouds (a port of outside.ts). Also what the sky drives at night: NightParts.
 
 import 'dart:math' as math;
-import 'dart:ui' show Color, Offset, Path, Rect;
+import 'dart:ui' show Color, Offset, Paint, PaintingStyle, Path, Rect;
 
 import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
 import 'package:office_shared/layout.dart' hide Elevator, Gong, Jukebox, Whiteboard;
+import 'package:office_shared/layout.dart' as lay show Elevator;
 
 import '../text.dart';
 import '../toon.dart';
@@ -152,11 +153,33 @@ Future<Texture2D> _garageFloorTexture() {
     double X(double x) => (x - Bldg.minX) * px;
     double Z(double z) => (z - Bldg.minZ) * px;
     final line = fill(linColor('#fffaf0'));
+    const lift = (
+      minX: lay.Elevator.x - lay.Elevator.width / 2,
+      maxX: lay.Elevator.x + lay.Elevator.width / 2,
+      minZ: elevatorFront,
+      maxZ: elevatorFront + 2.2,
+    );
     for (final (z0, z1) in [(Bldg.minZ + 0.3, Bldg.minZ + 5.8), (Bldg.maxZ - 5.8, Bldg.maxZ - 0.3)]) {
       for (var x = -16.0; x <= 16.01; x += _bay) {
+        // Not out of the elevator's shaft and across the box in front of it.
+        if (z0 < lift.maxZ && x > lift.minX - 0.1 && x < lift.maxX + 0.1) continue;
         g.drawRect(Rect.fromLTWH(X(x) - 2, Z(z0), 4, (z1 - z0) * px), line);
       }
     }
+    // The box in front of the elevator's doors: a yellow outline, hatched across.
+    final box = Rect.fromLTRB(X(lift.minX), Z(lift.minZ), X(lift.maxX), Z(lift.maxZ));
+    final yellow = Paint()
+      ..color = linColor('#ffd166')
+      ..style = PaintingStyle.stroke;
+    g.save();
+    g.clipRect(box);
+    yellow.strokeWidth = 7;
+    for (var d = -3.0; d < 6; d += 0.45) {
+      g.drawLine(Offset(X(lift.minX + d), Z(lift.minZ)), Offset(X(lift.minX + d + 3), Z(lift.maxZ)), yellow);
+    }
+    g.restore();
+    yellow.strokeWidth = 8;
+    g.drawRect(box.deflate(4), yellow);
     // Arrows down the aisle, pointing out to the street.
     final arrow = fill(linColor('#ffd166'));
     for (final x in [-8.0, 8.0]) {

@@ -21,7 +21,7 @@ final List<(String, String)> helpRows = [
   ),
   (
     '🛗',
-    'Every project is a floor: step into the elevator on the north wall and press E (or click the project name, top left) to go to another one or add a project',
+    'Every project is a floor: step into the elevator on the north wall and press E (or click the project name, top left) to go to another one or add a project. It goes down to the garage too, and back up from there',
   ),
   (
     '📝',

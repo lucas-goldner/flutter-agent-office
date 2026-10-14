@@ -82,6 +82,7 @@ class Office {
     required this.tvScreen,
     required this.bossScreen,
     required this.elevator,
+    required this.garageLift,
     required this.gong,
     required this.jukebox,
     required this.whiteboard,
@@ -112,6 +113,7 @@ class Office {
     if (index > 0 && !has) colliders.add(l.plug.collider);
     if (index == 0 && has) colliders.remove(l.plug.collider);
     l.tower.set(index, count);
+    garageLift.setFloor(streetBelow(index));
   }
 
   final Node group;
@@ -128,6 +130,9 @@ class Office {
   /// The monitor on the boss's desk upstairs, where Minesweeper plays (ui/arcade.dart).
   final Face bossScreen;
   final Elevator elevator;
+
+  /// The elevator's stop down in the garage, under the building.
+  final Elevator garageLift;
 
   /// The merge gong by the PR board.
   final Gong gong;
@@ -208,6 +213,7 @@ class Office {
       d.vacancy.rotation = yaw(t * 1.2);
     }
     elevator.update(dt);
+    garageLift.update(dt);
     gong.update(dt);
   }
 }
@@ -598,6 +604,12 @@ Office buildOffice({required LabelHub labels}) {
   group.add(elevator.group);
   interactables.add(elevator.interactable);
   fixture(Side.north, lay.Elevator.x, wallHeight / 2, lay.Elevator.width + 0.1, wallHeight);
+  // Its stop in the garage, at the bottom of the same shaft: as tall as the garage, and as far down
+  // as the street is (see setLevel).
+  final garageLift = buildElevator(-slab - streetY)..setSign('🛗 Garage');
+  group.add(garageLift.group);
+  colliders.addAll(garageLift.colliders);
+  interactables.add(garageLift.interactable);
 
   // The gong, between the PR board and the elevator.
   final gong = buildGong();
@@ -634,6 +646,7 @@ Office buildOffice({required LabelHub labels}) {
       tvScreen: Face(tvNode, tvMat, Tv.width, Tv.height),
       bossScreen: bossScreen,
       elevator: elevator,
+      garageLift: garageLift,
       gong: gong,
       jukebox: jukebox,
       whiteboard: whiteboard,

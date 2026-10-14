@@ -1,5 +1,6 @@
 // The elevator: a steel shaft against the north wall, doors facing into the room. Every floor has
-// it in the same place; riding it swaps the floor around you while the doors are shut.
+// it in the same place; riding it swaps the floor around you while the doors are shut. The shaft
+// goes on down to the garage under the building, where it stops at the back wall too.
 
 import 'dart:math' as math;
 
@@ -8,6 +9,7 @@ import 'package:vector_math/vector_math.dart' as vm;
 
 import 'package:office_shared/layout.dart' as lay;
 import 'package:office_shared/layout.dart' show ElevatorCar, Floor, elevatorFront, wallHeight;
+
 import '../collider.dart';
 import '../text.dart';
 import '../toon.dart';
@@ -20,7 +22,16 @@ const _steelDark = '#8d99ae';
 const _brass = '#e9b949';
 
 class Elevator {
-  Elevator._(this.group, this.colliders, this.interactable, this._doors, this._doorCollider, this._pillar, this._half);
+  Elevator._(
+    this.group,
+    this.colliders,
+    this.interactable,
+    this._doors,
+    this._doorCollider,
+    this._pillar,
+    this._half,
+    this._height,
+  );
 
   final Node group;
 
@@ -34,6 +45,15 @@ class Elevator {
   final Collider _doorCollider;
   final double _pillar;
   final double _half;
+
+  /// How tall the storey it stands in is: the office's, whose walls go on up out of reach, or the
+  /// garage's, whose stop at its ceiling.
+  final double _height;
+  bool get _tall => _height >= wallHeight;
+  double _topOf(double floorY) => _tall ? 99 : floorY + _height;
+
+  /// The floor it stands on: open doors drop their collider under it.
+  double _floorY = 0;
   Node? _sign;
   bool _open = false;
   double _openness = 0; // 0 shut, 1 open
@@ -47,7 +67,19 @@ class Elevator {
   void setOpen(bool v) {
     _open = v;
     // Shut means shut at once for walking, so nobody slips out while they close.
-    if (!v) _doorCollider.top = 99;
+    if (!v) _doorCollider.top = _topOf(_floorY);
+  }
+
+  /// Stands it on the floor at [y]: the garage's goes further down the higher your floor is.
+  void setFloor(double y) {
+    _floorY = y;
+    group.position = vm.Vector3(0, y, 0);
+    interactable.y = y;
+    for (final c in colliders) {
+      c.bottom = y;
+      c.top = _topOf(y);
+    }
+    if (_open && _openness > 0.85) _doorCollider.top = y - 1;
   }
 
   /// The sign over the doors, and the display inside: which floor this is.
@@ -59,9 +91,19 @@ class Elevator {
     final sw = painted.w * kTextScale;
     painted.picture.dispose();
     final sign = textPlane(text, opts);
-    // As big as fits over the doors.
-    final s = math.min(1.6, (lay.Elevator.width + 0.6) / sw);
-    group.add(place(sign, x: lay.Elevator.x, y: lay.Elevator.doorHeight + 0.75, z: elevatorFront + 0.03, scale: s));
+    final sh = painted.h * kTextScale;
+    final header = _height - lay.Elevator.doorHeight;
+    // As big as fits over the doors (in the garage, under its low ceiling too).
+    final s = math.min(math.min(1.6, (lay.Elevator.width + 0.6) / sw), (header - 0.2) / sh);
+    group.add(
+      place(
+        sign,
+        x: lay.Elevator.x,
+        y: lay.Elevator.doorHeight + math.min(0.75, header / 2),
+        z: elevatorFront + 0.03,
+        scale: s,
+      ),
+    );
     _sign = sign;
   }
 
@@ -77,11 +119,13 @@ class Elevator {
         d.position = vm.Vector3(lay.Elevator.x + side * _half / 2 + side * e * (_pillar - 0.03), p.y, p.z);
       }
     }
-    if (_open && _openness > 0.85) _doorCollider.top = -1;
+    if (_open && _openness > 0.85) _doorCollider.top = _floorY - 1;
   }
 }
 
-Elevator buildElevator() {
+/// An elevator [height] tall, the storey it stands in: the office's, or the garage's under it. The
+/// office's walls go on up out of reach; a shorter one's stop at its ceiling.
+Elevator buildElevator([double height = wallHeight]) {
   const x = lay.Elevator.x, width = lay.Elevator.width, depth = lay.Elevator.depth, wall = lay.Elevator.wall;
   const doorWidth = lay.Elevator.doorWidth, doorHeight = lay.Elevator.doorHeight;
   final group = Node(name: 'elevator');
@@ -98,20 +142,29 @@ Elevator buildElevator() {
 
   // Side walls, the whole height of the room.
   for (final sx in [minX + wall / 2, maxX - wall / 2]) {
-    stat.add(mesh(box(wall, wallHeight, depth), steel, sx, wallHeight / 2, midZ));
+    stat.add(mesh(box(wall, height, depth), steel, sx, height / 2, midZ));
   }
   // The front: a pillar either side of the doorway, and a header over it up to the ceiling line.
   const pillar = (width - doorWidth) / 2;
   for (final (x0, x1) in [(minX, x - doorWidth / 2), (x + doorWidth / 2, maxX)]) {
-    stat.add(mesh(box(pillar, wallHeight, wall), steel, (x0 + x1) / 2, wallHeight / 2, front - wall / 2));
+    stat.add(mesh(box(pillar, height, wall), steel, (x0 + x1) / 2, height / 2, front - wall / 2));
   }
-  const header = wallHeight - doorHeight;
+  final header = height - doorHeight;
   stat.add(mesh(box(doorWidth, header, wall), steel, x, doorHeight + header / 2, front - wall / 2));
   // A brass frame round the doorway, and a kick plate along the bottom of the shaft.
   const frameT = 0.08;
   stat.add(mesh(box(doorWidth + frameT * 2, frameT, 0.05), brass, x, doorHeight + frameT / 2, front + 0.02, false));
   for (final sx in [-1, 1]) {
-    stat.add(mesh(box(frameT, doorHeight, 0.05), brass, x + sx * (doorWidth / 2 + frameT / 2), doorHeight / 2, front + 0.02, false));
+    stat.add(
+      mesh(
+        box(frameT, doorHeight, 0.05),
+        brass,
+        x + sx * (doorWidth / 2 + frameT / 2),
+        doorHeight / 2,
+        front + 0.02,
+        false,
+      ),
+    );
   }
   stat.add(mesh(box(width + 0.02, 0.25, wall + 0.04), steelDark, x, 0.125, front - wall / 2, false));
 
@@ -125,7 +178,15 @@ Elevator buildElevator() {
   stat.add(mesh(planeXY(inW - 0.3, 1.5), flat('#cfe8f5'), x, 1.55, back + 0.02, false));
   final glintMat = seeThrough('#ffffff', 0.5);
   for (final (gx, gw) in [(-0.4, 0.14), (-0.15, 0.06)]) {
-    stat.add(place(mesh(planeXY(gw, 1.1), glintMat, 0, 0, 0, false), x: x + gx, y: 1.6, z: back + 0.03, rot: euler(0, 0, -0.45)));
+    stat.add(
+      place(
+        mesh(planeXY(gw, 1.1), glintMat, 0, 0, 0, false),
+        x: x + gx,
+        y: 1.6,
+        z: back + 0.03,
+        rot: euler(0, 0, -0.45),
+      ),
+    );
   }
   void rail(double len, double px, double pz, bool alongX) {
     final r = mesh(cyl(0.025, 0.025, len, 8), brass, 0, 0, 0, false);
@@ -135,7 +196,16 @@ Elevator buildElevator() {
   rail(inW - 0.2, x, back + 0.08, true);
   rail(inD - 0.5, ElevatorCar.minX + 0.06, midZ - 0.1, false);
   rail(inD - 0.5, ElevatorCar.maxX - 0.06, midZ - 0.1, false);
-  stat.add(mesh(box(inW - 0.2, 0.06, 0.16), tc('#fff7d6', emissive: '#ffe08a'), x, doorHeight + 0.35, front - wall - 0.1, false));
+  stat.add(
+    mesh(
+      box(inW - 0.2, 0.06, 0.16),
+      tc('#fff7d6', emissive: '#ffe08a'),
+      x,
+      doorHeight + 0.35,
+      front - wall - 0.1,
+      false,
+    ),
+  );
 
   // The button panel inside, by the doors on the right as you face out (the west wall).
   final panelIn = Node(name: 'panel');
@@ -175,7 +245,15 @@ Elevator buildElevator() {
 
   group.add(mergeByMaterial(stat));
   final colliders = elevatorColliders();
+  if (height < wallHeight) {
+    // The garage's stops at its ceiling.
+    for (final c in colliders) {
+      c
+        ..bottom = 0
+        ..top = height;
+    }
+  }
   final interactable = Interactable(kind: InteractKind.elevator, x: x, z: front - 0.4, radius: 1.9);
   tagInteract(group, interactable);
-  return Elevator._(group, colliders, interactable, doors, colliders.last, pillar, half);
+  return Elevator._(group, colliders, interactable, doors, colliders.last, pillar, half, height);
 }

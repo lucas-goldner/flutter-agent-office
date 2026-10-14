@@ -99,6 +99,34 @@ void main() {
     expect(office.net.sent.whereType<FloorRemoveCmd>().map((c) => c.floor), ['f2']);
   });
 
+  testWidgets('the garage under floor 1, and your floor to ride back up to from down there (#169)', (tester) async {
+    final office = Office()..welcome(floors: [floorJson('f1', 'one'), floorJson('f2', 'two')], floor: 'f2');
+    await office.pump(tester, const SizedBox());
+    final rides = <String>[];
+    var down = false;
+    openElevator(office.scope(), ride: rides.add, downstairs: () => down);
+    await tester.pump();
+    await tester.pump();
+    final garage = find.byKey(const ValueKey('ride-garage'));
+    expect(garage, findsOneWidget);
+    expect(tester.getTopLeft(garage).dy, greaterThan(tester.getTopLeft(find.text('one')).dy), reason: 'under floor 1');
+    expect(find.text('you are here'), findsOneWidget);
+    await tester.tap(garage);
+    await tester.pump();
+    expect(rides, [garageStop]);
+
+    // Down there: the garage is where you are, and your floor is one to go back up to.
+    down = true;
+    openElevator(office.scope(), ride: rides.add, downstairs: () => down);
+    await tester.pump();
+    await tester.pump();
+    expect(find.text('Garage · you are here'), findsOneWidget);
+    expect(find.text('your floor'), findsOneWidget);
+    await tester.tap(find.text('two'));
+    await tester.pump();
+    expect(rides, [garageStop, 'f2']);
+  });
+
   testWidgets('no 💣 for people who are not admins', (tester) async {
     final office = Office()..welcome(floors: [floorJson('f1', 'one')], admin: false);
     await office.pump(tester, const SizedBox());

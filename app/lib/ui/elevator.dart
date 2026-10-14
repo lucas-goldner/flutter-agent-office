@@ -123,22 +123,40 @@ List<(bool, String, String)> setupSteps({
 
 bool elevatorPanelOpen() => _current != null;
 
-/// Opens the panel (once). [ride] takes you to another floor.
-void openElevator(OfficeScope scope, {required void Function(String floorId) ride}) {
+/// The garage under the building, where the elevator goes too. It isn't a floor: it's down under the one
+/// you're on (from the roof, the bottom one), level with the street.
+const garageStop = '@garage';
+
+/// Opens the panel (once). [ride] takes you to another floor, the roof or the garage ([garageStop]);
+/// [downstairs] says whether you're down in the garage (or out on the street) under the floor you're on.
+void openElevator(
+  OfficeScope scope, {
+  required void Function(String floorId) ride,
+  bool Function() downstairs = _upstairs,
+}) {
   if (_current != null) return;
   // Nowhere to go yet: the panel greets you. It closes like any other; the elevator (or the floor name in
   // the corner) opens it again.
   final setup = scope.store.floor == null;
   _current = ModalStack.instance.show(
-    (modal) => _ElevatorWindow(scope: scope, modal: modal, ride: ride, setup: setup),
+    (modal) => _ElevatorWindow(scope: scope, modal: modal, ride: ride, downstairs: downstairs, setup: setup),
     // A stray click shouldn't lose the first-run panel; ✕ and Esc still close it.
     backdropCloses: !setup,
     onClose: () => _current = null,
   );
 }
 
+bool _upstairs() => false;
+
 class _ElevatorWindow extends StatefulWidget {
-  const _ElevatorWindow({required this.scope, required this.modal, required this.ride, required this.setup});
+  const _ElevatorWindow({
+    required this.scope,
+    required this.modal,
+    required this.ride,
+    required this.downstairs,
+    required this.setup,
+  });
+  final bool Function() downstairs;
   final OfficeScope scope;
   final ModalHandle modal;
   final void Function(String floorId) ride;
@@ -377,7 +395,14 @@ class _ElevatorWindowState extends State<_ElevatorWindow> with ListenTo {
                 child: Row(
                   children: [
                     Expanded(
-                      child: _FloorButton(f, i, here: f.id == store.floor, onRide: () => _go(f.id)),
+                      child: _FloorButton(
+                        f,
+                        i,
+                        // Down in the garage, your floor is somewhere to go back up to.
+                        here: f.id == store.floor && !widget.downstairs(),
+                        mine: f.id == store.floor,
+                        onRide: () => _go(f.id),
+                      ),
                     ),
                     if (f.cloning == true && (store.me.admin || (_adding != null && sameRepo(f.repo, _adding!)))) ...[
                       const SizedBox(width: 8),
@@ -400,6 +425,18 @@ class _ElevatorWindowState extends State<_ElevatorWindow> with ListenTo {
                   ],
                 ),
               ),
+          // Under floor 1: the garage, level with the street.
+          if (store.floors.any((f) => f.cloning != true))
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: _GarageButton(
+                here: widget.downstairs(),
+                under: store.floor == roof
+                    ? 'Under ${store.floors.where((f) => f.cloning != true).firstOrNull?.name ?? 'the building'}, level with the street'
+                    : 'Under the building, level with the street: the cars, and the way out',
+                onRide: () => _go(garageStop),
+              ),
+            ),
           Padding(padding: const EdgeInsets.only(top: 16), child: _showAdd ? _addSection(setup) : _openAdd()),
         ],
       ),
@@ -660,10 +697,13 @@ class _ElevatorWindowState extends State<_ElevatorWindow> with ListenTo {
 }
 
 class _FloorButton extends StatefulWidget {
-  const _FloorButton(this.f, this.i, {required this.here, required this.onRide});
+  const _FloorButton(this.f, this.i, {required this.here, this.mine = false, required this.onRide});
   final FloorInfo f;
   final int i;
   final bool here;
+
+  /// The floor you're on, down in the garage under it.
+  final bool mine;
   final VoidCallback onRide;
 
   @override
@@ -715,7 +755,7 @@ class _FloorButtonState extends State<_FloorButton> {
           ? "You're on this floor"
           : cloning
           ? 'Still being cloned'
-          : 'Ride to ${f.name}',
+          : 'Ride ${widget.mine ? 'back up ' : ''}to ${f.name}',
       waitDuration: const Duration(milliseconds: 600),
       child: MouseRegion(
         cursor: disabled ? SystemMouseCursors.basic : SystemMouseCursors.click,
@@ -770,9 +810,9 @@ class _FloorButtonState extends State<_FloorButton> {
                               style: heavy(15, weight: FontWeight.w900),
                             ),
                           ),
-                          if (here) ...[
+                          if (here || widget.mine) ...[
                             const SizedBox(width: 8),
-                            Text('you are here', style: heavy(11, color: Swatch.muted)),
+                            Text(here ? 'you are here' : 'your floor', style: heavy(11, color: Swatch.muted)),
                           ],
                         ],
                       ),
@@ -929,6 +969,65 @@ class _RoofButton extends StatelessWidget {
                 message: 'People up there',
                 child: Text('🧑 $people', style: heavy(13)),
               ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+/// Under floor 1: the garage, level with the street.
+class _GarageButton extends StatelessWidget {
+  const _GarageButton({required this.here, required this.under, required this.onRide});
+
+  final bool here;
+  final String under;
+  final VoidCallback onRide;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+    message: here ? "You're down at the street" : 'Ride down to the garage',
+    waitDuration: const Duration(milliseconds: 600),
+    child: InkWell(
+      key: const ValueKey('ride-garage'),
+      onTap: here ? null : onRide,
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        decoration: BoxDecoration(
+          color: here ? Swatch.paper2 : Colors.white,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Swatch.ink, width: kBorder),
+          boxShadow: [if (!here) const BoxShadow(color: Swatch.ink, offset: Offset(0, 3))],
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: Swatch.ink,
+                shape: BoxShape.circle,
+                border: Border.all(color: Swatch.ink, width: kBorder),
+              ),
+              child: const Text('🏎️'),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(here ? 'Garage · you are here' : 'Garage', style: heavy(15, weight: FontWeight.w900)),
+                  Text(
+                    under,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: heavy(12, color: Swatch.muted, weight: FontWeight.w700),
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
       ),
