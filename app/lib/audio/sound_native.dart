@@ -468,6 +468,13 @@ class OfficeSound implements DogSounds {
     _count('paper');
   }
 
+  /// A page of the book in your hands turning over, at the bookshelf: a soft swish and a light pat.
+  void pageTurn() {
+    if (!_ready) return;
+    _count('pageTurn');
+    _play('pageTurn');
+  }
+
   /// Someone else's footstep, on the office floor unless `y` says where else.
   void stepAt(double x, double z, [double y = 0]) {
     if (!_ready) return;
@@ -661,6 +668,13 @@ class OfficeSound implements DogSounds {
   // ---- Alerts ----------------------------------------------------------------------------------
 
   /// Two notes up when a worker is done, a three-note nudge when it needs input.
+  /// The alarm for a worker that needs you; [again] is the soft reminder.
+  void needsYou([bool again = false]) {
+    if (!_ready) return;
+    _count(again ? 'needs-you-again' : 'needs-you');
+    _play(again ? 'needsYouAgain' : 'needsYou', bus: _Bus.alerts);
+  }
+
   void ding(Ding kind) {
     if (!_ready) return;
     _count(kind == Ding.done ? 'done' : 'needs_input');

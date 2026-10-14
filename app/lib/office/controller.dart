@@ -1980,6 +1980,7 @@ class OfficeController implements OfficeActions {
     },
     onCharacter: editProfile,
     previewSound: () => sound.ding(Ding.done),
+    previewNeedsYou: () => sound.needsYou(),
     notifier: notifier,
     onSignOut: signOut,
     outside: store.sky == null ? null : (now: describeSky(store.sky!), live: store.sky!.city != null),

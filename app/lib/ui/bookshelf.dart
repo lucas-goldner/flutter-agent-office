@@ -50,6 +50,8 @@ ModalHandle openBookshelf({
   String? repoUrl,
   void Function()? onTurn,
   void Function(String? what)? onReading,
+  bool pageSound = true,
+  ValueChanged<bool>? onPageSound,
 }) {
   late final ModalHandle handle;
   handle = ModalStack.instance.show(
@@ -59,6 +61,8 @@ ModalHandle openBookshelf({
       project: project,
       repoUrl: repoUrl,
       onTurn: onTurn ?? () {},
+      pageSound: pageSound,
+      onPageSound: onPageSound ?? (_) {},
       // What you're reading goes under your name tag, through the window's doing.
       onReading: (what) {
         handle.doing = what;
@@ -81,6 +85,8 @@ class _Bookshelf extends StatefulWidget {
     required this.repoUrl,
     required this.onTurn,
     required this.onReading,
+    required this.pageSound,
+    required this.onPageSound,
   });
 
   final ModalHandle modal;
@@ -90,11 +96,16 @@ class _Bookshelf extends StatefulWidget {
   final VoidCallback onTurn;
   final void Function(String? what) onReading;
 
+  /// Whether a page turning makes a sound (⚙️'s setting), and the 🔈 up top that turns it on or off.
+  final bool pageSound;
+  final ValueChanged<bool> onPageSound;
+
   @override
   State<_Bookshelf> createState() => _BookshelfState();
 }
 
 class _BookshelfState extends State<_Bookshelf> {
+  late bool _pageSound = widget.pageSound;
   final TextEditingController _filter = TextEditingController();
   final FocusNode _filterFocus = FocusNode();
   final ScrollController _page = ScrollController();
@@ -290,6 +301,20 @@ class _BookshelfState extends State<_Bookshelf> {
     scrollBody: false,
     bodyPadding: EdgeInsets.zero,
     title: Text('📚 Bookshelf${widget.project != null ? ' · ${widget.project}' : ''}'),
+    headerExtras: [
+      OfficeButton(
+        key: const ValueKey('page-sound'),
+        label: _pageSound ? '🔈' : '🔇',
+        tooltip: _pageSound
+            ? 'Pages swish as they turn: click to turn that off'
+            : 'Pages turn silently: click to hear them swish',
+        dense: true,
+        onPressed: () {
+          setState(() => _pageSound = !_pageSound);
+          widget.onPageSound(_pageSound);
+        },
+      ),
+    ],
     body: Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [

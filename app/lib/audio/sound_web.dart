@@ -22,6 +22,7 @@ import 'package:office_shared/jukebox.dart' show jukeboxStream;
 import 'package:office_shared/layout.dart' show DjBooth, desks;
 import 'package:office_shared/layout.dart' as lay show Cabinet;
 import 'package:office_shared/protocol.dart' show GongWhy;
+
 import '../state/store.dart' show nowMs;
 import 'dnb.dart';
 import 'music.dart';
@@ -54,7 +55,9 @@ class OfficeSound implements DogSounds {
 
   /// Plays into `ctx` (an OfflineAudioContext) straight away, for rendering sounds in checks. No
   /// listeners, and nothing that waits for the clock to run (update() does nothing).
-  OfficeSound.offline(web.OfflineAudioContext ctx, {double Function()? clock}) : _now = clock ?? nowMs, _offline = true {
+  OfficeSound.offline(web.OfflineAudioContext ctx, {double Function()? clock})
+    : _now = clock ?? nowMs,
+      _offline = true {
     _start(ctx);
   }
 
@@ -358,10 +361,39 @@ class OfficeSound implements DogSounds {
     _count('paper');
   }
 
+  /// A page of the book in your hands turning over, at the bookshelf: a soft swish that rises as the page
+  /// sweeps through the air and falls as it settles, then a light pat as it lands. Quiet, since it comes
+  /// every screenful you scroll.
+  void pageTurn() {
+    final ctx = _ctx;
+    if (ctx == null) return;
+    _count('pageTurn');
+    final t0 = ctx.currentTime + 0.005;
+    final len = _rand(0.24, 0.32);
+    final swish = _noise(_buf.white);
+    final band = biquad(ctx, 'bandpass', 1000, 0.8);
+    band.frequency.setValueAtTime(_rand(800, 1100), t0);
+    band.frequency.exponentialRampToValueAtTime(_rand(2400, 3000), t0 + len * 0.6);
+    band.frequency.exponentialRampToValueAtTime(1400, t0 + len);
+    final g = ctx.createGain();
+    envelope(g.gain, t0, [(len * 0.3, 0.075), (len * 0.6, 0.13), (len, 0)]);
+    swish.to(band).to(biquad(ctx, 'lowpass', 4500, 0.7)).to(g).connect(_ambience);
+    swish.start(t0, _rand(0, 4.5));
+    swish.stop(t0 + len + 0.02);
+    _play(_pick(_buf.steps), gain: 0.08, rate: _rand(2.4, 2.8), when: t0 + len * 0.85);
+  }
+
   /// Someone else's footstep, on the office floor unless `y` says where else.
   void stepAt(double x, double z, [double y = 0]) {
     if (_ctx == null) return;
-    _play(_pick(_buf.steps), at: Pos(x, y + 0.1, z), gain: _rand(0.3, 0.38), rate: _rand(0.9, 1.1), ref: 1.5, rolloff: 1.4);
+    _play(
+      _pick(_buf.steps),
+      at: Pos(x, y + 0.1, z),
+      gain: _rand(0.3, 0.38),
+      rate: _rand(0.9, 1.1),
+      ref: 1.5,
+      rolloff: 1.4,
+    );
     _count('peerStep');
   }
 
@@ -880,6 +912,33 @@ class OfficeSound implements DogSounds {
   // ---- Alerts ----------------------------------------------------------------------------------
 
   /// Two notes up when a worker is done, a three-note nudge when it needs input.
+  /// Two rising pairs, brighter and louder than the ding for a worker that's done, so one is never taken for
+  /// the other. [again] is the reminder while it's still waiting: one pair, soft.
+  void needsYou([bool again = false]) {
+    unlock();
+    final ctx = _ctx;
+    if (ctx == null) return;
+    if (ctx.state == 'suspended' && !_offline) quietly((ctx as web.AudioContext).resume());
+    _count(again ? 'needs-you-again' : 'needs-you');
+    final level = needsYouLevel(again);
+    for (final (f, at) in again ? needsYouAgain : needsYouAlarm) {
+      final t0 = ctx.currentTime + at;
+      // A bell: the note, and a quieter one an octave up that dies away sooner.
+      for (final (mult, amp, len) in [(1.0, level, 0.34), (2.0, level * 0.3, 0.16)]) {
+        final o = ctx.createOscillator();
+        final g = ctx.createGain();
+        o.type = 'triangle';
+        o.frequency.value = f * mult;
+        g.gain.setValueAtTime(0.0001, t0);
+        g.gain.exponentialRampToValueAtTime(amp, t0 + 0.015);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + len);
+        o.to(g).to(_alerts);
+        o.start(t0);
+        o.stop(t0 + len + 0.05);
+      }
+    }
+  }
+
   void ding(Ding kind) {
     unlock();
     final ctx = _ctx;
@@ -1192,7 +1251,16 @@ class OfficeSound implements DogSounds {
     return s;
   }
 
-  void _play(web.AudioBuffer buffer, {Pos? at, double? when, double gain = 1, double rate = 1, web.AudioNode? dest, double ref = 1.5, double rolloff = 1.2}) {
+  void _play(
+    web.AudioBuffer buffer, {
+    Pos? at,
+    double? when,
+    double gain = 1,
+    double rate = 1,
+    web.AudioNode? dest,
+    double ref = 1.5,
+    double rolloff = 1.2,
+  }) {
     final ctx = _ctx!;
     final src = ctx.createBufferSource();
     src.buffer = buffer;

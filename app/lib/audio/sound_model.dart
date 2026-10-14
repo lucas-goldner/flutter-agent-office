@@ -63,6 +63,14 @@ enum Ding {
 }
 
 /// How the jukebox fades with distance: the same curve for its tunes (a panner) and a stream (by hand).
+/// The alarm for a worker that has stopped to ask you something, and the reminder while it's still waiting:
+/// the notes as (Hz, seconds in) (features/needsyou/sound.ts).
+const List<(double, double)> needsYouAlarm = [(784, 0), (1047, 0.13), (784, 0.42), (1175, 0.55)];
+const List<(double, double)> needsYouAgain = [(784, 0), (1047, 0.13)];
+
+/// How loud the alarm is, and the softer reminder.
+double needsYouLevel(bool again) => again ? 0.14 : 0.34;
+
 const double musicRef = 2.5;
 const double musicRolloff = 1.3;
 

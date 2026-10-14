@@ -247,7 +247,22 @@ class RoomsHub {
       floor: floor,
       project: c.store.project?.name,
       repoUrl: githubUrl(c.store.project?.remote),
+      onTurn: _turnPage,
+      pageSound: c.settings.pageTurns,
+      onPageSound: (on) => c.settings
+        ..pageTurns = on
+        ..save(),
     );
+  }
+
+  /// When a page last turned, so flicking through a doc is one swish rather than a swish a screenful.
+  double _turnedAt = 0;
+
+  /// You turned a page on the bookshelf (opened a doc, or scrolled a screenful).
+  void _turnPage() {
+    final now = nowMs();
+    if (c.settings.pageTurns && now - _turnedAt > 1000) c.sound.pageTurn();
+    _turnedAt = now;
   }
 
   /// E at a board agent: type it a request. It's hired with it when nobody is there yet.

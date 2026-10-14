@@ -125,6 +125,50 @@ class OfficeRender {
     return out;
   }
 
+  /// The alarm for a worker that needs you: two rising pairs of bells, brighter and louder than the ding for a
+  /// worker that's done. [again] is the reminder while it's still waiting: one pair, soft.
+  Float32List needsYou({bool again = false}) {
+    final notes = again ? needsYouAgain : needsYouAlarm;
+    final level = needsYouLevel(again);
+    final out = _buf(notes.last.$2 + 0.45);
+    for (final (f, at) in notes) {
+      // A bell: the note, and a quieter one an octave up that dies away sooner.
+      for (final (mult, amp, len) in [(1.0, level, 0.34), (2.0, level * 0.3, 0.16)]) {
+        final o = _osc(out.length, Wave.triangle, Param(f * mult), start: at, stop: at + len + 0.05);
+        final g = Param(1)
+          ..setValueAtTime(0.0001, at)
+          ..exponentialRampToValueAtTime(amp, at + 0.015)
+          ..exponentialRampToValueAtTime(0.0001, at + len);
+        mixInto(out, gain(o, sr, g));
+      }
+    }
+    return out;
+  }
+
+  // ---- The bookshelf ---------------------------------------------------------------------------------
+
+  /// A page of the book in your hands turning over: a soft swish that rises as the page sweeps through the
+  /// air and falls as it settles, then a light pat as it lands.
+  Float32List pageTurn() {
+    final len = _rand(0.24, 0.32);
+    final out = _buf(len + 0.3);
+    final n = out.length;
+    final f = Param(1000)
+      ..setValueAtTime(_rand(800, 1100), 0)
+      ..exponentialRampToValueAtTime(_rand(2400, 3000), len * 0.6)
+      ..exponentialRampToValueAtTime(1400, len);
+    final swish = biquad(
+      biquadAuto(_white(n, stop: len + 0.02), sr, BiquadType.bandpass, f, 0.8),
+      sr,
+      BiquadType.lowpass,
+      4500,
+      0.7,
+    );
+    mixInto(out, gain(swish, sr, Param(1)..envelope(0, [(len * 0.3, 0.075), (len * 0.6, 0.13), (len, 0)])));
+    mixInto(out, _sample(n, _pick(samples.steps), start: len * 0.85, rate: _rand(2.4, 2.8)), k: 0.08);
+    return out;
+  }
+
   // ---- Blips, chips, clinks ------------------------------------------------------------------------
 
   /// A short pitched blip: a bubble when [ratio] > 1, a drip when < 1. Added into [out].
@@ -590,6 +634,8 @@ Map<String, Float32List> renderBank(int sr, Bank bank, [int seed = 0]) {
       // The gong and the dings first, then the steps and the keys (just samples).
       out['ding.done'] = r.ding(Ding.done);
       out['ding.needsInput'] = r.ding(Ding.needsInput);
+      out['needsYou'] = r.needsYou();
+      out['needsYouAgain'] = r.needsYou(again: true);
       many('gong.merged', 2, () => r.gongStroke(1));
       many('gong.hit', 3, () => r.gongStroke(0.6 + 0.2 * r.rng.nextDouble()));
       out['gong.queue'] = r.gongQueue();
@@ -608,6 +654,7 @@ Map<String, Float32List> renderBank(int sr, Bank bank, [int seed = 0]) {
       many('typing', 3, () => r.typing(45));
     case Bank.rest:
       many('coffee', 2, r.coffee);
+      many('pageTurn', 4, r.pageTurn);
       many('bark2', 2, () => r.bark(2));
       many('bark3', 2, () => r.bark(3));
       many('yip', 2, r.yip);

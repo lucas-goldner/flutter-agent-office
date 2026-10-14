@@ -197,6 +197,9 @@ void main() {
       sensible('ding done', r.ding(Ding.done), minRms: 0.02, maxPeak: 0.4);
       sensible('ding needs input', r.ding(Ding.needsInput), minRms: 0.02, maxPeak: 0.4);
       sensible('coffee', r.coffee(), minRms: 0.005, maxPeak: 0.5);
+      sensible('needs you', r.needsYou(), minRms: 0.02, maxPeak: 0.6);
+      sensible('needs you again', r.needsYou(again: true), minRms: 0.01, maxPeak: 0.3);
+      sensible('page turn', r.pageTurn(), minRms: 0.002, maxPeak: 0.3);
       sensible('bark', r.bark(3), minRms: 0.01, maxPeak: 1);
       sensible('yip', r.yip(), minRms: 0.01, maxPeak: 1);
       for (final k in ['land', 'clear', 'over']) {
