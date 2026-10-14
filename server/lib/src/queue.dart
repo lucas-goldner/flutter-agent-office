@@ -18,6 +18,9 @@ abstract interface class QueueWorkers {
   List<WorkerInfo> list();
   bool deskOccupied(String deskId);
 
+  /// How many rows the floor's back office is built out, for its desks (see Wing).
+  int wing();
+
   /// The new worker, or why there's none.
   ({WorkerInfo? worker, String? error}) spawn(
     String deskId,
@@ -465,7 +468,8 @@ class TaskQueue {
   int _busyCount() => _tasks.where((t) => t.status == TaskStatus.running).length;
 
   /// A free desk, else a free bean bag.
-  String? _freeDesk() => nextFreeSeat(_workers.deskOccupied)?.id;
+  /// A free desk (in the back office too, as far as it's built), else a free bean bag.
+  String? _freeDesk() => nextFreeSeat(_workers.deskOccupied, _workers.wing())?.id;
 
   /// No desk or bean bag is free: send home a worker the queue hired whose task is finished (nobody
   /// is looking at its terminal), and return its seat. Workers with a linked PR go first — their work

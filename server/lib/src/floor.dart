@@ -12,6 +12,7 @@ import 'config.dart' show excludeFromGit;
 import 'court.dart';
 import 'decor.dart';
 import 'docs.dart';
+import 'floorplan.dart';
 import 'dog.dart';
 import 'github.dart';
 import 'jail.dart';
@@ -141,6 +142,8 @@ class Floor {
     project = projectInfo(def.dir, def.name, _ctx.agentCmd, _ctx.agentArgs);
 
     jail = Jail(dataDir);
+    // Before the workers and the dog: the back office's desks are only there once it's built.
+    plan = FloorPlanStore(dataDir);
 
     // Before the workers, so it hears about the ones who wake up needing input.
     dog = Dog(
@@ -150,6 +153,7 @@ class Floor {
         workers: () => _workers?.list() ?? const [],
         people: () => _ctx.peers(this),
         send: (state) => _ctx.emit(this, DogMsg(state)),
+        wing: () => plan.wing,
       ),
     );
 
@@ -194,7 +198,7 @@ class Floor {
       prompts: _ctx.prompts,
       dshProfile: _ctx.dshProfile,
       runAs: _ctx.runAs,
-    );
+    )..builtOut = () => plan.wing;
 
     github = GitHub(def.dir, (state) => _ctx.emit(this, GhIssuesMsg(state)), (state) {
       _ctx.emit(this, GhPullsMsg(state));
@@ -343,6 +347,9 @@ class Floor {
 
   /// Workers sent home on a map that keeps them (see MapPlan.sendHome).
   late final Jail jail;
+
+  /// The signs over its desks, and how far its back office is built out.
+  late final FloorPlanStore plan;
   late final Timer _timer;
 
   /// Pull requests merging, to ring the gong for.
@@ -450,6 +457,7 @@ class Floor {
           )
           .length,
       people: _ctx.people(this),
+      wing: plan.wing,
     );
   }
 

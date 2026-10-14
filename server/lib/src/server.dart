@@ -1038,6 +1038,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
       people: floor != null ? drawing(floor) : const [],
     ),
     meeting: floor?.meetings.state() ?? const MeetingState(),
+    plan: floor?.plan.state() ?? emptyPlan,
     jail: floor?.jail.state() ?? const JailState(),
   );
 
@@ -1487,6 +1488,13 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
   };
 
   void decorChanged(Floor floor) => toFloor(floor, DecorMsg(floor.decor.list()));
+
+  /// The floor's signs or back office changed: its people see it, and everyone sees the building's outside change.
+  void planChanged(Floor floor) {
+    toFloor(floor, PlanMsg(floor.plan.state()));
+    floorsChanged();
+  }
+
   void ballChanged(Floor floor) => toFloor(floor, BallMsg(floor.court.state()));
   void jukeboxChanged(Floor floor) => toFloor(floor, JukeboxMsg(floor.jukebox.state()));
   Future<void> teamChanged() async => broadcast(TeamMsg(await team.state()));
@@ -2335,6 +2343,42 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
           choice != null
               ? '🤖 $who set the office’s default worker'
               : '🤖 $who put the office’s default worker back to ${p.basename(cfg.agentCmd)}',
+        );
+      case 'desk.label':
+        final floor = here();
+        if (floor == null) break;
+        final deskId = _str(msg['deskId'], 32);
+        final r = floor.plan.label(deskId, msg['text'], msg['color'], who);
+        final done = r.done;
+        if (done == null) return warn(c, r.error);
+        if (done.label == null && done.old == null) break;
+        planChanged(floor);
+        final desk = deskById[deskId]?.label ?? 'a desk';
+        final label = done.label;
+        if (label != null && label.text != done.old?.text) {
+          toastFloor(floor, '🪧 $who hung a sign over $desk: “${label.text}”');
+        } else if (label == null) {
+          toastFloor(floor, '🪧 $who took the “${done.old!.text}” sign down from $desk');
+        }
+      case 'floor.expand':
+        final floor = here();
+        if (floor == null) break;
+        final r = floor.plan.expand();
+        if (r.desks == null) return warn(c, r.error);
+        planChanged(floor);
+        toastFloor(
+          floor,
+          '🔨 $who knocked out the back wall: ${r.desks!.map((id) => deskById[id]?.label).join(' and ')} are ready for workers',
+        );
+      case 'floor.shrink':
+        final floor = here();
+        if (floor == null) break;
+        final r = floor.plan.shrink(floor.workers.deskOccupied);
+        if (r.desks == null) return warn(c, r.error);
+        planChanged(floor);
+        toastFloor(
+          floor,
+          '🧱 $who walled the back office back up, and ${r.desks!.map((id) => deskById[id]?.label).join(' and ')} went with it',
         );
       case 'map.set':
         // Someone opened the list, or picked a map: either way the folder of maps of your own is read again first.

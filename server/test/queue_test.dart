@@ -30,6 +30,11 @@ class FakeWorkers implements QueueWorkers {
   @override
   bool deskOccupied(String deskId) => workers.any((w) => w.deskId == deskId);
 
+  /// How far the back office is built out.
+  int built = 0;
+  @override
+  int wing() => built;
+
   @override
   ({WorkerInfo? worker, String? error}) spawn(
     String deskId,
@@ -150,6 +155,35 @@ void main() {
     expect(q.state().tasks[0].outcome, TaskOutcome.done);
     q.retry(q.state().tasks[0].id);
     expect(f.workers[1].provider, AgentProvider.opencode);
+  });
+
+  test('the queue seats its workers at the back office once it is built, before any bean bag', () {
+    for (final built in [0, 1]) {
+      final f = fixture();
+      f.manager.built = built;
+      // Every desk in the room taken, by hand.
+      for (final d in desks) {
+        f.manager.workers.add(
+          WorkerInfo(
+            id: 'hand-${d.id}',
+            kind: WorkerKind.agent,
+            deskId: d.id,
+            name: 'Hand',
+            color: '#000000',
+            status: WorkerStatus.idle,
+            acked: true,
+            createdBy: 'Ada',
+            createdAt: 0,
+            cols: 80,
+            rows: 24,
+            viewers: const [],
+          ),
+        );
+      }
+      final q = f.open();
+      expect(q.add('Fix login', 'Tester', null, null, AgentProvider.claude), isNull);
+      expect(f.workers.last.deskId, built == 0 ? beanbags.first.id : wingDesks.first.id);
+    }
   });
 
   test("a task runs on the sign-ins of whoever queued it, after a restart and a retry too", () {

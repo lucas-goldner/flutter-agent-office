@@ -30,7 +30,7 @@ bool callsForDog(WorkerInfo w) => w.status == WorkerStatus.needsInput && !w.acke
 enum _Mode { lounge, nap, wander, follow, bark, pet }
 
 class DogEnv {
-  const DogEnv({required this.workers, required this.people, required this.send});
+  const DogEnv({required this.workers, required this.people, required this.send, this.wing});
 
   final List<WorkerInfo> Function() workers;
 
@@ -39,6 +39,9 @@ class DogEnv {
 
   /// To everyone on this floor.
   final void Function(DogState dog) send;
+
+  /// How many rows the floor's back office is built out, for getting round its desks too (see Wing).
+  final int Function()? wing;
 }
 
 /// One leg of its day: a [DogState] without its name, coat and elapsed time, and when it began.
@@ -82,6 +85,9 @@ class Dog {
 
   final String floorId;
   final DogEnv _env;
+
+  /// How far the floor's back office is built out.
+  int get _wing => _env.wing?.call() ?? 0;
   final String _file;
   late String _name;
   late final int _coat;
@@ -242,12 +248,12 @@ class Dog {
     var start = from;
     // Still under the desk (or on its way in), not just somewhere on the way there.
     final exit = _exit;
-    if (exit != null && !walkable(from.$1, from.$2)) {
+    if (exit != null && !walkable(from.$1, from.$2, _wing)) {
       pts.add(exit);
       start = exit;
     }
     _exit = null;
-    pts.addAll(route(start, to).skip(1));
+    pts.addAll(route(start, to, _wing).skip(1));
     if (last != null) pts.add(last);
     _go(pts, speed, act, face: face, workerId: workerId, following: following);
     return legSeconds(_leg.path, _leg.speed) * 1000;
@@ -316,7 +322,7 @@ class Dog {
     var spot = at;
     for (var i = 0; i < 30; i++) {
       final Pt p = (_rand(Floor.minX + 1, Floor.maxX - 1), _rand(Floor.minZ + 1, Floor.maxZ - 1));
-      if (walkable(p.$1, p.$2) && _dist(p, at) > 4) {
+      if (walkable(p.$1, p.$2, _wing) && _dist(p, at) > 4) {
         spot = p;
         break;
       }
@@ -333,7 +339,7 @@ class Dog {
     // A bean bag has no desk to get under, so it curls up beside it, on whichever side has room.
     if (desk.beanbag) {
       final (x, z) = deskPoint(desk, side * 1.05, 0.1);
-      if (!walkable(x, z)) side = -side;
+      if (!walkable(x, z, _wing)) side = -side;
     }
     final approach = desk.beanbag ? deskPoint(desk, side * 1.3, 1.2) : deskPoint(desk, side * 0.8, 1.3);
     final under = desk.beanbag ? deskPoint(desk, side * 1.05, 0.1) : deskPoint(desk, side * 0.45, 0.15);
@@ -367,7 +373,7 @@ class Dog {
       return _think();
     }
     final Pt person = (p.x, p.z);
-    final behind = nearestWalkable((p.x - math.sin(p.rotY) * 1.1, p.z - math.cos(p.rotY) * 1.1));
+    final behind = nearestWalkable((p.x - math.sin(p.rotY) * 1.1, p.z - math.cos(p.rotY) * 1.1), _wing);
     final end = _leg.path.last;
     final along = _leg.act == DogAct.sit && _leg.following == p.id;
     // Someone standing still who just turns around doesn't need it circling round behind them.

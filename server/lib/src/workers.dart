@@ -268,6 +268,12 @@ class _Handle implements WorkerHandle {
 }
 
 class WorkerManager implements QueueWorkers {
+  /// How many rows the floor's back office is built out: its desks past that aren't there to hire at (see Wing).
+  int Function() builtOut = () => 0;
+
+  @override
+  int wing() => builtOut();
+
   /// [env] stands in for the office's own environment (tests isolate the workers with it).
   WorkerManager(
     this._dir,
@@ -502,6 +508,7 @@ class WorkerManager implements QueueWorkers {
     if (effortError != null) return fail(effortError);
     final seat = deskById[deskId];
     if (seat == null) return fail('Unknown desk');
+    if (!deskBuilt(seat, wing())) return fail("${seat.label} isn't built yet: expand the back office first");
     final station = seat.station;
     if (deskOccupied(deskId)) {
       return fail(

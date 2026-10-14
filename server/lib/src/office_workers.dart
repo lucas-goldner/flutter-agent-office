@@ -332,7 +332,7 @@ Future<OfficeWorkersReply> officeWorkers(
   }
 
   if (method == 'GET' && action.isEmpty) {
-    final free = nextFreeSeat(floor.workers.deskOccupied);
+    final free = nextFreeSeat(floor.workers.deskOccupied, floor.plan.wing);
     final paused = ctx.hiringPaused;
     return _reply(200, {
       'floor': {'id': floor.id, 'name': floor.def.name, 'repo': floor.def.repo, 'branch': floor.project.branch},
@@ -458,7 +458,7 @@ Future<OfficeWorkersReply> officeWorkers(
   final read = readHireRequest(json, floor.project.agentProviders);
   final ask = read.ask;
   if (ask == null) return _reply(400, {'error': read.error});
-  final desk = ask.desk ?? nextFreeSeat(floor.workers.deskOccupied)?.id;
+  final desk = ask.desk ?? nextFreeSeat(floor.workers.deskOccupied, floor.plan.wing)?.id;
   if (desk == null) return _reply(409, {'error': 'Every desk and bean bag is taken: send someone home first'});
   // A model or effort is the office's default worker's unless it says whose.
   final provider =
