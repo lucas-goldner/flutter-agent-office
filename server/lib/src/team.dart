@@ -12,7 +12,7 @@ final String _helper = (Platform.environment['AGENT_OFFICE_TEAM_HELPER'] ?? '').
 const _teamUser = 'office';
 final _githubUser = RegExp(r'^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$');
 
-/// deploy/aws.sh also accepts other names, for keys invited from a file.
+/// deploy/aws.sh and deploy/azure.sh also accept other names, for keys invited from a file.
 final _member = RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,38}$');
 
 class _Run {
@@ -58,28 +58,53 @@ class TeamInvite {
   final String? error;
 }
 
-/// Who may open the SSH tunnel to this office, for offices deployed with deploy/aws.sh.
+const _setUpWithProvision = 'Invites work on offices set up with deploy/provision.sh or deploy/aws.sh';
+
+final _hostPort = RegExp(r'^([^:]+):(\d+)$');
+
+/// `office@host`, or `ssh://office@host:port` for a public address with a port of its own (not 22).
+String sshAddress(String publicHost) {
+  final m = _hostPort.firstMatch(publicHost);
+  final port = m?[2];
+  return port != null && port != '22' ? 'ssh://$_teamUser@${m![1]}:$port' : '$_teamUser@${m?[1] ?? publicHost}';
+}
+
+/// Who may open the SSH tunnel to this office, for offices set up with deploy/provision.sh (or
+/// deploy/aws.sh). On one that's on a Tailscale network, Tailscale decides who gets in instead: the
+/// panel then says how to share the machine there.
 class Team {
-  Team(this._publicHost, this._port, {HttpClient Function()? httpClient}) : _httpClient = httpClient ?? HttpClient.new;
+  /// [tailnet]: the office's name on its Tailscale network. [deploy]: how to run the script that
+  /// deployed the office (AGENT_OFFICE_DEPLOY_SCRIPT), for the commands the panel suggests.
+  Team(this._publicHost, this._port, {String? tailnet, String? deploy, HttpClient Function()? httpClient})
+    : _tailnet = tailnet,
+      _deploy = deploy,
+      _httpClient = httpClient ?? HttpClient.new;
 
   final String? _publicHost;
   final int _port;
+  final String? _tailnet;
+  final String? _deploy;
   final HttpClient Function() _httpClient;
   String? _fingerprint;
 
   /// Invites work when the office knows its public address and the helper is installed.
   bool get available => (_publicHost ?? '').isNotEmpty && File(_helper).existsSync();
 
-  /// user@host teammates tunnel to, when invites work.
-  String? get ssh => available ? '$_teamUser@$_publicHost' : null;
+  /// Where teammates tunnel to, when invites work: user@host, or ssh://user@host:port when the
+  /// public address has a port of its own (Railway's TCP proxy in front of port 22, a Fly.io app's IP
+  /// address, or the port a Dokploy or Coolify server publishes it on).
+  String? get ssh => available ? sshAddress(_publicHost!) : null;
 
   Future<TeamState> state() async {
     if (!available) {
+      if (_tailnet != null) return TeamState(port: _port, members: const [], tailnet: _tailnet, deploy: _deploy);
       return TeamState(
         port: _port,
         members: const [],
+        deploy: _deploy,
         unavailable:
-            'Invites work on offices deployed with deploy/aws.sh (re-run `deploy/aws.sh up` on one made before invites).',
+            'Invites work on offices set up with deploy/provision.sh or deploy/aws.sh (run it again on one made '
+            'before invites).',
       );
     }
     if (_fingerprint == null) {
@@ -93,6 +118,8 @@ class Team {
         members: const [],
         ssh: ssh,
         fingerprint: _fingerprint,
+        tailnet: _tailnet,
+        deploy: _deploy,
         error: "Couldn't list the team: ${list.err}",
       );
     }
@@ -102,12 +129,19 @@ class Team {
       if (parts.length != 2 || parts[0].isEmpty) continue;
       members.add(TeamMember(name: parts[0], keys: int.tryParse(parts[1]) ?? 0));
     }
-    return TeamState(port: _port, members: members, ssh: ssh, fingerprint: _fingerprint);
+    return TeamState(
+      port: _port,
+      members: members,
+      ssh: ssh,
+      fingerprint: _fingerprint,
+      tailnet: _tailnet,
+      deploy: _deploy,
+    );
   }
 
   /// Installs the SSH keys on `github.com/<user>.keys`, each limited to opening the tunnel.
   Future<TeamInvite> invite(String github) async {
-    if (!available) return const TeamInvite(error: 'Invites work on offices deployed with deploy/aws.sh');
+    if (!available) return const TeamInvite(error: _setUpWithProvision);
     final user = github.trim().replaceFirst(RegExp(r'^@'), '');
     if (!_githubUser.hasMatch(user)) return TeamInvite(error: '"$github" isn\'t a GitHub username');
     String text;
@@ -143,7 +177,7 @@ class Team {
   /// Removes their keys. Open tunnels drop for everyone (they just re-run the command).
   /// Null when done, else why not.
   Future<String?> remove(String name) async {
-    if (!available) return 'Invites work on offices deployed with deploy/aws.sh';
+    if (!available) return _setUpWithProvision;
     if (!_member.hasMatch(name)) return '"$name" isn\'t a teammate name';
     final r = await _runHelper(['remove', name]);
     if (r.code == 66) return "$name isn't invited";

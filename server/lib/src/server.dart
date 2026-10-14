@@ -30,7 +30,9 @@ import 'secrets.dart' show writePrivateFile;
 import 'services.dart';
 import 'sky.dart';
 import 'static.dart';
+import 'tailnet.dart';
 import 'team.dart';
+import 'tunnel/wire.dart' show Forward, ForwardList, forwardsPath;
 import 'theme.dart';
 import 'upgrade.dart';
 import 'usage.dart';
@@ -869,7 +871,8 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
   // Workers still running from the last office are back at their desks before anyone walks in.
   await Future.wait([for (final f in floors.values) f.ready]);
 
-  final team = Team(cfg.publicHost, cfg.port);
+  final team = Team(cfg.publicHost, cfg.port, tailnet: cfg.tailnet, deploy: cfg.deployScript);
+  final tailnet = Tailnet(cfg.tailnet);
 
   // Web servers the workers start, for the Services board and service tunnels (see relay.dart).
   // One scan covers every floor; each floor's board lists its own workers' servers.
@@ -880,11 +883,14 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         : (items ?? services.list()).where((s) => floor.workers.get(s.workerId) != null).toList(),
     port: cfg.port,
     ssh: team.ssh,
+    tailnet: cfg.tailnet,
+    deploy: cfg.deployScript,
   );
   services = Services(() => [for (final f in floors.values) ...f.workers.owners()], (items) {
     for (final c in List.of(clients.values)) {
       sendTo(c, ServicesMsg(servicesState(floorOf(c), items)));
     }
+    tailnet.sync(items.map((s) => s.port));
   });
 
   /// Who has a floor's whiteboard open.
@@ -1105,21 +1111,18 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
   late final void Function(RelicWebSocket ws, Uri url, Session session) onConnectionRef;
 
   Future<Result> handler(Request req) async {
-    // A service tunnel (localhost:5173 -> the office): relay to that worker's server.
-    final tunneled = tunneledPort(req.headers, cfg.port);
-    final svc = tunneled != null ? services.lookup(tunneled) : null;
-    if (tunneled != null && svc != null) {
-      if (_isUpgrade(req)) {
-        if (svc is ServiceLookupFound && auth.fromAnyCookie(req.headers)) return relayUpgrade(req, svc.info);
-        return _refuseUpgrade();
-      }
-      if (req.method == Method.post && req.url.path == relayLogin && !req.url.hasQuery) return await login(req);
-      if (!auth.fromAnyCookie(req.headers)) {
-        return signInPage(tunneled, accounts: accounts.any, shared: accounts.sharedPassword);
-      }
-      if (svc is ServiceLookupFound) return relayRequest(req, svc.info);
-      return stoppedPage(tunneled);
-    }
+    // A service tunnel (localhost:5173 -> the office, the tailnet, or `agent-office tunnel`): relay to
+    // that worker's server.
+    final tunneled = await answerTunneled(
+      req,
+      officePort: cfg.port,
+      tailnet: cfg.tailnet,
+      lookup: services.lookup,
+      signedIn: (r) => auth.fromAnyCookie(r.headers),
+      login: login,
+      loginOptions: () => (accounts: accounts.any, shared: accounts.sharedPassword),
+    );
+    if (tunneled != null) return tunneled;
     Uri url;
     String path;
     try {
@@ -1188,6 +1191,21 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
 
     final session = auth.fromRequest(req.headers);
     if (session == null) return _send(401, {'error': 'Not logged in'});
+    if (path == forwardsPath && method == Method.get) {
+      // The web servers the workers are running, for `agent-office tunnel` (tunnel/), which opens each
+      // one on the computer it runs on. Every floor's: a port is the machine's, whichever floor its worker sits on.
+      final items = [
+        for (final s in services.list())
+          Forward(
+            port: s.port,
+            title: (s.title ?? '').isNotEmpty ? s.title! : s.command,
+            command: s.command,
+            worker: workerFloor(s.workerId)?.workers.get(s.workerId)?.name,
+            floor: workerFloor(s.workerId)?.def.name,
+          ),
+      ];
+      return _send(200, ForwardList(port: cfg.port, items: items).toJson());
+    }
     if (path == '/api/whoami') return _send(200, {'ok': true, 'me': meOf(session.account?.id).toJson()});
     if (path.startsWith('/api/agents/') && method == Method.get) {
       // GET /api/agents/<provider>/models: the models the hire dialog offers, for the providers whose CLI lists them.
@@ -2659,7 +2677,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         projectsDir: building.projectsDirState(),
         ice: cfg.iceServers,
         chat: chat.recent(50),
-        invites: team.available,
+        invites: team.available || cfg.tailnet != null,
         version: upgrader.version,
         upgrade: upgrader.state,
         usage: ledger.state(),
@@ -2791,6 +2809,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     }
   });
   services.start();
+  tailnet.start(() => [for (final s in services.list()) s.port]);
 
   var down = false;
   shutdown = (keep) async {
@@ -2802,6 +2821,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     floorsTimer?.cancel();
     upgrader.stop();
     services.stop();
+    tailnet.stop();
     webhook.stop();
     machine.stop();
     sky.stop();
