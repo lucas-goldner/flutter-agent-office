@@ -1238,6 +1238,29 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
       final error = floor.whiteboard.addFile(body);
       return error != null ? _send(400, {'error': error}) : _send(200, {'ok': true});
     }
+    if (path == '/api/term/drop') {
+      // A file dropped or pasted into a worker's terminal, kept on this machine for the terminal to type its path.
+      if (method != Method.post) return _send(405, {'error': 'Method not allowed'});
+      if (!_sameOrigin(req, cfg)) return _send(403, {'error': 'Forbidden'});
+      if (floor == null) return _send(404, {'error': 'No such floor'});
+      final workerId = _str(_query(url, 'worker'), 32);
+      if (floor.workers.get(workerId) == null) return _send(404, {'error': 'No such worker'});
+      final tooBig = 'That file is too big to drop into a terminal (${dropMaxBytes ~/ 1024 ~/ 1024} MB at most)';
+      if ((req.body.contentLength ?? 0) > dropMaxBytes) return _send(413, {'error': tooBig});
+      final bytes = BytesBuilder(copy: false);
+      try {
+        await for (final chunk in req.read(maxLength: dropMaxBytes)) {
+          bytes.add(chunk);
+        }
+      } on MaxBodySizeExceeded {
+        return _send(413, {'error': tooBig});
+      } catch (_) {
+        return _send(400, {'error': 'Bad request'});
+      }
+      final type = req.headers['content-type']?.join(',') ?? '';
+      final file = floor.workers.drop(workerId, _str(_query(url, 'name'), 256), _str(type, 128), bytes.takeBytes());
+      return file != null ? _send(200, {'path': file}) : _send(500, {'error': 'The office could not keep that file'});
+    }
     if (path == '/api/changes/file') {
       // A changed picture in the Changes window at a desk: before (old) or after (new) the worker's edits.
       if (method != Method.get) return _send(405, {'error': 'Method not allowed'});

@@ -7,12 +7,14 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:office_pty/office_pty.dart' show chmodSync;
 import 'package:office_shared/shared.dart';
 import 'package:path/path.dart' as p;
 
 import 'agents.dart';
+import 'drops.dart';
 import 'dsh.dart';
 import 'github.dart' show gh;
 import 'headless.dart';
@@ -297,8 +299,10 @@ class WorkerManager implements QueueWorkers {
       () => _events.toast("The workers' terminal host stopped — resuming them", ToastLevel.warn),
     );
     _scrollback = ScrollbackStore(_dataDir);
+    _drops = DropStore(_dataDir);
     _restore();
     _scrollback.prune(_workers.keys.toSet());
+    _drops.prune(_workers.keys.toSet());
     // A session may have ended (and written its final tally) while the office was down.
     for (final w in _workers.values) {
       _scanUsage(w);
@@ -358,6 +362,12 @@ class WorkerManager implements QueueWorkers {
 
   /// Each worker's terminal on disk, so a restart doesn't wipe it (see history.dart).
   late final ScrollbackStore _scrollback;
+  late final DropStore _drops;
+
+  /// Keeps a file dropped or pasted into a worker's terminal on this machine; where it is, for the
+  /// terminal to type.
+  String? drop(String id, String name, String type, Uint8List body) =>
+      _workers.containsKey(id) ? _drops.save(id, name, type, body) : null;
   late final Timer _saveTimer;
 
   /// Picks every worker whose terminal outlived the last office (a dev-server reload, an upgrade)
@@ -646,6 +656,7 @@ class WorkerManager implements QueueWorkers {
     }
     w.term?.dispose();
     _scrollback.remove(id);
+    _drops.remove(id);
     _events.remove(id);
     _persist();
     return _sendHome(w.info, cleanup, landed, landedRepos);

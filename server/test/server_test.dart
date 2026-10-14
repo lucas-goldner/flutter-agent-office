@@ -200,8 +200,45 @@ void main() {
     final pong = await next((m) => m['t'] == 'pong');
     expect(pong['at'], 42, reason: 'whole numbers go out as the Node server sent them');
 
+    // A screenshot dropped into its terminal is kept on this machine, and goes when the worker does.
+    Future<HttpClientResponse> drop(String query, List<int> bytes, {String? origin}) async {
+      final req = await client.post('127.0.0.1', port, '/api/term/drop?$query');
+      req.headers.set('cookie', cookie);
+      if (origin != null) req.headers.set('origin', origin);
+      req.headers.set('content-type', 'image/png');
+      req.add(bytes);
+      return req.close();
+    }
+
+    final dropped = await drop('floor=project&worker=$id&name=my%20shot.png', [
+      1,
+      2,
+      3,
+    ], origin: 'http://127.0.0.1:$port');
+    final droppedBody = jsonDecode(await utf8.decoder.bind(dropped).join()) as Map<String, dynamic>;
+    expect(dropped.statusCode, 200);
+    final droppedPath = droppedBody['path'] as String;
+    expect(
+      droppedPath,
+      matches(
+        RegExp(
+          r'/\.agent-office/drops/'
+          '$id'
+          r'/[0-9a-f]{8}-my-shot\.png$',
+        ),
+      ),
+    );
+    expect(File(droppedPath).readAsBytesSync(), [1, 2, 3]);
+    final foreign = await drop('floor=project&worker=$id', [1], origin: 'http://evil.example');
+    await foreign.drain<void>();
+    expect(foreign.statusCode, 403);
+    final nobody = await drop('floor=project&worker=nobody', [1], origin: 'http://127.0.0.1:$port');
+    await nobody.drain<void>();
+    expect(nobody.statusCode, 404);
+
     send({'t': 'worker.kill', 'workerId': id});
     expect(await next((m) => m['t'] == 'worker.remove'), {'t': 'worker.remove', 'workerId': id});
+    expect(File(droppedPath).existsSync(), isFalse);
     await ws.close();
 
     expect(ptyHosts(), isNotEmpty, reason: 'the terminals ran in the PTY host');
