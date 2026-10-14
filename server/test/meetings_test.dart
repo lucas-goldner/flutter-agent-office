@@ -198,7 +198,6 @@ class MeetingFixture {
     int? rounds,
     String? output,
     String? title,
-    int? budget,
     int? pr,
     List<String>? parts,
     AgentProvider? provider,
@@ -211,7 +210,6 @@ class MeetingFixture {
       rounds: rounds,
       output: output,
       title: title,
-      budget: budget,
       pr: pr,
       parts: parts,
       provider: provider,
@@ -272,18 +270,28 @@ void main() {
     expect(Directory(p.join(f.dir, '.agent-office', 'meetings', m.id)).existsSync(), isTrue);
   });
 
-  test('the meeting stops once it runs over its token budget, and says so', () {
+  test('a meeting has no token limit: what its workers use is added up and shown, and never stops it', () {
     final f = fixture();
-    expect(f.start(budget: 100000), isNull);
+    expect(f.start(rounds: 2, output: 'decision.md'), isNull);
+    expect(f.current.toJson().containsKey('budget'), isFalse);
+    expect(f.said[0].text, isNot(matches(RegExp('budget|tokens', caseSensitive: false))));
+    expect(f.toasts[0], isNot(contains('tokens')));
+    // Cache reads, counted again on every call, run into the tens of millions within a few rounds.
     final w = f.workers[0];
     w.status = WorkerStatus.working;
-    w.usage = const Usage(input: 90000, output: 20000, cacheRead: 0, cacheWrite: 0, cost: 0.5, calls: 3);
+    w.usage = const Usage(input: 90000, output: 20000, cacheRead: 60000000, cacheWrite: 400000, cost: 31.5, calls: 300);
     f.room.onWorker(w.info);
-    final m = f.current;
-    expect(m.status, MeetingStatus.stopped);
-    expect(m.reason, contains('over budget: 110k of 100k tokens'));
-    // Whoever was busy is told to stop.
-    expect(f.manager.typed, [(id: w.id, data: '\x1b')]);
+    var m = f.current;
+    expect(m.status, MeetingStatus.running);
+    expect(m.tokens, 60510000);
+    expect(f.manager.typed, isEmpty);
+    // It runs on to its output all the same.
+    for (final i in [0, 1, 2]) {
+      f.take(i);
+    }
+    f.take(0, '# Redis');
+    m = f.current;
+    expect(m.status, MeetingStatus.done);
   });
 
   test('a worker that ends its part without writing the file is reminded once, then the meeting stops', () {

@@ -1,11 +1,11 @@
 // The meeting room's board and door sign (world/meeting.ts): the meeting's output file as it's being
 // written, and a room-booking panel saying what's on, the round, who has the floor and the tokens.
 
-import 'dart:math' as math;
-
 import 'package:flutter/painting.dart';
 import 'package:office_shared/meetings.dart';
 import 'package:office_shared/protocol.dart';
+
+export 'package:office_shared/meetings.dart' show meetingStage;
 
 import '../ui/screen_paint.dart';
 
@@ -18,15 +18,6 @@ List<String> speaking(Meeting m) => [
   for (final t in m.turns)
     if (t.state != MeetingTurnState.done) t.seat >= 0 && t.seat < m.seats.length ? m.seats[t.seat].role : '?',
 ];
-
-/// What's on the table in a line: "Round 2 of 3 · critiquing".
-String meetingStage(Meeting m) {
-  final doing = {
-    for (final t in m.turns)
-      if (t.state != MeetingTurnState.done) t.doing,
-  }.join(', ');
-  return 'Round ${m.round} of ${m.rounds}${doing.isNotEmpty ? ' · $doing' : ''}';
-}
 
 /// Breaks [text] into lines no wider than [maxW] in [style], cutting words too long for a line of their own.
 List<String> wrapText(Pen g, String text, double maxW, TextStyle style) {
@@ -211,25 +202,9 @@ void paintMeetingSign(Canvas canvas, MeetingState state) {
     if (who.isNotEmpty) {
       lines('💬 ${who.join(', ')}', g.style(30, weight: FontWeight.w700, color: css('#bde0fe')), y + 8, 3, 38);
     }
-    // The budget, as a bar that fills up, and what's been spent.
-    final f = math.min(1.0, m.tokens / math.max(1, m.budget));
-    const barY = h - 118;
-    g.rect(pad, barY, w - 2 * pad, 20, css('rgba(255, 255, 255, 0.18)'));
-    g.rect(
-      pad,
-      barY,
-      (w - 2 * pad) * f,
-      20,
-      css(
-        f > 0.9
-            ? '#ef476f'
-            : f > 0.7
-            ? '#ffd166'
-            : '#06d6a0',
-      ),
-    );
+    // What's been spent: shown, never a limit.
     g.text(
-      '${fmtTokens(m.tokens)} of ${fmtTokens(m.budget)} tokens',
+      '${fmtTokens(m.tokens)} tokens',
       pad,
       h - 70,
       g.style(30, weight: FontWeight.w800, color: paper),

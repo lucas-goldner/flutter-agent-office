@@ -8,7 +8,6 @@ import 'package:office_shared/protocol.dart';
 
 import '../interop/open_link.dart';
 import '../state/store.dart';
-import '../world/meeting.dart' show meetingStage;
 import 'confirm.dart';
 import 'modal.dart';
 import 'provider.dart';
@@ -45,7 +44,6 @@ const Map<MeetingTurnState, String> _partLabel = {
   int? pr,
   int? issue,
   int? rounds,
-  double? budgetThousands,
   AgentProvider? provider,
   String? model,
 }) {
@@ -58,7 +56,6 @@ const Map<MeetingTurnState, String> _partLabel = {
   }
   final bad = outputProblem(output.trim());
   if (bad != null) return (request: null, problem: bad);
-  final budget = ((budgetThousands ?? 0) * 1000).round();
   return (
     request: MeetingRequest(
       pattern: pattern,
@@ -70,7 +67,6 @@ const Map<MeetingTurnState, String> _partLabel = {
       pr: def.needs == PatternNeeds.pr ? pr : null,
       issue: issue,
       rounds: rounds,
-      budget: budget > 0 ? budget : null,
       provider: provider,
       model: model,
     ),
@@ -124,11 +120,10 @@ class _MeetingWindowState extends State<_MeetingWindow> {
   final TextEditingController _output = TextEditingController();
   final TextEditingController _parts = TextEditingController();
   final TextEditingController _rounds = TextEditingController();
-  final TextEditingController _budget = TextEditingController();
   final List<TextEditingController> _roles = [];
   late final ProviderPickerController _provider = ProviderPickerController(widget.store.project);
   late int? _pr = widget.preset?.pr;
-  bool _outputTouched = false, _budgetTouched = false;
+  bool _outputTouched = false;
 
   Store get store => widget.store;
   PatternDef get _def => meetingPatterns[_pattern]!;
@@ -149,7 +144,7 @@ class _MeetingWindowState extends State<_MeetingWindow> {
     store.rooms.meetingChanged.removeListener(_changed);
     store.topic(Topic.workers).removeListener(_changed);
     store.topic(Topic.pulls).removeListener(_changed);
-    for (final c in [_about, _title, _output, _parts, _rounds, _budget, ..._roles]) {
+    for (final c in [_about, _title, _output, _parts, _rounds, ..._roles]) {
       c.dispose();
     }
     _provider.dispose();
@@ -174,10 +169,6 @@ class _MeetingWindowState extends State<_MeetingWindow> {
     if (mounted) setState(() {});
   }
 
-  void _syncBudget() {
-    if (!_budgetTouched) _budget.text = '${_roles.length * tokensPerSeat ~/ 1000}';
-  }
-
   void _pick(MeetingPattern p) {
     _pattern = p;
     for (final c in _roles) {
@@ -187,7 +178,6 @@ class _MeetingWindowState extends State<_MeetingWindow> {
       ..clear()
       ..addAll([for (final r in _def.roles.take(_def.seats.defaultValue)) TextEditingController(text: r)]);
     _rounds.text = '${_def.rounds.defaultValue}';
-    _syncBudget();
     _syncOutput();
   }
 
@@ -198,7 +188,6 @@ class _MeetingWindowState extends State<_MeetingWindow> {
         final n = _roles.length;
         _roles.add(TextEditingController(text: n < _def.roles.length ? _def.roles[n] : 'Worker ${n + 1}'));
       }
-      _syncBudget();
     });
   }
 
@@ -215,7 +204,6 @@ class _MeetingWindowState extends State<_MeetingWindow> {
       pr: _pr,
       issue: widget.preset?.issue,
       rounds: int.tryParse(_rounds.text),
-      budgetThousands: double.tryParse(_budget.text),
       provider: _provider.value(),
       model: _provider.model(),
     );
@@ -244,7 +232,6 @@ class _MeetingWindowState extends State<_MeetingWindow> {
   Widget _status(Meeting m) {
     final p = meetingPatterns[m.pattern]!;
     final running = m.status == MeetingStatus.running;
-    final f = (m.tokens / (m.budget < 1 ? 1 : m.budget)).clamp(0.0, 1.0);
     final line = running
         ? '${meetingStage(m)} · called by ${m.calledBy} ${timeAgo(m.startedAt)}'
         : m.status == MeetingStatus.done
@@ -271,29 +258,10 @@ class _MeetingWindowState extends State<_MeetingWindow> {
         const SizedBox(height: 6),
         Text(line, style: heavy(13, color: Swatch.muted)),
         const SizedBox(height: 10),
-        Row(
-          children: [
-            Expanded(
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(6),
-                child: LinearProgressIndicator(
-                  value: f,
-                  minHeight: 10,
-                  backgroundColor: Swatch.paper2,
-                  color: f > 0.9
-                      ? Swatch.bad
-                      : f > 0.7
-                      ? Swatch.warn
-                      : Swatch.good,
-                ),
-              ),
-            ),
-            const SizedBox(width: 10),
-            Text(
-              '${meetingSpend(tokens: m.tokens, cost: m.cost, costKnown: m.costKnown)} of ${fmtTokens(m.budget)} tokens',
-              style: heavy(12, color: Swatch.muted),
-            ),
-          ],
+        // Meetings have no token limit: what the table has used is shown, never a reason to stop.
+        Text(
+          meetingSpend(tokens: m.tokens, cost: m.cost, costKnown: m.costKnown),
+          style: heavy(12, color: Swatch.muted),
         ),
         const SizedBox(height: 12),
         for (var i = 0; i < m.seats.length; i++) _seat(m, i, running),
@@ -573,15 +541,7 @@ class _MeetingWindowState extends State<_MeetingWindow> {
               child: _field(
                 'Round limit',
                 BoxInput(controller: _rounds, enabled: def.rounds.min != def.rounds.max),
-                '${def.roundsNote} (${def.rounds.min}–${def.rounds.max})',
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _field(
-                'Token budget (thousands)',
-                BoxInput(controller: _budget, onChanged: (_) => _budgetTouched = true),
-                'For everyone at the table together. Over it, the meeting stops.',
+                fixedRounds(def)?.line ?? '${def.roundsNote ?? ''} (${def.rounds.min}–${def.rounds.max})',
               ),
             ),
           ],

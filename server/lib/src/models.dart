@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'agents.dart';
+import 'package:office_shared/providers.dart' show isValidOpenCodeModel;
 
 const modelCommandTimeoutMs = 10000;
 const modelCommandMaxBuffer = 1024 * 1024;

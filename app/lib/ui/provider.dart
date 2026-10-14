@@ -10,14 +10,12 @@ import 'window_parts.dart' show SmallButton;
 import '../net/api.dart';
 
 import 'package:office_shared/protocol.dart';
+import 'package:office_shared/providers.dart' show providerMetaTable;
 
 import 'theme.dart';
 
-const Map<AgentProvider, String> kProviderLabel = {
-  AgentProvider.claude: 'Claude Code',
-  AgentProvider.opencode: 'OpenCode',
-  AgentProvider.codex: 'Codex',
-  AgentProvider.custom: 'Custom',
+final Map<AgentProvider, String> kProviderLabel = {
+  for (final p in AgentProvider.values) p: providerMetaTable[p]!.label,
 };
 
 /// Providers the server says this project can start.
@@ -74,7 +72,7 @@ String choiceLabel(AgentChoice c) {
 }
 
 /// The same names, under the HUD's older spelling.
-const Map<AgentProvider, String> providerNames = kProviderLabel;
+final Map<AgentProvider, String> providerNames = kProviderLabel;
 
 bool providerUsageTracked(AgentProvider? provider, ProjectInfo? project, [Usage? usage]) =>
     resolvedProvider(provider, project) == AgentProvider.claude || usage != null;
@@ -87,16 +85,11 @@ ProviderUsageState providerUsageState(AgentProvider? provider, ProjectInfo? proj
       AgentProvider.claude ||
       AgentProvider.opencode ||
       AgentProvider.codex => usage != null ? ProviderUsageState.tracked : ProviderUsageState.waiting,
-      AgentProvider.custom => usage != null ? ProviderUsageState.tracked : ProviderUsageState.untracked,
+      // The providers added upstream after this picker was ported: the client port fills them in.
+      _ => usage != null ? ProviderUsageState.tracked : ProviderUsageState.untracked,
     };
 
-String providerUsageNote(AgentProvider provider) => switch (provider) {
-  AgentProvider.claude => 'Office usage and budget track Claude Code.',
-  AgentProvider.codex => 'Review Office hooks in /hooks to enable tracking. Codex reports root-session tokens; subagents are excluded and cost is unavailable.',
-  AgentProvider.custom => 'Usage is untracked unless compatible Claude Code hooks report it.',
-  AgentProvider.opencode =>
-    'OpenCode reports model/provider estimates; they are not billing, and arrive after the first report.',
-};
+String providerUsageNote(AgentProvider provider) => providerMetaTable[provider]!.usage.note;
 
 AgentProvider _preferredProvider(List<AgentProvider> options, AgentProvider fallback) {
   final saved = AgentProvider.tryParse(storageGet(_providerKey));

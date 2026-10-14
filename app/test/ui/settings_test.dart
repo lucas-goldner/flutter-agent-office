@@ -69,7 +69,7 @@ void main() {
       expect(promptWarnings('issue.work', 'Do {{thing}}'), [
         '{{thing}} isn’t filled in here, so it’s sent just as it’s written.',
       ]);
-      final needs = promptWarnings(promptIds.firstWhere((id) => prompts[id]!.needs.isNotEmpty), 'Wait.');
+      final needs = promptWarnings(promptIds.firstWhere((id) => prompts[id]!.needs.contains('file')), 'Wait.');
       expect(needs.single, startsWith('The office counts on {{file}}'));
       expect(normPrompt(' a\r\nb \n'), 'a\nb');
     });

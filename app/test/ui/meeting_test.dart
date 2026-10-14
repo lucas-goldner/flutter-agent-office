@@ -27,7 +27,6 @@ Meeting meeting({MeetingStatus status = MeetingStatus.running, String? preview})
     MeetingTurn(seat: 1, doing: 'critiquing', file: 'a.md', state: MeetingTurnState.working),
     MeetingTurn(seat: 0, doing: 'critiquing', file: 'b.md', state: MeetingTurnState.done),
   ],
-  budget: 2000000,
   tokens: 1500000,
   cost: 1.25,
   costKnown: true,
@@ -59,7 +58,6 @@ void main() {
       roles: const ['Lead', 'A', 'B'],
       parts: parts,
       pr: pr,
-      budgetThousands: 3000,
     );
     expect(ask(MeetingPattern.debate, prompt: ' ').problem, isNotNull);
     expect(ask(MeetingPattern.review).problem, 'Pick a pull request');
@@ -67,7 +65,7 @@ void main() {
     expect(ask(MeetingPattern.mapreduce, parts: 'src/').problem, contains('at least 2 parts'));
     final ok = ask(MeetingPattern.mapreduce, parts: 'src/\n\n lib/ ').request!;
     expect(ok.parts, ['src/', 'lib/']);
-    expect(ok.budget, 3000000);
+    expect(ok.toJson().containsKey('budget'), isFalse);
     expect(ok.title, isNull);
     expect(ok.toJson()['pattern'], 'mapreduce');
   });

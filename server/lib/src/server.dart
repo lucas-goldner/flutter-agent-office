@@ -1841,7 +1841,6 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
           pr: count(msg['pr']),
           issue: count(msg['issue']),
           rounds: count(msg['rounds']),
-          budget: count(msg['budget']),
           provider: AgentProvider.tryParse(msg['provider']),
           model: msg.containsKey('model') && msg['model'] != null ? _str(msg['model'], openCodeModelMax + 1) : null,
           effort: AgentEffort.tryParse(msg['effort']),

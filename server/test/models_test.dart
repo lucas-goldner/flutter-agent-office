@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:agent_office_server/src/agents.dart';
 import 'package:agent_office_server/src/models.dart';
+import 'package:office_shared/providers.dart' show isValidOpenCodeModel;
 import 'package:test/test.dart';
 
 void main() {

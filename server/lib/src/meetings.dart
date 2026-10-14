@@ -163,7 +163,6 @@ class _Meeting {
     required this.startedAt,
     this.worktree,
     required this.notes,
-    required this.budget,
   });
 
   factory _Meeting.of(Meeting m) =>
@@ -185,7 +184,6 @@ class _Meeting {
           startedAt: m.startedAt,
           worktree: m.worktree,
           notes: m.notes,
-          budget: m.budget,
         )
         ..round = m.round
         ..step = m.step
@@ -219,7 +217,6 @@ class _Meeting {
   int step = 1;
   int? lastRound;
   List<_Turn> turns = [];
-  final int budget;
   int tokens = 0;
   double cost = 0;
   bool costKnown = true;
@@ -253,7 +250,6 @@ class _Meeting {
     step: step,
     lastRound: lastRound,
     turns: [for (final t in turns) t.view],
-    budget: budget,
     tokens: tokens,
     cost: cost,
     costKnown: costKnown,
@@ -377,10 +373,6 @@ class MeetingRoom {
       pattern.rounds.min,
       pattern.rounds.max,
     );
-    final budget = (req.budget != null && req.budget! > 0 ? req.budget! : count * tokensPerSeat).clamp(
-      50000,
-      maxMeetingBudget,
-    );
     final named = (req.title ?? '').replaceAll(RegExp(r'\s+'), ' ').trim();
     final title = _cut(
       named.isNotEmpty
@@ -431,7 +423,6 @@ class MeetingRoom {
       worktree: worktree,
       // Without git, the notes go with the floor's other state.
       notes: worktree != null ? meetingNotesDir : '.agent-office/meetings/$id',
-      budget: budget,
     );
     try {
       Directory(p.join(_cwd(m), m.notes)).createSync(recursive: true);
@@ -463,7 +454,7 @@ class MeetingRoom {
     _current = m;
     _changed();
     _events.toast(
-      '🤝 $by called a ${pattern.label} meeting: “$title” ($count workers, $rounds round${rounds == 1 ? '' : 's'} at most, ${fmtTokens(budget)} tokens)',
+      '🤝 $by called a ${pattern.label} meeting: “$title” ($count workers, $rounds round${rounds == 1 ? '' : 's'} at most)',
       ToastLevel.info,
     );
     return null;
@@ -547,9 +538,6 @@ class MeetingRoom {
       final w = s.workerId != null ? byId[s.workerId] : null;
       if (w == null) return _halt(m, 'the ${s.role} (${s.workerName ?? 'its worker'}) was sent home');
       if (w.status == WorkerStatus.exited) return _halt(m, "the ${s.role}'s agent (${w.name}) exited");
-    }
-    if (m.tokens > m.budget) {
-      return _halt(m, 'over budget: ${fmtTokens(m.tokens)} of ${fmtTokens(m.budget)} tokens');
     }
     var changed = false;
     for (final t in List.of(m.turns)) {
@@ -841,7 +829,6 @@ class MeetingRoom {
       'output': m.output,
       'outputPath': p.join(_cwd(m), m.output),
       'rounds': '${m.rounds} round${m.rounds == 1 ? '' : 's'}',
-      'budget': fmtTokens(m.budget),
       'where': where + inside,
     });
   }
