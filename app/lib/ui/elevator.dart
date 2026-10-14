@@ -79,11 +79,12 @@ bool elevatorPanelOpen() => _current != null;
 /// Opens the panel (once). [ride] takes you to another floor.
 void openElevator(OfficeScope scope, {required void Function(String floorId) ride}) {
   if (_current != null) return;
-  // Nowhere to go yet: the panel stays until there's a floor to ride to.
+  // Nowhere to go yet: the panel greets you. It closes like any other; the elevator (or the floor name in
+  // the corner) opens it again.
   final setup = scope.store.floor == null;
   _current = ModalStack.instance.show(
     (modal) => _ElevatorWindow(scope: scope, modal: modal, ride: ride, setup: setup),
-    escCloses: !setup,
+    // A stray click shouldn't lose the first-run panel; ✕ and Esc still close it.
     backdropCloses: !setup,
     onClose: () => _current = null,
   );
@@ -221,7 +222,6 @@ class _ElevatorWindowState extends State<_ElevatorWindow> with ListenTo {
     return ModalWindow(
       modal: widget.modal,
       width: 640,
-      closable: !setup,
       title: Text(setup ? '🏢 Welcome to Agent Office' : '🛗 Elevator'),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -279,7 +279,9 @@ class _ElevatorWindowState extends State<_ElevatorWindow> with ListenTo {
       ),
       footer: Row(
         children: [
-          FooterNote(setup ? 'Your office, one floor per project' : 'Pick a floor · Esc to stay here'),
+          FooterNote(
+            setup ? 'Your office, one floor per project · Esc to look around first' : 'Pick a floor · Esc to stay here',
+          ),
           if (_showAdd) ...[
             const SizedBox(width: 8),
             OfficeButton(

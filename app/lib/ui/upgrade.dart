@@ -176,7 +176,7 @@ class _UpgradeWindowState extends State<_UpgradeWindow> {
   }
 }
 
-// --- Restart: a modal nobody can dismiss, then a reload onto the new version ---------------------
+// --- Restart: a modal saying so, then a reload onto the new version ------------------------------
 
 class _Restart {
   _Restart(this.modal, this.content);
@@ -187,7 +187,10 @@ class _Restart {
 _Restart? _restart;
 Timer? _slowTimer;
 
-bool restarting() => _restart != null;
+/// The office said it's restarting: this page reloads when it's back, whether or not the window is still up.
+bool _restartPending = false;
+
+bool restarting() => _restartPending;
 
 void _restartDialog(String title, List<Widget> content) {
   if (_restart == null) {
@@ -199,7 +202,6 @@ void _restartDialog(String title, List<Widget> content) {
         builder: (context, c, _) => ModalWindow(
           modal: modal,
           width: 480,
-          closable: false,
           title: Text(c.$1),
           body: DefaultTextStyle.merge(
             textAlign: TextAlign.center,
@@ -207,8 +209,9 @@ void _restartDialog(String title, List<Widget> content) {
           ),
         ),
       ),
-      escCloses: false,
+      // Closing it only hides it: the reload still comes once the office is back.
       backdropCloses: false,
+      onClose: () => _restart = null,
     );
     _restart = _Restart(modal, notifier);
   } else {
@@ -230,6 +233,7 @@ Widget _p(List<InlineSpan> spans) => Padding(
 /// The server said it's about to restart into a new version.
 void showRestarting(UpgradeState u, OfficeScope scope) {
   scope.net.expectRestart();
+  _restartPending = true;
   final latest = u.latest;
   final content = [
     _art('🏗️'),

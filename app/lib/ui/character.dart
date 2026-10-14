@@ -1,5 +1,6 @@
 // The character select screen: your name, skin tone, hair and shirt, with a preview (ui/character.ts).
-// `first` is the one you see when you join, which can't be skipped.
+// `first` is the one you see when you join: closing it (✕ or Esc) goes in as whoever's picked so far, under
+// the name in the box or the made-up one suggested there.
 //
 // The spinning 3D preview is the world's Person model, handed in as [CharacterPreview]; without
 // one a flat chibi head stands in (see [ChibiAvatar]).
@@ -9,7 +10,9 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../office_scope.dart';
+
 import 'package:office_shared/avatar.dart';
+
 import '../state/store.dart';
 import 'hud_parts.dart' show cssColor;
 import 'chibi.dart';
@@ -25,14 +28,20 @@ ModalHandle openCharacter(
   bool first = false,
   required void Function(Profile p) onSave,
   CharacterPreview? preview,
-}) => ModalStack.instance.show(
-  (modal) => _CharacterWindow(scope: scope, modal: modal, first: first, onSave: onSave, preview: preview),
-  escCloses: !first,
-  backdropCloses: !first,
-)..doing = '🪞 picking a new look';
+}) {
+  final key = GlobalKey<_CharacterWindowState>();
+  return ModalStack.instance.show(
+    (modal) => _CharacterWindow(key: key, scope: scope, modal: modal, first: first, onSave: onSave, preview: preview),
+    // A stray click shouldn't skip the first one; ✕ and Esc still do.
+    backdropCloses: !first,
+    // The office only lets you in with a character: skipping it goes in with this one, and the name in the box.
+    onClose: () => key.currentState?._skipped(),
+  )..doing = '🪞 picking a new look';
+}
 
 class _CharacterWindow extends StatefulWidget {
   const _CharacterWindow({
+    super.key,
     required this.scope,
     required this.modal,
     required this.first,
@@ -57,6 +66,10 @@ class _CharacterWindowState extends State<_CharacterWindow> {
   final _name = TextEditingController();
   final _nameFocus = FocusNode();
 
+  /// The made-up name in the empty box ("Sunny Otter"): leave it blank, or skip this, and you go by it.
+  String _suggested = randomName();
+  bool _done = false;
+
   /// Bumped on every change, for the little hop that shows it landed.
   int _cheer = 0;
 
@@ -64,7 +77,8 @@ class _CharacterWindowState extends State<_CharacterWindow> {
   void initState() {
     super.initState();
     final p = store.profile;
-    _name.text = widget.first ? (p.name != 'Guest' ? p.name : '') : p.name;
+    // Guest is what you were before you picked one, so it isn't a name to keep.
+    _name.text = p.name == 'Guest' ? '' : p.name;
     // Your account's name is the one everyone sees; only the look is yours to change here.
     final account = store.me.account;
     if (account != null) _name.text = account.name;
@@ -93,14 +107,38 @@ class _CharacterWindowState extends State<_CharacterWindow> {
     );
   }
 
-  void _save() {
-    var name = _name.text.trim();
-    if (name.length > 24) name = name.substring(0, 24);
-    if (name.isEmpty) return _nameFocus.requestFocus();
+  /// The name in the box, or the one suggested there when it's blank.
+  String get _typedName {
+    final name = _name.text.trim();
+    return name.isEmpty ? _suggested : (name.length > 24 ? name.substring(0, 24) : name);
+  }
+
+  /// 🎲: another made-up name, in the box.
+  void _reroll() {
+    var name = randomName();
+    while (name == _name.text || name == _suggested) {
+      name = randomName();
+    }
+    setState(() {
+      _suggested = name;
+      _name.text = name;
+    });
+    _nameFocus.requestFocus();
+  }
+
+  void _finish(String name) {
+    _done = true;
     store.profile = Profile(name: name, color: _color, look: _look);
     saveProfile(store.profile);
     widget.modal.close();
     widget.onSave(store.profile);
+  }
+
+  void _save() => _finish(_typedName);
+
+  /// Closed without saving: the first pick goes in as it is.
+  void _skipped() {
+    if (widget.first && !_done) _finish(_typedName);
   }
 
   @override
@@ -118,7 +156,6 @@ class _CharacterWindowState extends State<_CharacterWindow> {
     return ModalWindow(
       modal: widget.modal,
       width: 780,
-      closable: !first,
       title: Text(first ? '👋 Pick your character' : '🧍 Your character'),
       body: narrow
           ? Column(
@@ -158,15 +195,26 @@ class _CharacterWindowState extends State<_CharacterWindow> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         const FieldLabel('Your name', top: 0),
-        BoxInput(
-          controller: _name,
-          focusNode: _nameFocus,
-          autofocus: account == null,
-          readOnly: account != null,
-          maxLength: 24,
-          hint: 'e.g. Ada',
-          tooltip: account != null ? 'Your account name' : null,
-          onSubmitted: (_) => _save(),
+        Row(
+          children: [
+            Expanded(
+              child: BoxInput(
+                key: const ValueKey('name-input'),
+                controller: _name,
+                focusNode: _nameFocus,
+                autofocus: account == null,
+                readOnly: account != null,
+                maxLength: 24,
+                hint: _suggested,
+                tooltip: account != null ? 'Your account name' : null,
+                onSubmitted: (_) => _save(),
+              ),
+            ),
+            if (account == null) ...[
+              const SizedBox(width: 8),
+              OfficeButton(key: const ValueKey('reroll'), label: '🎲', tooltip: 'Random name', onPressed: _reroll),
+            ],
+          ],
         ),
         if (account != null) Note("🔑 Signed in as ${account.name}, so that's your name here."),
         const FieldLabel('Skin tone', top: 14),
