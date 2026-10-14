@@ -139,9 +139,27 @@ class OfficeSound implements DogSounds {
     _applyVolume();
   }
 
+  /// The map's room, when it isn't the office (see [SoundHall]); null in the office.
+  SoundHall? _hall;
+  void setHall(SoundHall? hall) {
+    _hall = hall;
+    // The office's fridge isn't here.
+    final f = _fridge, ctx = _ctx;
+    if (hall != null && f != null && f.on && ctx != null) {
+      f.on = false;
+      f.gain.gain.setTargetAtTime(0, ctx.currentTime, 0.3);
+    }
+  }
+
+  /// Where sounds from outside come in: the office's windows, or the hall's.
+  List<Pos> get _windows => _hall?.windows ?? soundWindows;
+
+  /// Whether birds and crickets outside can be heard: there are windows, and air out there.
+  bool get _outsideHeard => _windows.isNotEmpty && _hall?.vacuum != true;
+
   /// The weather outside (see world/sky), every frame.
   void setWeather(double rain, double night) {
-    _rain = rain;
+    _rain = _hall?.vacuum == true ? 0 : rain;
     _night = night;
   }
 
@@ -276,20 +294,20 @@ class OfficeSound implements DogSounds {
     final now = ctx.currentTime;
     _hearJukebox(now);
     _scheduleTyping(now);
-    _tickFridge(now);
+    if (_hall == null) _tickFridge(now);
     if (now >= _nextBird) {
       // Birds sing by day, and not in the rain.
-      if (_night < 0.5 && _rain < 0.1) _birds(now);
+      if (_night < 0.5 && _rain < 0.1 && _outsideHeard) _birds(now);
       // Sometimes another bird answers from a different window.
       _nextBird = now + (_rng.nextDouble() < 0.35 ? _rand(1.5, 4) : _rand(12, 35));
     }
     if (now >= _nextCricket) {
-      if (_night > 0.6 && _rain < 0.05) _crickets(now);
+      if (_night > 0.6 && _rain < 0.05 && _outsideHeard) _crickets(now);
       _nextCricket = now + _rand(3, 8);
     }
     _tickRain(now);
     if (now >= _nextPhone) {
-      if (!_outdoors) _phone(now);
+      if (!_outdoors && _hall == null) _phone(now);
       _nextPhone = now + _rand(90, 240);
     }
     if (now >= _nextFidget) {
@@ -669,7 +687,7 @@ class OfficeSound implements DogSounds {
   void _birds(double now) {
     final ctx = _ctx!;
     _count('birds');
-    final out = _panner(_pick(soundWindows), 2, 1.2);
+    final out = _panner(_pick(_windows), 2, 1.2);
     // Heard through the glass.
     out.to(biquad(ctx, 'lowpass', 5000, 0.7)).to(_ambience);
     final base = _rand(2400, 4200);
@@ -700,7 +718,7 @@ class OfficeSound implements DogSounds {
   void _crickets(double now) {
     final ctx = _ctx!;
     _count('crickets');
-    final out = _panner(_pick(soundWindows), 2, 1.2);
+    final out = _panner(_pick(_windows), 2, 1.2);
     out.to(biquad(ctx, 'lowpass', 6000, 0.7)).to(_ambience);
     final freq = _rand(4200, 5200);
     var t = now + 0.05;
@@ -743,10 +761,10 @@ class OfficeSound implements DogSounds {
       nodes.gain.gain.setTargetAtTime(rainLevel(rain, where), now, 0.6);
       nodes.tone.frequency.setTargetAtTime(rainCutoff(where), now, 0.3);
     }
-    if (rain > 0.05 && now >= _nextDrip) {
+    if (rain > 0.05 && now >= _nextDrip && (where != Where.office || _windows.isNotEmpty)) {
       _nextDrip = now + _rand(0.03, 0.2) / rain;
       final l = _listener;
-      final at = where == Where.office ? _pick(soundWindows) : Pos(l.x + _rand(-4, 4), l.y - 1.2, l.z + _rand(-4, 4));
+      final at = where == Where.office ? _pick(_windows) : Pos(l.x + _rand(-4, 4), l.y - 1.2, l.z + _rand(-4, 4));
       _play(_buf.drop, at: at, gain: _rand(0.05, 0.14), rate: _rand(0.7, 1.4), ref: 1.5, rolloff: 1.3);
       _count('drip');
     }
@@ -851,7 +869,7 @@ class OfficeSound implements DogSounds {
     _count('gong.${why.wire}');
     // Someone banging it is the room; a merge is news for the whole floor (and from another tab too,
     // like the dings), so it carries further.
-    final out = why == GongWhy.hit ? _panner(gongAt, 4, 0.6) : _panner(gongAt, 8, 0.45);
+    final out = why == GongWhy.hit ? _panner(_hall?.gong ?? gongAt, 4, 0.6) : _panner(_hall?.gong ?? gongAt, 8, 0.45);
     out.connect(why == GongWhy.hit ? _ambience : _alerts);
     final t0 = ctx.currentTime + 0.03;
     if (why == GongWhy.queue) {

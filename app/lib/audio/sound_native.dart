@@ -234,9 +234,23 @@ class OfficeSound implements DogSounds {
     _muted = muted;
   }
 
+  /// The map's room, when it isn't the office (see [SoundHall]); null in the office.
+  SoundHall? _hall;
+  void setHall(SoundHall? hall) {
+    _hall = hall;
+    // The office's fridge isn't here.
+    if (hall != null) _fridgeOn = false;
+  }
+
+  /// Where sounds from outside come in: the office's windows, or the hall's.
+  List<Pos> get _windows => _hall?.windows ?? soundWindows;
+
+  /// Whether birds and crickets outside can be heard: there are windows, and air out there.
+  bool get _outsideHeard => _windows.isNotEmpty && _hall?.vacuum != true;
+
   /// The weather outside (see world/sky), every frame.
   void setWeather(double rain, double night) {
-    _rain = rain;
+    _rain = _hall?.vacuum == true ? 0 : rain;
     _night = night;
   }
 
@@ -262,23 +276,23 @@ class OfficeSound implements DogSounds {
     final now = _t;
     _scheduleTyping();
     if (now >= _nextBird) {
-      if (_night < 0.5 && _rain < 0.1) _birds();
+      if (_night < 0.5 && _rain < 0.1 && _outsideHeard) _birds();
       _nextBird = now + (_rng.nextDouble() < 0.35 ? _rand(1.5, 4) : _rand(12, 35));
     }
     if (now >= _nextCricket) {
-      if (_night > 0.6 && _rain < 0.05) _crickets();
+      if (_night > 0.6 && _rain < 0.05 && _outsideHeard) _crickets();
       _nextCricket = now + _rand(3, 8);
     }
     _tickRain(now);
     if (now >= _nextPhone) {
-      if (!_outdoors) _phone();
+      if (!_outdoors && _hall == null) _phone();
       _nextPhone = now + _rand(90, 240);
     }
     if (now >= _nextFidget) {
       if (!_outdoors) _fidget();
       _nextFidget = now + _rand(10, 30);
     }
-    _tickFridge(now);
+    if (_hall == null) _tickFridge(now);
     _tick();
   }
 
@@ -550,12 +564,12 @@ class OfficeSound implements DogSounds {
 
   void _birds() {
     _count('birds');
-    _play('birds', at: _pick(soundWindows), ref: 2, rolloff: 1.2);
+    _play('birds', at: _pick(_windows), ref: 2, rolloff: 1.2);
   }
 
   void _crickets() {
     _count('crickets');
-    _play('crickets', at: _pick(soundWindows), ref: 2, rolloff: 1.2);
+    _play('crickets', at: _pick(_windows), ref: 2, rolloff: 1.2);
   }
 
   /// Rain: a hiss that's muffled indoors, and drops pattering on the windows or all around you.
@@ -570,10 +584,10 @@ class OfficeSound implements DogSounds {
     }
     _rainTarget = rainLevel(_rain, where);
     _rainWhere = where;
-    if (_rain > 0.05 && now >= _nextDrip) {
+    if (_rain > 0.05 && now >= _nextDrip && (where != Where.office || _windows.isNotEmpty)) {
       _nextDrip = now + _rand(0.03, 0.2) / _rain;
       final l = _listener;
-      final at = where == Where.office ? _pick(soundWindows) : Pos(l.x + _rand(-4, 4), l.y - 1.2, l.z + _rand(-4, 4));
+      final at = where == Where.office ? _pick(_windows) : Pos(l.x + _rand(-4, 4), l.y - 1.2, l.z + _rand(-4, 4));
       _play('drop', at: at, gain: _rand(0.05, 0.14), speed: _rand(0.7, 1.4), ref: 1.5, rolloff: 1.3);
       _count('drip');
     }
@@ -662,7 +676,13 @@ class OfficeSound implements DogSounds {
       GongWhy.merged => 'gong.merged',
       GongWhy.queue => 'gong.queue',
     };
-    _play(name, at: gongAt, ref: hit ? 4 : 8, rolloff: hit ? 0.6 : 0.45, bus: hit ? _Bus.ambience : _Bus.alerts);
+    _play(
+      name,
+      at: _hall?.gong ?? gongAt,
+      ref: hit ? 4 : 8,
+      rolloff: hit ? 0.6 : 0.45,
+      bus: hit ? _Bus.ambience : _Bus.alerts,
+    );
   }
 
   // ---- Alerts ----------------------------------------------------------------------------------

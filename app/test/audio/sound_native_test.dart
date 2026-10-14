@@ -227,6 +227,30 @@ void main() {
     s.dispose();
   });
 
+  test("a map's hall: its gong where it hangs, and out in space no rain", timeout: long, () async {
+    final e = FakeEngine();
+    final s = OfficeSound(engine: e)..setVolume(1, false);
+    await until(() => e.sources.values.any((v) => v.$1 == 'gong.queue') && e.started.contains('room'));
+    await wait(400);
+    // The hall's gong is off to your left, wherever the office's would be.
+    const at = Pos(-20, 2, 0);
+    s.setHall(const SoundHall(gong: at, vacuum: true));
+    const you = SoundListener(x: -17, y: 1.4, z: 0, fx: 0, fz: -1);
+    s.update(you);
+    s.gong(GongWhy.merged);
+    final merged = e.voices.values.firstWhere((v) => e.sources[v.source]!.$1.startsWith('gong.merged'));
+    expect(merged.left, greaterThan(0.95));
+    expect(merged.right, lessThan(0.3));
+    // Nothing falls in a vacuum.
+    s.setWeather(1, 0);
+    s.update(you);
+    await wait(1500);
+    s.update(you);
+    expect(e.playing('rain.office').every((v) => v.volume < 0.001), isTrue);
+    expect(s.played['drip'], isNull);
+    s.dispose();
+  });
+
   test('the jukebox and the DJ stream in step with the clock', timeout: long, () async {
     final e = FakeEngine();
     var now = 1000000.0;

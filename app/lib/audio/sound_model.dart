@@ -87,6 +87,16 @@ final List<Pos> soundWindows = List.unmodifiable([
           : Pos(o.wall == Side.west ? Floor.minX - 1.5 : Floor.maxX + 1.5, 2.4, o.u),
 ]);
 
+/// On a map of its own (the castle, the station): where its gong hangs and where its windows are,
+/// with nothing of the office's in it (no fridge, no desk phones). [vacuum]: there's nothing outside
+/// it to hear at all (the space station): no rain, no thunder, no birds. Upstream's sound Hall.
+class SoundHall {
+  const SoundHall({this.gong, this.windows = const [], this.vacuum = false});
+  final Pos? gong;
+  final List<Pos> windows;
+  final bool vacuum;
+}
+
 /// The middle of the gong's disc.
 const Pos gongAt = Pos(Gong.x, Gong.height - 1.36, Gong.z);
 

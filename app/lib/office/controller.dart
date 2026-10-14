@@ -13,6 +13,7 @@ import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
 import '../audio/sound.dart';
+import '../audio/sound_model.dart' show Pos, SoundHall;
 import '../caffeine.dart';
 import '../interop/browser.dart';
 import '../interop/open_link.dart';
@@ -1395,6 +1396,17 @@ class OfficeController implements OfficeActions {
     if (!up) player.street = inOffice ? streetBelow(office.stack.state.index) : streetOf(world);
     skyView.indoors = r.enclosed;
     skyView.space = !up && world.ownSky;
+    // A map of its own sounds like itself: its gong and its windows, and none of the office's phones or fridge.
+    final hall = world.acoustics;
+    sound.setHall(
+      hall == null
+          ? null
+          : SoundHall(
+              gong: hall.gong == null ? null : Pos(hall.gong!.x, hall.gong!.y, hall.gong!.z),
+              windows: [for (final w in hall.windows) Pos(w.x, w.y, w.z)],
+              vacuum: hall.vacuum,
+            ),
+    );
     Toon.light.officeOn = inOffice ? 1 : 0;
     // The office's own: the holiday decorations round it and the street, the dog.
     holiday.group.visible = inOffice && !up;
