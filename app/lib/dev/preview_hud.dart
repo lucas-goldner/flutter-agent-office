@@ -10,8 +10,10 @@ import '../caffeine.dart';
 import '../net/office_socket.dart';
 import '../notify.dart';
 import '../office_scope.dart';
+
 import 'package:office_shared/avatar.dart';
 import 'package:office_shared/protocol.dart';
+
 import '../state/store.dart';
 import '../ui/accounts.dart';
 import '../ui/character.dart';
@@ -445,7 +447,7 @@ class _PreviewState extends State<_Preview> {
     previewSound: () {},
     notifier: notifier,
     onSignOut: () {},
-    outside: (now: '☀️ Clear · 2:41 PM office time · Berlin, Germany, 18 °C', live: true),
+    outside: (now: '☀️ Clear · 2:41 PM outside · Berlin, Germany, 18 °C', live: true),
   );
 
   void _open(String? w) {

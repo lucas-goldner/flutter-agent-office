@@ -53,18 +53,43 @@ final UnlitMaterial shineMat = seeThrough('#ffffff', 0.22);
 Node glassPane(double w, double h) {
   final g = group('glass');
   g.add(mesh(planeXY(w, h, both: true), glassMat, 0, 0, 0, false));
+  // Each streak is a slanted strip trimmed to the pane, so on a narrow pane its ends stop at the
+  // frame instead of running out over it (#213).
+  final edgeX = w / 2 - 0.02, edgeY = h / 2 - 0.02;
   for (final (gx, gw) in [(-w * 0.2, 0.18), (-w * 0.2 + 0.32, 0.08)]) {
-    g.add(
-      place(
-        mesh(planeXY(gw, h * 0.55, both: true), shineMat, 0, 0, 0, false),
-        x: gx,
-        y: h * 0.07,
-        z: 0.01,
-        rot: euler(0, 0, -0.5),
-      ),
-    );
+    final outline = clipToBox(slantedStrip(gx, h * 0.07, gw, h * 0.55, -0.5), edgeX, edgeY);
+    if (outline.length < 3) continue;
+    g.add(mesh(convexXY(outline), shineMat, 0, 0, 0.01, false));
   }
   return g;
+}
+
+/// The corners of a [w] by [len] strip centred on ([x], [y]), turned [angle] radians.
+List<vm.Vector2> slantedStrip(double x, double y, double w, double len, double angle) {
+  final c = math.cos(angle), s = math.sin(angle);
+  return [
+    for (final (u, v) in [(-w / 2, -len / 2), (w / 2, -len / 2), (w / 2, len / 2), (-w / 2, len / 2)])
+      vm.Vector2(x + u * c - v * s, y + u * s + v * c),
+  ];
+}
+
+/// A convex outline cut down to the box from (-ex, -ey) to (ex, ey) (Sutherland–Hodgman); empty when
+/// nothing of it is left.
+List<vm.Vector2> clipToBox(List<vm.Vector2> points, double ex, double ey) {
+  final edges = <double Function(vm.Vector2)>[(p) => ex - p.x, (p) => p.x + ex, (p) => ey - p.y, (p) => p.y + ey];
+  var out = points;
+  for (final inside in edges) {
+    final next = <vm.Vector2>[];
+    for (var i = 0; i < out.length; i++) {
+      final p = out[i], q = out[(i + 1) % out.length];
+      final dp = inside(p), dq = inside(q);
+      if (dp >= 0) next.add(p);
+      if ((dp >= 0) != (dq >= 0)) next.add(p + (q - p) * (dp / (dp - dq)));
+    }
+    out = next;
+    if (out.length < 3) return [];
+  }
+  return out;
 }
 
 Node plant([double scale = 1]) {

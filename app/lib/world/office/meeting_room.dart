@@ -156,7 +156,9 @@ DeskView _buildSeat(DeskDef def, int index) {
       textPlane('🤝 Meeting room', const TextOpts(bg: '#2b2d42', color: '#fffaf3', size: 56, border: '#fffaf3')),
       x: dx,
       y: 2.52,
-      z: MeetingRoom.minZ - 0.07,
+      // In front of the glass wall's frame (out to minZ - 0.08) and the sliding leaves (to minZ - 0.11),
+      // which it runs across once its text is wider than the door (#213).
+      z: MeetingRoom.minZ - 0.13,
       rot: yaw(math.pi),
       scale: 0.62,
     ),
@@ -213,7 +215,9 @@ DeskView _buildSeat(DeskDef def, int index) {
     mesh(planeXY(0.6, 0.96), signMat, 0, 0, 0, false),
     x: sx,
     y: 1.45,
-    z: MeetingRoom.minZ - _t / 2 - 0.03,
+    // Inside the glass, facing out: the door's left leaf slides across outside it (out to minZ - 0.125)
+    // and would cut through a panel on the outer face, its glints flickering with the screen (#213).
+    z: MeetingRoom.minZ + _t / 2 + 0.03,
     rot: yaw(math.pi),
   );
   group.add(sign);
@@ -222,7 +226,7 @@ DeskView _buildSeat(DeskDef def, int index) {
     tc(Palette.ink),
     sx,
     1.45,
-    MeetingRoom.minZ - _t / 2 - 0.012,
+    MeetingRoom.minZ + _t / 2 + 0.05,
     false,
   );
   group.add(plate);

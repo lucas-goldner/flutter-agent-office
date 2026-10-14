@@ -18,7 +18,7 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/widgets.dart' show AppLifecycleState, WidgetsBinding;
 
-import 'package:office_shared/layout.dart' show DjBooth, desks;
+import 'package:office_shared/layout.dart' show DjBooth;
 import 'package:office_shared/layout.dart' as lay show Cabinet;
 import 'package:office_shared/protocol.dart' show GongWhy;
 
@@ -33,7 +33,6 @@ export 'sound_model.dart' show Ding, DogSounds, Engine, JukeboxPlay, SoundListen
 
 final math.Random _rng = math.Random();
 double _rand(double a, double b) => a + _rng.nextDouble() * (b - a);
-int _randInt(int a, int b) => _rand(a.toDouble(), b + 1.0).floor();
 T _pick<T>(List<T> xs) => xs[(_rng.nextDouble() * xs.length).floor()];
 
 /// The web's master compressor (sound_web.dart) adds this much back after compressing: quiet sounds
@@ -130,7 +129,6 @@ class OfficeSound implements DogSounds {
   double _nextDrip = 0;
   double _nextBird = 0;
   double _nextCricket = 0;
-  double _nextPhone = 0;
   double _nextFidget = 0;
   double _rain = 0;
   double _night = 0;
@@ -176,7 +174,6 @@ class OfficeSound implements DogSounds {
     final now = _t;
     _nextBird = now + _rand(5, 15);
     _nextCricket = now + _rand(2, 6);
-    _nextPhone = now + _rand(60, 150);
     _nextFidget = now + _rand(8, 20);
     _nextFridge = now + _rand(3, 12);
     _music.apply();
@@ -284,10 +281,6 @@ class OfficeSound implements DogSounds {
       _nextCricket = now + _rand(3, 8);
     }
     _tickRain(now);
-    if (now >= _nextPhone) {
-      if (!_outdoors && _hall == null) _phone();
-      _nextPhone = now + _rand(90, 240);
-    }
     if (now >= _nextFidget) {
       if (!_outdoors) _fidget();
       _nextFidget = now + _rand(10, 30);
@@ -635,18 +628,6 @@ class OfficeSound implements DogSounds {
       // Let it go once it's rumbled away.
       Timer(const Duration(seconds: 9), () => e.free(id));
     }());
-  }
-
-  /// A desk phone rings a couple of times somewhere across the room, then someone picks up.
-  void _phone() {
-    final l = _listener;
-    final far = [
-      for (final d in desks)
-        if (math.sqrt((d.x - l.x) * (d.x - l.x) + (d.z - l.z) * (d.z - l.z)) > 7) d,
-    ];
-    final desk = _pick(far.isNotEmpty ? far : desks);
-    _count('phone');
-    _play('phone.${_randInt(2, 3)}', at: Pos(desk.x, 0.9, desk.z), ref: 1.5, rolloff: 1.2);
   }
 
   /// Someone at a worker's desk shuffles papers or leans back in a creaky chair.

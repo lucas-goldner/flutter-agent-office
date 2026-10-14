@@ -30,17 +30,27 @@ const _icon = {
   Weather.fog: '🌫️',
 };
 
-/// "🌙 Clear · 9:41 PM office time · Berlin, Germany, 11 °C", for Settings.
-String describeSky(SkyState s, [int? nowMs]) {
-  final now = nowMs ?? DateTime.now().millisecondsSinceEpoch;
+/// "🌙 Clear · 9:41 PM outside · Berlin, Germany, 11 °C", for Settings: the time of day in the sky
+/// (see skyNow) at [nowMs] on the office's clock.
+String describeSky(SkyState s, [num? nowMs]) {
+  final now = skyNow(
+    nowMs ?? DateTime.now().millisecondsSinceEpoch,
+    utcOffset: s.utcOffset,
+    realTime: s.realTime,
+  ).round();
   final night = sunPosition(now, s.lat, s.lon).el < -4 * _deg;
   final icon = s.weather == Weather.clear && night ? '🌙' : _icon[s.weather]!;
-  final t = DateTime.fromMillisecondsSinceEpoch(now + s.utcOffset * 60000, isUtc: true);
+  final t = DateTime.fromMillisecondsSinceEpoch((now + s.utcOffset * 60000).round(), isUtc: true);
   final h12 = t.hour % 12 == 0 ? 12 : t.hour % 12;
   final time = '$h12:${t.minute.toString().padLeft(2, '0')} ${t.hour < 12 ? 'AM' : 'PM'}';
   final where = s.city != null ? ' · ${s.city}${s.temp != null ? ', ${_fmtTemp(s.temp!)} °C' : ''}' : '';
-  return '$icon ${_label[s.weather]} · $time office time$where';
+  return '$icon ${_label[s.weather]} · $time outside$where';
 }
+
+/// What the note under ⚙️ Settings → Outside says: which clock the sky keeps, and where its weather's from.
+String outsideNote({required bool real, required bool live}) =>
+    'Everyone sees the same sky: ${real ? 'the real time of day' : 'a whole day and night every hour'}, and '
+    '${live ? 'the live weather where it is.' : 'weather that comes and goes. Start the office with --city to use a real city’s forecast.'}';
 
 String _fmtTemp(double t) => t == t.roundToDouble() ? t.round().toString() : t.toString();
 
@@ -139,7 +149,9 @@ class SkyPreview {
 }
 
 class SkyModel {
-  SkyModel({math.Random? random}) : _random = random ?? math.Random() {
+  SkyModel({math.Random? random, num Function()? clock})
+    : _random = random ?? math.Random(),
+      _clock = clock ?? (() => DateTime.now().millisecondsSinceEpoch) {
     final here = guessPlace();
     state = SkyState(
       lat: here.lat,
@@ -151,6 +163,9 @@ class SkyModel {
   }
 
   final math.Random _random;
+
+  /// The office's clock (ms since 1970), which everyone's sky keeps time by.
+  final num Function() _clock;
   late SkyState state;
   SkyPreview preview = const SkyPreview();
   bool _heard = false;
@@ -258,11 +273,12 @@ class SkyModel {
     _snap = true;
   }
 
-  /// The office's clock (ms), or the previewed hour today.
+  /// The time of day in the sky (see skyNow: a whole day every hour, or the real clock), or the
+  /// previewed hour today; [wall] is the office's clock, by default [_clock].
   int now([int? wall]) {
-    final t = wall ?? DateTime.now().millisecondsSinceEpoch;
+    final t = wall ?? _clock().round();
     final h = preview.hour;
-    if (h == null) return t;
+    if (h == null) return skyNow(t, utcOffset: state.utcOffset, realTime: state.realTime).round();
     final off = state.utcOffset * 60000;
     final midnight = ((t + off) ~/ 86400000) * 86400000;
     return (midnight - off + h * 3600000).round();

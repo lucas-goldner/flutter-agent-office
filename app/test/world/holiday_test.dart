@@ -103,7 +103,9 @@ void main() {
   });
 
   group('the holiday sky', () {
-    SkyState sky(Weather w) => SkyState(lat: 52.52, lon: 13.4, utcOffset: 0, weather: w, intensity: 0);
+    // On the real clock (--real-time-sky): [oct] is noon, not midnight on the hourly loop.
+    SkyState sky(Weather w) =>
+        SkyState(lat: 52.52, lon: 13.4, utcOffset: 0, weather: w, intensity: 0, realTime: true);
 
     test('it snows all Christmas, whatever the forecast', () {
       final m = SkyModel(random: math.Random(1))..set(sky(Weather.clear));

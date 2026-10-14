@@ -88,7 +88,7 @@ final List<Pos> soundWindows = List.unmodifiable([
 ]);
 
 /// On a map of its own (the castle, the station): where its gong hangs and where its windows are,
-/// with nothing of the office's in it (no fridge, no desk phones). [vacuum]: there's nothing outside
+/// with nothing of the office's in it (no fridge). [vacuum]: there's nothing outside
 /// it to hear at all (the space station): no rain, no thunder, no birds. Upstream's sound Hall.
 class SoundHall {
   const SoundHall({this.gong, this.windows = const [], this.vacuum = false});

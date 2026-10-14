@@ -391,22 +391,6 @@ class OfficeRender {
     return biquad(out, sr, BiquadType.lowpass, 6000, 0.7);
   }
 
-  /// A desk phone rings [rings] times, through the room.
-  Float32List phone(int rings) {
-    final out = _buf(0.05 + (rings - 1) * 2.4 + 1.1);
-    for (var r = 0; r < rings; r++) {
-      final t = 0.05 + r * 2.4;
-      final f = Param(1150);
-      // A warbling trill, flipping between two notes.
-      for (var k = 0; k < 18; k++) {
-        f.setValueAtTime(k.isOdd ? 1450 : 1150, t + k / 18);
-      }
-      final o = _osc(out.length, Wave.triangle, f, start: t, stop: t + 1.05);
-      mixInto(out, gain(o, sr, Param(1)..envelope(t, const [(0.02, 0.045), (0.95, 0.045), (1, 0)])));
-    }
-    return biquad(out, sr, BiquadType.lowpass, 3000, 0.7);
-  }
-
   /// Someone leans back in a creaky chair.
   Float32List creak() {
     final len = _rand(0.25, 0.45);
@@ -895,8 +879,6 @@ Map<String, Float32List> renderBank(int sr, Bank bank, [int seed = 0]) {
       many('yip', 2, r.yip);
       many('birds', 8, r.birds);
       many('crickets', 5, r.crickets);
-      out['phone.2'] = r.phone(2);
-      out['phone.3'] = r.phone(3);
       many('creak', 4, r.creak);
       many('pour', 2, r.pour);
       many('hiccup', 2, r.hiccup);

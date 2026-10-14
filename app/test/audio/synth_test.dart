@@ -210,7 +210,6 @@ void main() {
       }
       sensible('birds', r.birds(), minRms: 0.002, maxPeak: 0.2);
       sensible('crickets', r.crickets(), minRms: 0.0005, maxPeak: 0.1);
-      sensible('phone', r.phone(2), minRms: 0.005, maxPeak: 0.1);
       sensible('creak', r.creak(), minRms: 0.001, maxPeak: 0.2);
       sensible('thunder', r.thunder(1, 0.45, true), minRms: 0.02, maxPeak: 1);
       sensible('pour', r.pour(), minRms: 0.002, maxPeak: 0.3);

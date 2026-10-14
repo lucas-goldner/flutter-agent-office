@@ -80,6 +80,9 @@ class RoofHub {
   /// Drinks from the bar, and how they make the world look.
   final Booze booze = Booze();
 
+  /// The drunk frame's filters, built ahead of the first drink (see [DrunkWarmup]).
+  final DrunkWarmup drunkWarmup = DrunkWarmup();
+
   /// How the screen looks after a few (world/drunk.dart).
   final ValueNotifier<DrunkLook> look = ValueNotifier(DrunkLook.sober);
 
@@ -215,7 +218,10 @@ class RoofHub {
   double get _secs => nowMs() / 1000;
 
   /// E at the bar: the menu.
-  void showBar() => openBar(cutOff: booze.cutOff(_secs), order: orderDrink);
+  void showBar() {
+    drunkWarmup.queue();
+    openBar(cutOff: booze.cutOff(_secs), order: orderDrink);
+  }
 
   /// The bartender comes over and pours it (a water, if you've had enough), and slides it across to you.
   void orderDrink(Drink d) {
@@ -226,9 +232,11 @@ class RoofHub {
     r.serve(player.pos.z);
     final at = r.pourAt;
     sound.pour(at.x, at.y, at.z);
+    drunkWarmup.queue();
     if (cut) toast("🙅 The bartender slides you a water instead: you've had enough", ToastKind.warn);
     Future.delayed(const Duration(milliseconds: 1500), () {
       if (!upTop) return;
+      drunkWarmup.prepare();
       booze.drink(drink, _secs);
       reach();
       if (player.view == ViewMode.first) hands.sip();

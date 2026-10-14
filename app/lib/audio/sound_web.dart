@@ -1,6 +1,6 @@
 // Office sounds, synthesized with Web Audio so there are no audio files to ship: the room's air and a
 // humming fridge, workers typing while they work, footsteps, the coffee machine, birds outside the
-// windows by day and crickets at night, rain and thunder, the odd rustle or phone, the gong, the dog
+// windows by day and crickets at night, rain and thunder, the odd rustle, the gong, the dog
 // barking, and the dings when a worker needs you. And the lounge jukebox, whose tunes are in music.dart.
 //
 // Everything goes through one master gain that Settings turns down or mutes. Voice chat doesn't, and
@@ -19,7 +19,7 @@ import 'dart:typed_data';
 import 'package:web/web.dart' as web;
 
 import 'package:office_shared/jukebox.dart' show jukeboxStream;
-import 'package:office_shared/layout.dart' show DjBooth, desks;
+import 'package:office_shared/layout.dart' show DjBooth;
 import 'package:office_shared/layout.dart' as lay show Cabinet;
 import 'package:office_shared/protocol.dart' show GongWhy;
 
@@ -88,7 +88,6 @@ class OfficeSound implements DogSounds {
   _Fridge? _fridge;
   double _nextBird = 0;
   double _nextCricket = 0;
-  double _nextPhone = 0;
   double _nextFidget = 0;
 
   /// Outside: how hard it's raining (0–1) and how dark it is (1 at night).
@@ -243,7 +242,6 @@ class OfficeSound implements DogSounds {
     final now = ctx.currentTime;
     _nextBird = now + _rand(5, 15);
     _nextCricket = now + _rand(2, 6);
-    _nextPhone = now + _rand(60, 150);
     _nextFidget = now + _rand(8, 20);
   }
 
@@ -306,10 +304,6 @@ class OfficeSound implements DogSounds {
       _nextCricket = now + _rand(3, 8);
     }
     _tickRain(now);
-    if (now >= _nextPhone) {
-      if (!_outdoors && _hall == null) _phone(now);
-      _nextPhone = now + _rand(90, 240);
-    }
     if (now >= _nextFidget) {
       if (!_outdoors) _fidget(now);
       _nextFidget = now + _rand(10, 30);
@@ -797,35 +791,6 @@ class OfficeSound implements DogSounds {
       crack.to(biquad(ctx, 'bandpass', 1800, 0.6)).to(cg).to(_ambience);
       crack.start(t0);
       crack.stop(t0 + 0.3);
-    }
-  }
-
-  /// A desk phone rings a couple of times somewhere across the room, then someone picks up.
-  void _phone(double now) {
-    final ctx = _ctx!;
-    final l = _listener;
-    final far = [
-      for (final d in desks)
-        if (math.sqrt((d.x - l.x) * (d.x - l.x) + (d.z - l.z) * (d.z - l.z)) > 7) d,
-    ];
-    final desk = _pick(far.isNotEmpty ? far : desks);
-    _count('phone');
-    final out = _panner(Pos(desk.x, 0.9, desk.z), 1.5, 1.2);
-    out.to(biquad(ctx, 'lowpass', 3000, 0.7)).to(_ambience);
-    final rings = _randInt(2, 3);
-    for (var r = 0; r < rings; r++) {
-      final t = now + 0.05 + r * 2.4;
-      final o = ctx.createOscillator();
-      o.type = 'triangle';
-      // A warbling trill, flipping between two notes.
-      for (var k = 0; k < 18; k++) {
-        o.frequency.setValueAtTime(k.isOdd ? 1450 : 1150, t + k / 18);
-      }
-      final g = ctx.createGain();
-      envelope(g.gain, t, const [(0.02, 0.045), (0.95, 0.045), (1, 0)]);
-      o.to(g).to(out);
-      o.start(t);
-      o.stop(t + 1.05);
     }
   }
 

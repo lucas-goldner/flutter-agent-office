@@ -19,6 +19,7 @@ import 'provider.dart';
 import 'settings_rows.dart';
 import 'worker_limit.dart';
 import '../world/player.dart' show ViewMode;
+import '../world/sky_model.dart' show describeSky, outsideNote;
 import 'modal.dart';
 import 'theme.dart';
 import 'window_parts.dart';
@@ -539,17 +540,24 @@ void _builtInCards() {
       ],
     );
   });
-  cards.add(SettingsPane.building, id: 'outside', order: 30, (c) {
-    final outside = c.outside;
-    if (outside == null) return null;
+  // What the sky's doing, and which clock it keeps, for everyone (upstream's settings-sky.ts).
+  cards.add(SettingsPane.building, id: 'outside', order: 30, topics: const [Topic.sky], (c) {
+    final sky = c.store.sky;
+    if (sky == null) return null;
+    final real = sky.realTime == true;
     return SettingCard(
       title: 'Outside',
       scope: SettingScope.office,
       children: [
-        Text(outside.now, style: heavy(15)),
-        Note(
-          outside.live ? 'Everyone sees the same sky: the office’s clock and the live weather where it is.' : 'Everyone sees the same sky: the office’s clock, and weather that comes and goes. Start the office with --city to use a real city’s forecast.',
+        Text(describeSky(sky, c.store.officeNow()), style: heavy(15)),
+        ChoiceRow<bool>(
+          options: const [(true, '🕰️ Real time (24 h)'), (false, '⏩ A day every hour')],
+          value: real,
+          onPick: (r) {
+            if (r != real) c.net.send(SkyClockCmd(r));
+          },
         ),
+        Note(outsideNote(real: real, live: sky.city != null)),
       ],
     );
   });

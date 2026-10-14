@@ -38,6 +38,29 @@ double hazeReach(double eyeY, double street) => 1 + math.max(eyeY - street - _ha
   return (start: math.min(near * k, end * 0.45), end: end);
 }
 
+/// The weather's fog kept out of the room you're in (upstream #320, which cleared it per fragment in the
+/// office and the garage): the engine's fog is one distance for the whole view, so while the eye is in
+/// [room] (the office's footprint, the garage under it, and the back office if [wing]), the fog only
+/// starts past the room's farthest corner from it, keeping the same ramp after that. Outside, [fog] as it is.
+({double start, double end}) clearRoomFog(
+  ({double start, double end}) fog,
+  vm.Vector3 eye, {
+  ({double minX, double maxX, double minZ, double maxZ})? wing,
+  double height = wallHeight,
+}) {
+  bool inBox(double minX, double maxX, double minZ, double maxZ) =>
+      eye.x > minX && eye.x < maxX && eye.z > minZ && eye.z < maxZ;
+  final inWing = wing != null && inBox(wing.minX, wing.maxX, wing.minZ, wing.maxZ);
+  if (!inBox(_B.minX, _B.maxX, _B.minZ, _B.maxZ) && !inWing) return fog;
+  var minZ = _B.minZ;
+  if (wing != null) minZ = math.min(minZ, wing.minZ);
+  final dx = math.max(eye.x - _B.minX, _B.maxX - eye.x);
+  final dz = math.max(eye.z - minZ, _B.maxZ - eye.z);
+  final reach = math.sqrt(dx * dx + dz * dz + height * height);
+  if (fog.start >= reach) return fog;
+  return (start: reach, end: reach + math.max(fog.end - fog.start, 1));
+}
+
 /// The building, walls included: the office upstairs and the garage under it.
 abstract final class _B {
   static const double minX = Floor.minX - wallT, maxX = Floor.maxX + wallT;
@@ -130,6 +153,7 @@ class SkyView {
 
   /// The back office, walls included, when the floor you're on is built out into one (see [setWing]).
   ({double minX, double maxX, double minZ, double maxZ})? _wingBox;
+  ({double minX, double maxX, double minZ, double maxZ})? get wingBox => _wingBox;
 
   bool _inWing(double x, double z) {
     final w = _wingBox;

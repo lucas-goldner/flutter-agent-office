@@ -250,7 +250,8 @@ Face buildLoft(Node group, List<Interactable> interactables, Looks looks) {
       textPlane('👑 Boss Office', const TextOpts(bg: '#2b2d42', color: '#fffaf3', size: 64, border: '#fffaf3')),
       x: cx,
       y: roofY + 0.2,
-      z: minZ - 0.02,
+      // In front of the roof's trim (minZ - 0.04 to minZ), or the trim hides the sign's lower half (#213).
+      z: minZ - 0.07,
       rot: yaw(math.pi),
       scale: 1.4,
     ),

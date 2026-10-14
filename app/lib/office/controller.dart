@@ -93,6 +93,7 @@ import '../world/leaving.dart';
 import '../world/office/office.dart';
 import '../world/player.dart';
 import '../world/sky_model.dart';
+import '../world/lamplight.dart';
 import '../world/sky_view.dart';
 import '../world/smoke.dart';
 import '../world/space.dart';
@@ -349,8 +350,11 @@ class OfficeController implements OfficeActions {
 
   /// The rooftop bar: up there and back, drinks and the DJ (roof.dart).
   late final RoofHub roofHub;
-  final SkyModel skyModel = SkyModel();
+
+  /// Keeps time by the office's clock, so everyone sees the same sky.
+  late final SkyModel skyModel = SkyModel(clock: store.officeNow);
   late final SkyView skyView;
+  final Lamplight lamplight = Lamplight();
 
   /// Halloween or Christmas decorations, up while the building's dressed up for one (see [_dressUp]).
   late final Holiday holiday;
@@ -547,6 +551,8 @@ class OfficeController implements OfficeActions {
       // The same city C3's tower stands in, seen from the roof.
       city: buildCity,
     )..world = (() => world);
+    // The first drunk frame shouldn't also pay for building its filters (#321).
+    WidgetsBinding.instance.addPostFrameCallback((_) => roofHub.drunkWarmup.queue());
     _listen(Topic.decor, () => gallery.sync(store.decor));
 
     _listen(Topic.peers, _syncPeers);
@@ -1146,7 +1152,8 @@ class OfficeController implements OfficeActions {
   bool indoors() {
     final p = player.pos;
     if (roofHub.upTop || !inOffice || p.y < -1 || p.y > wallHeight) return false;
-    return p.x > Floor.minX && p.x < Floor.maxX && p.z > Floor.minZ && p.z < Floor.maxZ;
+    return (p.x > Floor.minX && p.x < Floor.maxX && p.z > Floor.minZ && p.z < Floor.maxZ) ||
+        inWing(p.x, p.z, officeWing());
   }
 
   void switchFloor(String floorId) {
@@ -2914,7 +2921,9 @@ class OfficeController implements OfficeActions {
     previewNeedsYou: () => sound.needsYou(),
     notifier: notifier,
     onSignOut: signOut,
-    outside: store.sky == null ? null : (now: describeSky(store.sky!), live: store.sky!.city != null),
+    outside: store.sky == null
+        ? null
+        : (now: describeSky(store.sky!, store.officeNow()), live: store.sky!.city != null),
   );
 
   @override
@@ -4107,10 +4116,19 @@ class OfficeController implements OfficeActions {
     skyModel.open = k * k * (3 - 2 * k);
     final m = skyModel..update(dt, t);
     skyView.update(dt, t, m, player.camPos);
+    // Indoors in the office the light comes from the lamps overhead (world/lamplight.dart).
+    final lit = lamplight.apply(
+      inside: indoors(),
+      dt: dt,
+      dir: m.lightDir,
+      color: m.lightColor,
+      intensity: m.lightIntensity,
+      lampsOn: m.lampsOn,
+    );
     final l = Toon.light
-      ..sunDirection = m.lightDir
-      ..sunColor = m.lightColor.color
-      ..sunIntensity = m.lightIntensity / math.pi
+      ..sunDirection = lit.dir
+      ..sunColor = lit.color.color
+      ..sunIntensity = lit.intensity / math.pi
       ..sky = m.hemiSky.color
       ..ground = m.hemiGround.color
       ..hemiIntensity = m.hemiIntensity / math.pi
@@ -4157,7 +4175,12 @@ class OfficeController implements OfficeActions {
     } else {
       fog.color = m.background.vector;
       // The haze thins out the higher you are over the street (see hazeFog).
-      final haze = hazeFog(m.fogNear, m.fogFar, player.camPos.y, office.night.street);
+      // ...and stays out of the office and the garage while you're in there (#320).
+      final haze = clearRoomFog(
+        hazeFog(m.fogNear, m.fogFar, player.camPos.y, office.night.street),
+        player.camPos,
+        wing: skyView.wingBox,
+      );
       fog.start = haze.start;
       fog.end = haze.end;
     }

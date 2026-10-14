@@ -143,3 +143,53 @@ class _DrunkVisionState extends State<DrunkVision> {
     },
   );
 }
+
+/// Gets the drunk frame's filters ready before the first drunk frame needs them (upstream #321's
+/// DrunkVision.prepare): the blur and colour grade are drawn once, off screen into a 1x1 image, so
+/// the engine has built their shaders and the first sip doesn't hitch. [prepare] does it at most
+/// once; [queue] does it soon, off the frame that asked (opening the bar, ordering a drink).
+class DrunkWarmup {
+  DrunkWarmup({Future<void> Function()? render, void Function(VoidCallback)? later})
+    : _render = render ?? _renderFilters,
+      _later = later ?? ((fn) => Future<void>.delayed(Duration.zero, fn));
+
+  final Future<void> Function() _render;
+  final void Function(VoidCallback) _later;
+  bool _prepared = false;
+  bool _queued = false;
+
+  bool get prepared => _prepared;
+
+  void prepare() {
+    if (_prepared) return;
+    _prepared = true;
+    _render().catchError((Object e) => debugPrint("drunk vision didn't warm up: $e"));
+  }
+
+  void queue() {
+    if (_queued || _prepared) return;
+    _queued = true;
+    _later(() {
+      _queued = false;
+      prepare();
+    });
+  }
+
+  static Future<void> _renderFilters() async {
+    final look = DrunkLook.at(1, 0);
+    final rec = ui.PictureRecorder();
+    ui.Canvas(rec).drawRect(const Rect.fromLTWH(0, 0, 1, 1), Paint()..color = const Color(0xFF000000));
+    final picture = rec.endRecording();
+    final b = ui.SceneBuilder()
+      ..pushColorFilter(ColorFilter.matrix(drunkColorMatrix(look.warmth)))
+      ..pushImageFilter(ui.ImageFilter.blur(sigmaX: look.blur, sigmaY: look.blur, tileMode: TileMode.clamp))
+      ..addPicture(Offset.zero, picture)
+      ..pop()
+      ..pop();
+    final scene = b.build();
+    final image = await scene.toImage(1, 1);
+    image.dispose();
+    scene.dispose();
+    picture.dispose();
+  }
+}

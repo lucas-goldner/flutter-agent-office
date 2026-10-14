@@ -22,7 +22,14 @@ Geometry box(double w, double h, double d) => _cached('box $w $h $d', () => Cubo
 /// three's CylinderGeometry(radiusTop, radiusBottom, height, radialSegments, 1, openEnded).
 Geometry cyl(double rt, double rb, double h, [int seg = 8, bool open = false]) => _cached(
   'cyl $rt $rb $h $seg $open',
-  () => CylinderGeometry(topRadius: rt, bottomRadius: rb, height: h, radialSegments: seg, topCap: !open, bottomCap: !open),
+  () => CylinderGeometry(
+    topRadius: rt,
+    bottomRadius: rb,
+    height: h,
+    radialSegments: seg,
+    topCap: !open,
+    bottomCap: !open,
+  ),
 );
 
 /// three's ConeGeometry(radius, height, radialSegments, 1, openEnded): apex up.
@@ -123,6 +130,16 @@ Geometry groundPlane(double w, double d, [double su = 1, double sv = 1]) {
   return _flat(p, uv);
 }
 
+/// A convex outline in XY as a flat fan, seen from both sides (a glint trimmed to its pane).
+Geometry convexXY(List<vm.Vector2> pts) {
+  final p = <double>[];
+  for (var i = 1; i + 1 < pts.length; i++) {
+    final a = pts[0], b = pts[i], c = pts[i + 1];
+    p.addAll([a.x, a.y, 0, b.x, b.y, 0, c.x, c.y, 0, a.x, a.y, 0, c.x, c.y, 0, b.x, b.y, 0]);
+  }
+  return MeshGeometry.fromMeshData(MeshData.build(positions: _f32(p)));
+}
+
 /// A plane with UVs of its own (the rain on a window, whose drops keep one size).
 Geometry planeXYuv(double w, double h, double u0, double v0, double u1, double v1) {
   final x = w / 2, y = h / 2;
@@ -139,21 +156,22 @@ Geometry planeXYuv(double w, double h, double u0, double v0, double u1, double v
 Geometry circleXY(double r, [int seg = 16, bool both = false]) => ringXY(0, r, seg, both);
 
 /// three's RingGeometry: an annulus in XY facing +z.
-Geometry ringXY(double inner, double outer, [int seg = 32, bool both = false]) => _cached('ring $inner $outer $seg $both', () {
-  final p = <double>[];
-  for (var i = 0; i < seg; i++) {
-    final a0 = i / seg * math.pi * 2, a1 = (i + 1) / seg * math.pi * 2;
-    final c0 = math.cos(a0), s0 = math.sin(a0), c1 = math.cos(a1), s1 = math.sin(a1);
-    void tri(List<double> t) {
-      p.addAll(t);
-      if (both) p.addAll([t[0], t[1], t[2], t[6], t[7], t[8], t[3], t[4], t[5]]);
-    }
+Geometry ringXY(double inner, double outer, [int seg = 32, bool both = false]) =>
+    _cached('ring $inner $outer $seg $both', () {
+      final p = <double>[];
+      for (var i = 0; i < seg; i++) {
+        final a0 = i / seg * math.pi * 2, a1 = (i + 1) / seg * math.pi * 2;
+        final c0 = math.cos(a0), s0 = math.sin(a0), c1 = math.cos(a1), s1 = math.sin(a1);
+        void tri(List<double> t) {
+          p.addAll(t);
+          if (both) p.addAll([t[0], t[1], t[2], t[6], t[7], t[8], t[3], t[4], t[5]]);
+        }
 
-    tri([outer * c0, outer * s0, 0, outer * c1, outer * s1, 0, inner * c1, inner * s1, 0]);
-    if (inner > 0) tri([outer * c0, outer * s0, 0, inner * c1, inner * s1, 0, inner * c0, inner * s0, 0]);
-  }
-  return MeshGeometry.fromMeshData(MeshData.build(positions: _f32(p)));
-});
+        tri([outer * c0, outer * s0, 0, outer * c1, outer * s1, 0, inner * c1, inner * s1, 0]);
+        if (inner > 0) tri([outer * c0, outer * s0, 0, inner * c1, inner * s1, 0, inner * c0, inner * s0, 0]);
+      }
+      return MeshGeometry.fromMeshData(MeshData.build(positions: _f32(p)));
+    });
 
 /// three's TorusGeometry(radius, tube, radialSegments, tubularSegments, arc): a ring in XY, the
 /// arc running counter-clockwise from +x.
@@ -212,7 +230,9 @@ Node boxFaces(double w, double h, double d, List<Material?> mats, {double repeat
     _quad(p, uv, c, r, u, 1, i == 2 || i == 3 ? 1 : repeatV);
   }
   return Node(
-    mesh: Mesh.primitives(primitives: [for (final e in byMat.entries) MeshPrimitive(_flat(e.value.$1, e.value.$2), e.key)]),
+    mesh: Mesh.primitives(
+      primitives: [for (final e in byMat.entries) MeshPrimitive(_flat(e.value.$1, e.value.$2), e.key)],
+    ),
   );
 }
 
@@ -380,7 +400,9 @@ List<int> triangulate(List<vm.Vector2> outer, List<List<vm.Vector2>> holes) {
     start += h.length;
   }
   // Rightmost holes first, each bridged to the nearest outline vertex it can see.
-  holeIdx.sort((a, b) => a.map((i) => all[i].x).reduce(math.max).compareTo(b.map((i) => all[i].x).reduce(math.max)) * -1);
+  holeIdx.sort(
+    (a, b) => a.map((i) => all[i].x).reduce(math.max).compareTo(b.map((i) => all[i].x).reduce(math.max)) * -1,
+  );
   for (var hi = 0; hi < holeIdx.length; hi++) {
     final hole = holeIdx[hi];
     var m = 0;
@@ -448,7 +470,9 @@ List<int> triangulate(List<vm.Vector2> outer, List<List<vm.Vector2>> holes) {
       // Degenerate leftovers (collinear runs): drop a flat vertex and carry on.
       var dropped = false;
       for (var i = 0; i < ring.length; i++) {
-        final a = all[ring[(i - 1 + ring.length) % ring.length]], b = all[ring[i]], c = all[ring[(i + 1) % ring.length]];
+        final a = all[ring[(i - 1 + ring.length) % ring.length]],
+            b = all[ring[i]],
+            c = all[ring[(i + 1) % ring.length]];
         if (_cross(a, b, c).abs() <= 1e-12) {
           ring.removeAt(i);
           dropped = true;
