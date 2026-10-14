@@ -4,9 +4,10 @@ import 'package:flutter/material.dart';
 
 import 'hud_parts.dart' show KeyCap;
 import 'modal.dart';
+import 'terminal_logic.dart' show isMacKeyboard;
 import 'theme.dart';
 
-const List<(String, String)> helpRows = [
+final List<(String, String)> helpRows = [
   ('W A S D', 'Walk (hold Shift to run)'),
   ('Space', 'Jump'),
   (
@@ -32,13 +33,25 @@ const List<(String, String)> helpRows = [
   ),
   (
     '🤖',
-    'An agent stands by the issues board, the PR board and the task queue. Press E at one and type what you want: it runs as an agent that knows that board. O there opens its terminal, X sends it home',
+    'An agent stands by the issues board, the PR board and the task queue. Press E at one and type what you want: it runs as an agent that knows that board. O there opens its terminal; Hide, ✕ or Esc closes the terminal without sending it home; X sends it home',
   ),
-  ('🕹️', 'The arcade cabinet in the lounge: E plays BLOCKFALL (arrows move and turn, Space drops, C holds, P pauses), or watches whoever is on it'),
-  ('🏀', 'The ball under the hoop on the west wall: E picks it up, hold E (or click) and let go in the green to shoot, Q drops it'),
-  ('⛳', 'The golf tee on the balcony: E steps up, A/D aim, W/S loft, hold Space and let go to swing, E puts the club back'),
+  (
+    '🕹️',
+    'The arcade cabinet in the lounge: E plays BLOCKFALL (arrows move and turn, Space drops, C holds, P pauses), or watches whoever is on it',
+  ),
+  (
+    '🏀',
+    'The ball under the hoop on the west wall: E picks it up, hold E (or click) and let go in the green to shoot, Q drops it',
+  ),
+  (
+    '⛳',
+    'The golf tee on the balcony: E steps up, A/D aim, W/S loft, hold Space and let go to swing, E puts the club back',
+  ),
   ('📚', "The bookshelf on the south wall: E reads the project's Markdown docs"),
-  ('🤝', 'The meeting room under the boss office: E at its table calls a meeting of 2 to 5 workers, or shows how it is going'),
+  (
+    '🤝',
+    'The meeting room under the boss office: E at its table calls a meeting of 2 to 5 workers, or shows how it is going',
+  ),
   (
     '🍸',
     'The elevator goes up to the rooftop bar: a DJ playing drum and bass under the lights, and the city all around. Press E at the bar for a drink (it goes to your head for a bit) and at the DJ booth for the air horn',
@@ -49,9 +62,18 @@ const List<(String, String)> helpRows = [
   ('B', 'Open a shared shell (dev servers, git, tests) at an empty desk'),
   ('R', 'Resume a sleeping worker'),
   ('X', 'Send a worker home (frees the desk)'),
-  ('👥', 'Click someone under "In the office" to walk over to them (on another floor, you ride the elevator first). The line under their name says what they have open or where they are'),
-  ('N', "Next worker that needs you: go to whoever has waited longest (needs input, or done and nobody's looked), and again for the next one. Arrows at the edge of the screen point to the ones out of sight"),
-  ('Q', 'Put back the issue card in your hands (E at a note on the issues board, or ✋ Pick it up in an issue; then E at an empty desk, a worker or the queue board)'),
+  (
+    '👥',
+    'Click someone under "In the office" to walk over to them (on another floor, you ride the elevator first). The line under their name says what they have open or where they are',
+  ),
+  (
+    'N',
+    "Next worker that needs you: go to whoever needs input (they have a red beacon over their desk, and a banner up top says what each is asking), then whoever is done and nobody's looked at, longest-waiting first, and again for the next one. Arrows at the edge of the screen point to the ones out of sight",
+  ),
+  (
+    'Q',
+    'Put back the issue card in your hands (E at a note on the issues board, or ✋ Pick it up in an issue; then E at an empty desk, a worker or the queue board)',
+  ),
   ('F', 'Hang a picture from the web on a wall. Look at a picture and press E to move, edit or take it down'),
   (
     '🐶',
@@ -64,11 +86,25 @@ const List<(String, String)> helpRows = [
     'Emote: hold G, point at one and let go (or tap G and click one), or press 1–6: wave, thumbs up, clap, dance, point, facepalm. Everyone on your floor sees it',
   ),
   ('/', 'Search the chat and every terminal on your floor, back to before the office last restarted'),
-  ('V', 'Join voice. In voice, hold V to talk (push to talk): you’re muted once you let go. Leave voice from the ☰ menu'),
+  (
+    isMacKeyboard ? '⌘K' : 'Ctrl+K',
+    'Command palette: type a few letters to find a worker, issue, PR, service, board, teammate or action. Enter opens it, Shift+Enter walks you over to it first',
+  ),
+  (
+    'V',
+    'Join voice. In voice, hold V to talk (push to talk): you’re muted once you let go. Leave voice from the ☰ menu',
+  ),
   ('M', 'Mute or unmute your mic in voice. ⚙️ Settings can have you join muted, for push to talk'),
+  (
+    'Ctrl+Space',
+    'Dictate: in a worker’s terminal or a prompt box, hold Ctrl+Space (or the 🎤) and talk, and what you said is typed in when you let go, for you to read over and send. A quick tap leaves it listening until you tap again. The browser does the listening (Chrome, Edge and Safari can), so there’s nothing to install',
+  ),
   ('Tab', 'The ☰ menu, top right: every window, and what shows on screen. Pin what you use most to the top bar'),
   ('Esc', 'Close any window and get back to looking around'),
-  ('Ctrl + [', 'Send Esc to a terminal (e.g. to interrupt Claude)'),
+  (
+    'Ctrl + [',
+    'Send Esc to a terminal instead, to close a menu like Claude’s /skills or interrupt Claude. ⎋ Esc in the terminal’s header does the same',
+  ),
   ('⚙️', 'Settings (in the ☰ menu): switch between first and third person'),
 ];
 

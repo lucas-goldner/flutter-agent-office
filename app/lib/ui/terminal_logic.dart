@@ -2,10 +2,12 @@
 // PTY, reading the xterm buffer the way shared/search.dart does, and finding a link under a click.
 // No browser imports, so it is tested on the VM.
 
+import 'package:flutter/foundation.dart' show TargetPlatform, defaultTargetPlatform;
 import 'package:xterm/xterm.dart' as x;
 
 import 'package:office_shared/protocol.dart';
 import 'package:office_shared/search.dart';
+
 import 'provider.dart';
 
 /// A search hit to scroll to once the terminal has loaded (see search.dart): `needle` is what was
@@ -25,7 +27,12 @@ class TermSizePolicy {
   /// The size this window last asked the PTY for ('' when it follows someone else's).
   String lastSent = '';
 
-  SizeDecision decide({required bool typing, required WorkerInfo? w, required TermSize fit, required TermSize current}) {
+  SizeDecision decide({
+    required bool typing,
+    required WorkerInfo? w,
+    required TermSize fit,
+    required TermSize current,
+  }) {
     if (!typing && (w?.viewers.length ?? 0) > 1) {
       if (w != null && (w.cols != current.cols || w.rows != current.rows)) {
         return (resizeTo: (cols: w.cols, rows: w.rows), send: null);
@@ -165,3 +172,65 @@ List<TermViewer> viewersOf(List<String> viewerIds, Map<String, PeerInfo> peers, 
   // A stable sort: you first, the rest in the order they came.
   return [...list.where((v) => v.you), ...list.where((v) => !v.you)];
 }
+
+/// Whether this is a Mac (or an iPad), where ⌘ is the editing modifier. On the web Flutter reads it off the browser.
+bool get isMacKeyboard => defaultTargetPlatform == TargetPlatform.macOS || defaultTargetPlatform == TargetPlatform.iOS;
+
+/// The editing keys people expect from their own terminal ("Natural Text Editing" in iTerm2, and what VS
+/// Code's terminal sends), which the terminal leaves out (termkeys.ts): it sends a plain backspace for ⌘⌫
+/// and Ctrl+⌫, a plain Enter for Shift+Enter, and nothing at all for ⌘← / ⌘→. Returns the bytes to send
+/// instead, or null to let the terminal handle the key. Every one is a readline control key that Claude
+/// Code, Codex, OpenCode and bash all understand:
+///
+/// - Shift+Enter → Ctrl+J, a new line in the agents' prompts (Enter, like before, in a shell)
+/// - Ctrl+⌫ → Ctrl+W, delete the word before the cursor (⌥⌫ already does, as Esc ⌫)
+/// - ⌘⌫ → Ctrl+U, delete to the start of the line; ⌘⌦ → Ctrl+K, to the end
+/// - ⌘← / ⌘→ → Ctrl+A / Ctrl+E, jump to the start / end of the line
+///
+/// [key] is the DOM key name: Enter, Backspace, Delete, ArrowLeft, ArrowRight.
+String? naturalKey(
+  String key, {
+  bool ctrl = false,
+  bool alt = false,
+  bool shift = false,
+  bool meta = false,
+  required bool mac,
+}) {
+  final mods = '${ctrl ? 'C' : ''}${alt ? 'A' : ''}${shift ? 'S' : ''}${meta ? 'M' : ''}';
+  final cmd = mac ? 'M' : null;
+  switch (key) {
+    case 'Enter':
+      return mods == 'S' ? '\n' : null;
+    case 'Backspace':
+      if (mods == 'C') return '\x17';
+      return mods == cmd ? '\x15' : null;
+    case 'Delete':
+      return mods == cmd ? '\x0b' : null;
+    case 'ArrowLeft':
+      return mods == cmd ? '\x01' : null;
+    case 'ArrowRight':
+      return mods == cmd ? '\x05' : null;
+  }
+  return null;
+}
+
+/// Whether Ctrl plus the key typing [character] at [physical] is Ctrl+[want] ('[' or ']'): by the character,
+/// or by the key's place for keyboards where [ and ] take AltGr or are other letters (ü, å), but not where
+/// that key types something else ASCII (Ctrl + + zooms in on a German keyboard).
+bool ctrlBracket(String want, {required String? character, required bool atBracketKey}) {
+  if (character == want) return true;
+  if (!atBracketKey) return false;
+  final c = character ?? '';
+  return !(c.length == 1 && c.codeUnitAt(0) >= 0x20 && c.codeUnitAt(0) <= 0x7e);
+}
+
+final _escMention = RegExp(r'\besc(ape)?\b(?!\s+(to\s+)?interrupt)', caseSensitive: false);
+
+/// Whether the program in the terminal says Esc does something right now, like Claude's /skills menu
+/// ("Esc to close") or a question ("Esc to cancel"), apart from interrupting it while it works. [lines] are
+/// the rows on screen.
+bool screenMentionsEsc(Iterable<String> lines) => lines.any(_escMention.hasMatch);
+
+/// The tip when Esc left a terminal whose program wanted one.
+String escLeftTip(String name) =>
+    'Esc left the terminal. To send $name an Esc (to close a menu), use ⎋ Esc at the top or Ctrl+[';

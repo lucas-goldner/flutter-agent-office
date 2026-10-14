@@ -169,7 +169,10 @@ class _BackdropState extends State<_Backdrop> {
           else
             Positioned.fill(
               child: SafeArea(
-                child: Padding(padding: const EdgeInsets.all(16), child: Center(child: widget.child)),
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Center(child: widget.child),
+                ),
               ),
             ),
         ],
@@ -193,7 +196,11 @@ class ModalWindow extends StatelessWidget {
     this.background = Swatch.paper,
     this.scrollBody = true,
     this.closable = true,
+    this.wrapHeader = false,
   });
+
+  /// On a narrow window the header's extras wrap under the title instead of pushing ✕ off the edge.
+  final bool wrapHeader;
 
   final ModalHandle modal;
   final Widget title;
@@ -240,19 +247,37 @@ class ModalWindow extends StatelessWidget {
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   decoration: const BoxDecoration(
                     color: Swatch.paper2,
-                    border: Border(bottom: BorderSide(color: Swatch.ink, width: kBorder)),
+                    border: Border(
+                      bottom: BorderSide(color: Swatch.ink, width: kBorder),
+                    ),
                   ),
                   child: Row(
                     children: [
                       Expanded(
-                        child: DefaultTextStyle(
-                          style: heavy(18, weight: FontWeight.w900),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          child: title,
-                        ),
+                        child: wrapHeader && screen.width < 720
+                            ? Wrap(
+                                spacing: 8,
+                                runSpacing: 6,
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                children: [
+                                  DefaultTextStyle(
+                                    style: heavy(18, weight: FontWeight.w900),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    child: title,
+                                  ),
+                                  ...headerExtras,
+                                ],
+                              )
+                            : DefaultTextStyle(
+                                style: heavy(18, weight: FontWeight.w900),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                child: title,
+                              ),
                       ),
-                      ...headerExtras.map((w) => Padding(padding: const EdgeInsets.only(left: 8), child: w)),
+                      if (!wrapHeader || screen.width >= 720)
+                        ...headerExtras.map((w) => Padding(padding: const EdgeInsets.only(left: 8), child: w)),
                       if (closable) ...[
                         const SizedBox(width: 8),
                         OfficeButton(label: '✕', onPressed: modal.close, tooltip: 'Close', dense: true),
@@ -266,7 +291,9 @@ class ModalWindow extends StatelessWidget {
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                     decoration: const BoxDecoration(
                       color: Swatch.paper2,
-                      border: Border(top: BorderSide(color: Swatch.ink, width: kBorder)),
+                      border: Border(
+                        top: BorderSide(color: Swatch.ink, width: kBorder),
+                      ),
                     ),
                     child: footer,
                   ),

@@ -1,6 +1,8 @@
 // A small office for widget tests: a store, a socket that keeps what it's sent, settings, and an
 // overlay for ModalStack's windows.
 
+import 'dart:async';
+
 import 'package:agent_office/net/office_socket.dart';
 import 'package:agent_office/office_scope.dart';
 import 'package:agent_office/state/store.dart';
@@ -15,6 +17,12 @@ class FakeNet extends OfficeSocket {
   FakeNet() : super(profile: () => (name: 'Ada', color: '#ff8a5b', look: randomLook()), floor: () => 'f1');
 
   final List<ClientMsg> sent = [];
+
+  /// What the office says, for windows that listen to the socket themselves (a terminal).
+  final incoming = StreamController<ServerMsg>.broadcast(sync: true);
+
+  @override
+  Stream<ServerMsg> get messages => incoming.stream;
 
   @override
   void send(ClientMsg msg) => sent.add(msg);

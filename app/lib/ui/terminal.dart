@@ -16,9 +16,11 @@ import 'package:xterm/xterm.dart' as x;
 
 import '../interop/portable.dart';
 import '../office_scope.dart';
+
 import 'package:office_shared/protocol.dart';
 import 'package:office_shared/search.dart';
 import 'package:office_shared/status.dart';
+
 import '../state/store.dart';
 import '../world/laptop_screen.dart';
 import 'modal.dart';
@@ -57,7 +59,12 @@ const kTermTheme = x.TerminalTheme(
 );
 
 /// ui-monospace 14px at a 1.1 line height, in the bundled face.
-const kTermStyle = x.TerminalStyle(fontSize: 14, height: 1.1, fontFamily: kTermFont, fontFamilyFallback: kTermFontFallback);
+const kTermStyle = x.TerminalStyle(
+  fontSize: 14,
+  height: 1.1,
+  fontFamily: kTermFont,
+  fontFamilyFallback: kTermFontFallback,
+);
 
 /// Copy with Ctrl+Shift+C (Cmd+C on a Mac). Paste is the browser's own (see interceptPaste), and
 /// Ctrl+A goes to the program (readline's start of line), not select-all.
@@ -85,7 +92,7 @@ void openTerminal(OfficeScope scope, String workerId, {VoidCallback? onChanges, 
   late final ModalHandle modal;
   modal = ModalStack.instance.show(
     (m) => _TerminalWindow(key: key, scope: scope, workerId: workerId, modal: m, onChanges: onChanges, find: find),
-    // Esc belongs to the program in the terminal; Ctrl+] or ✕ leaves.
+    // The terminal has the keys: its own Esc leaves (with a tip when the program wanted one), Ctrl+] too.
     escCloses: false,
     onClose: () {
       if (identical(_current?.modal, modal)) _current = null;
@@ -96,7 +103,14 @@ void openTerminal(OfficeScope scope, String workerId, {VoidCallback? onChanges, 
 }
 
 class _TerminalWindow extends StatefulWidget {
-  const _TerminalWindow({super.key, required this.scope, required this.workerId, required this.modal, this.onChanges, this.find});
+  const _TerminalWindow({
+    super.key,
+    required this.scope,
+    required this.workerId,
+    required this.modal,
+    this.onChanges,
+    this.find,
+  });
 
   final OfficeScope scope;
   final String workerId;
@@ -247,7 +261,10 @@ class _TerminalWindowState extends State<_TerminalWindow> {
     final host = _host;
     final cell = _cell;
     if (host == null || cell == null || cell.isEmpty) return null;
-    return (cols: (host.width / cell.width).floor().clamp(2, 1000), rows: (host.height / cell.height).floor().clamp(1, 1000));
+    return (
+      cols: (host.width / cell.width).floor().clamp(2, 1000),
+      rows: (host.height / cell.height).floor().clamp(1, 1000),
+    );
   }
 
   void _sendSize({bool typing = false}) {
@@ -332,17 +349,64 @@ class _TerminalWindowState extends State<_TerminalWindow> {
     _scroll.jumpTo(target);
   }
 
+  /// Sends the program an Esc: to close a menu like Claude's /skills, or to interrupt it.
+  void _sendEsc() {
+    _sayTyping();
+    _sendSize(typing: true);
+    _term.textInput('\x1b');
+  }
+
+  /// Leaves with Esc; if the program wanted one (you were in /skills, say), says how to send it one.
+  void _leaveByEsc() {
+    if (_ready) {
+      final buf = _term.buffer;
+      final top = buf.lines.length - _term.viewHeight;
+      final rows = [for (var y = top < 0 ? 0 : top; y < buf.lines.length; y++) lineText(buf.lines[y], true)];
+      if (screenMentionsEsc(rows)) toast(escLeftTip(worker?.name ?? 'the worker'));
+    }
+    widget.modal.close();
+  }
+
   KeyEventResult _onKey(FocusNode node, KeyEvent e) {
     if (e is! KeyDownEvent && e is! KeyRepeatEvent) return KeyEventResult.ignored;
-    _sayTyping();
-    final ctrl = HardwareKeyboard.instance.isControlPressed;
-    final meta = HardwareKeyboard.instance.isMetaPressed;
-    if (ctrl && (e.logicalKey == LogicalKeyboardKey.bracketRight || e.character == ']')) {
-      widget.modal.close();
+    final keys = HardwareKeyboard.instance;
+    final ctrl = keys.isControlPressed;
+    final meta = keys.isMetaPressed;
+    final alt = keys.isAltPressed;
+    final shift = keys.isShiftPressed;
+    // The Esc key leaves the terminal; ⎋ Esc or Ctrl+[ sends the program one.
+    if (e.logicalKey == LogicalKeyboardKey.escape && !ctrl && !meta && !alt && !shift && e is KeyDownEvent) {
+      _leaveByEsc();
       return KeyEventResult.handled;
     }
-    if (ctrl && (e.logicalKey == LogicalKeyboardKey.bracketLeft || e.character == '[')) {
-      _onData('\x1b');
+    _sayTyping();
+    if (ctrl && !alt && !meta) {
+      bool at(String want, LogicalKeyboardKey logical, PhysicalKeyboardKey physical) =>
+          e.logicalKey == logical || ctrlBracket(want, character: e.character, atBracketKey: e.physicalKey == physical);
+      if (at(']', LogicalKeyboardKey.bracketRight, PhysicalKeyboardKey.bracketRight)) {
+        widget.modal.close();
+        return KeyEventResult.handled;
+      }
+      if (at('[', LogicalKeyboardKey.bracketLeft, PhysicalKeyboardKey.bracketLeft)) {
+        _sendEsc();
+        return KeyEventResult.handled;
+      }
+    }
+    // ⌘⌫, Ctrl+⌫, Shift+Enter and friends edit the prompt the way your own terminal does.
+    final name = switch (e.logicalKey) {
+      LogicalKeyboardKey.enter || LogicalKeyboardKey.numpadEnter => 'Enter',
+      LogicalKeyboardKey.backspace => 'Backspace',
+      LogicalKeyboardKey.delete => 'Delete',
+      LogicalKeyboardKey.arrowLeft => 'ArrowLeft',
+      LogicalKeyboardKey.arrowRight => 'ArrowRight',
+      _ => null,
+    };
+    final natural = name == null
+        ? null
+        : naturalKey(name, ctrl: ctrl, alt: alt, shift: shift, meta: meta, mac: isMacKeyboard);
+    if (natural != null) {
+      _sendSize(typing: true);
+      _term.textInput(natural);
       return KeyEventResult.handled;
     }
     if ((ctrl || meta) && e.logicalKey == LogicalKeyboardKey.keyV) {
@@ -421,6 +485,7 @@ class _TerminalWindowState extends State<_TerminalWindow> {
       width: 1200,
       height: 820,
       background: Swatch.termBg,
+      wrapHeader: true,
       scrollBody: false,
       bodyPadding: const EdgeInsets.fromLTRB(10, 8, 4, 4),
       title: _Title(w: w, project: store.project),
@@ -461,12 +526,18 @@ class _TerminalWindowState extends State<_TerminalWindow> {
   List<Widget> _presence(WorkerInfo w, TextStyle muted) {
     _pruneTyping();
     final people = viewersOf(w.viewerIds, store.peers, store.you, _typing.keys.toSet());
-    final typists = [for (final v in people) if (v.typing && !v.you) v.name];
+    final typists = [
+      for (final v in people)
+        if (v.typing && !v.you) v.name,
+    ];
     return [
       if (people.isNotEmpty)
         Tooltip(
           message: 'In this terminal: ${people.map((v) => v.you ? '${v.name} (you)' : v.name).join(', ')}',
-          child: Row(mainAxisSize: MainAxisSize.min, children: [for (final v in people) Padding(padding: const EdgeInsets.only(right: 4), child: _Face(v))]),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [for (final v in people) Padding(padding: const EdgeInsets.only(right: 4), child: _Face(v))],
+          ),
         )
       else if (w.viewers.isNotEmpty)
         // An office from before viewerIds: just the names.
@@ -500,6 +571,19 @@ class _TerminalWindowState extends State<_TerminalWindow> {
           tooltip: 'OpenCode models: Ctrl+X then M (use /models if custom bindings override it)',
           onPressed: _ready && !isAsleep(w.status) ? _openModels : null,
         ),
+      // The Esc key leaves the terminal, so this is how Esc reaches the program: to close a menu like
+      // Claude's /skills, or to interrupt it. Ctrl+[ does the same from the keyboard.
+      OfficeButton(
+        key: const ValueKey('term-esc'),
+        label: '⎋ Esc',
+        tooltip: 'Send Esc to the terminal (Ctrl+[): closes a menu like /skills, or interrupts the agent. The Esc key on its own leaves the terminal',
+        onPressed: _ready && !isAsleep(w.status)
+            ? () {
+                _sendEsc();
+                _focus.requestFocus();
+              }
+            : null,
+      ),
       if (widget.onChanges != null)
         OfficeButton(
           label: '🌿 Changes',
@@ -509,6 +593,12 @@ class _TerminalWindowState extends State<_TerminalWindow> {
             widget.modal.close();
           },
         ),
+      OfficeButton(
+        key: const ValueKey('term-hide'),
+        label: 'Hide',
+        tooltip: 'Hide this terminal; the worker keeps running at its desk',
+        onPressed: widget.modal.close,
+      ),
     ];
   }
 }
@@ -560,7 +650,11 @@ class _FaceState extends State<_Face> with SingleTickerProviderStateMixin {
       width: 26,
       height: 26,
       alignment: Alignment.center,
-      decoration: BoxDecoration(color: hexColor(v.color), shape: BoxShape.circle, border: Border.all(color: Swatch.ink, width: 2)),
+      decoration: BoxDecoration(
+        color: hexColor(v.color),
+        shape: BoxShape.circle,
+        border: Border.all(color: Swatch.ink, width: 2),
+      ),
       child: Text(initials(v.name), style: heavy(10, weight: FontWeight.w900)),
     );
     return Tooltip(
@@ -569,7 +663,8 @@ class _FaceState extends State<_Face> with SingleTickerProviderStateMixin {
         padding: EdgeInsets.only(right: v.typing ? 4 : 0),
         child: AnimatedBuilder(
           animation: _bob,
-          builder: (context, child) => Transform.translate(offset: Offset(0, -3 * math.sin(_bob.value * math.pi)), child: child),
+          builder: (context, child) =>
+              Transform.translate(offset: Offset(0, -3 * math.sin(_bob.value * math.pi)), child: child),
           child: Stack(
             clipBehavior: Clip.none,
             children: [
@@ -582,7 +677,11 @@ class _FaceState extends State<_Face> with SingleTickerProviderStateMixin {
                     width: 15,
                     height: 15,
                     alignment: Alignment.center,
-                    decoration: BoxDecoration(color: Swatch.paper, shape: BoxShape.circle, border: Border.all(color: Swatch.ink, width: 2)),
+                    decoration: BoxDecoration(
+                      color: Swatch.paper,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Swatch.ink, width: 2),
+                    ),
                     child: Text('✎', style: heavy(7, weight: FontWeight.w900).copyWith(height: 1)),
                   ),
                 ),
