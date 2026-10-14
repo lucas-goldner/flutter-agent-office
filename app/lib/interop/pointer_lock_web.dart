@@ -10,12 +10,20 @@ import 'dart:js_interop';
 
 import 'package:web/web.dart' as web;
 
+import 'mouse_settle.dart';
+
 class PointerLock {
   PointerLock({required this.onMove, this.onChange});
 
   /// Mouse movement in pixels while locked, clamped against the bogus jump some platforms report.
   final void Function(double dx, double dy) onMove;
   final void Function(bool locked)? onChange;
+
+  /// Holding the view still while the hand that clicked a window shut comes to rest.
+  final MouseSettle settle = MouseSettle();
+
+  /// Whether the last thing pressed was a mouse button rather than a key (a window it closed settles).
+  bool get pressedMouse => settle.pressedMouse;
 
   bool _failed = false;
   bool _pending = false;
@@ -43,7 +51,7 @@ class PointerLock {
   /// Whether a lock may be taken right now (no window open, first person): the page says.
   bool Function() mayLock = () => true;
 
-  JSFunction? _move, _change, _error, _escDown, _escUp, _blur;
+  JSFunction? _move, _change, _error, _escDown, _escUp, _blur, _pressed, _keyed;
 
   web.Element? get _target => web.document.querySelector('flutter-view') ?? web.document.body;
 
@@ -68,7 +76,8 @@ class PointerLock {
 
   void attach() {
     _move = ((web.PointerEvent e) {
-      if (!locked) return;
+      final looks = settle.looks(web.window.performance.now());
+      if (!locked || !looks) return;
       double clamp(num v) => v.toDouble().clamp(-250, 250);
       onMove(clamp(e.movementX), clamp(e.movementY));
     }).toJS;
@@ -82,6 +91,7 @@ class PointerLock {
         if (again) lock();
       } else {
         _everLocked = true;
+        settle.landed(web.window.performance.now());
       }
       onChange?.call(locked);
     }).toJS;
@@ -105,6 +115,11 @@ class PointerLock {
       _escDownAt = 0;
       _lockOnEscUp = false;
     }).toJS;
+    // Captured, before a window acts on it.
+    _pressed = ((web.Event _) => settle.pressedMouse = true).toJS;
+    _keyed = ((web.Event _) => settle.pressedMouse = false).toJS;
+    web.window.addEventListener('pointerdown', _pressed, true.toJS);
+    web.window.addEventListener('keydown', _keyed, true.toJS);
     web.document.addEventListener('pointermove', _move);
     web.document.addEventListener('pointerlockchange', _change);
     web.document.addEventListener('pointerlockerror', _error);
@@ -114,6 +129,8 @@ class PointerLock {
   }
 
   void detach() {
+    web.window.removeEventListener('pointerdown', _pressed, true.toJS);
+    web.window.removeEventListener('keydown', _keyed, true.toJS);
     web.document.removeEventListener('pointermove', _move);
     web.document.removeEventListener('pointerlockchange', _change);
     web.document.removeEventListener('pointerlockerror', _error);
@@ -123,8 +140,10 @@ class PointerLock {
     unlock();
   }
 
-  /// Captures the mouse for looking around, as the first click on the scene does.
-  void lock() {
+  /// Captures the mouse for looking around, as the first click on the scene does. With [settled] (a click
+  /// just closed a window), the view holds still until the mouse comes to rest (see [MouseSettle]).
+  void lock({bool settled = false}) {
+    settle.asked(settled);
     // Still being let go of, for a window that closed again at once: taken back once it's free.
     if (locked && _letting) _lockAfter = true;
     if (locked || _pending || _failed) return;

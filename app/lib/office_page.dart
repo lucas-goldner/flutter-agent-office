@@ -91,8 +91,9 @@ class _OfficePageState extends State<OfficePage> {
     _focus.requestFocus();
     if (c.player.view != ViewMode.first || !_lock.canLock || _lock.hasMouse) return;
     // The browser lets a page re-capture the mouse it let go of itself (see yieldMouse), even on Esc,
-    // and any time after a click, like one on ✕. When it won't, the next key you press does.
-    _lock.lock();
+    // and any time after a click, like one on ✕. When it won't, the next key you press does. Closed with a
+    // click (Send home, ✕), the view waits for the hand that clicked to come to rest.
+    _lock.lock(settled: _lock.pressedMouse);
     c.relookOnKey = true;
   }
 
