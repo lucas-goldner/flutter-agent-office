@@ -818,6 +818,7 @@ String workerSub(WorkerInfo w, ProjectInfo? project) {
   return [
     if (provider != null) '⚙️ $provider${badge != null ? ' · $badge' : ''}$note',
     if (w.worktree != null) '🌿 ${w.worktree!.branch}',
+    if (w.repos?.isNotEmpty ?? false) '🗂️ ${w.repos!.length + 1} repos',
     if (w.pr != null) '🔀 PR #${w.pr!.number}',
     ?doing,
   ].join(' · ');

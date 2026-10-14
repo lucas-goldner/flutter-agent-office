@@ -10,7 +10,9 @@ import 'package:flutter/services.dart';
 import '../interop/portable.dart';
 import '../net/server.dart';
 import '../office_scope.dart';
+
 import 'package:office_shared/protocol.dart';
+
 import '../state/store.dart';
 import '../world/laptop_screen.dart' show kTermFont, kTermFontFallback;
 import 'changes_logic.dart';
@@ -20,25 +22,33 @@ import 'prompt.dart';
 import 'theme.dart';
 import 'worker_text.dart';
 
-({String workerId, ModalHandle modal})? _current;
+({String workerId, ModalHandle modal, ValueNotifier<String?> repo})? _current;
 
 /// Whose changes are on screen, so a reconnect can watch them again.
 String? openChangesFor() => _current?.workerId;
 
-/// Opens [workerId]'s Changes window. [onTerminal] adds the ⌨️ Terminal button.
-void openChanges(OfficeScope scope, String workerId, {VoidCallback? onTerminal}) {
-  if (_current?.workerId == workerId) return;
-  if (scope.store.workers[workerId] == null) return;
+/// Opens [workerId]'s Changes window. [onTerminal] adds the ⌨️ Terminal button. A worker across
+/// repositories (see WorkerInfo.repos) gets a tab per repository, its own floor's first; [repo] opens on
+/// another floor's one.
+void openChanges(OfficeScope scope, String workerId, {VoidCallback? onTerminal, String? repo}) {
+  final cur = _current;
+  if (cur?.workerId == workerId) {
+    cur!.repo.value = repo;
+    return;
+  }
+  final w = scope.store.workers[workerId];
+  if (w == null) return;
   final previous = _current;
+  final want = ValueNotifier<String?>(repo);
   late final ModalHandle modal;
   modal = ModalStack.instance.show(
-    (m) => _ChangesWindow(scope: scope, workerId: workerId, modal: m, onTerminal: onTerminal),
+    (m) => _ChangesWindow(scope: scope, workerId: workerId, modal: m, onTerminal: onTerminal, repo: want),
     onClose: () {
       if (identical(_current?.modal, modal)) _current = null;
     },
   );
-  modal.doing = "🌿 looking over ${scope.store.workers[workerId]!.name}'s changes";
-  _current = (workerId: workerId, modal: modal);
+  modal.doing = "🌿 looking over ${w.name}'s changes";
+  _current = (workerId: workerId, modal: modal, repo: want);
   previous?.modal.close();
 }
 
@@ -48,12 +58,21 @@ const _delColor = Color(0xFFC3423F);
 const _faint = Color(0x262B2D42); // rgba(43,45,66,.15)
 
 class _ChangesWindow extends StatefulWidget {
-  const _ChangesWindow({required this.scope, required this.workerId, required this.modal, this.onTerminal});
+  const _ChangesWindow({
+    required this.scope,
+    required this.workerId,
+    required this.modal,
+    required this.repo,
+    this.onTerminal,
+  });
 
   final OfficeScope scope;
   final String workerId;
   final ModalHandle modal;
   final VoidCallback? onTerminal;
+
+  /// The repository asked for (see [openChanges]).
+  final ValueNotifier<String?> repo;
 
   @override
   State<_ChangesWindow> createState() => _ChangesWindowState();
@@ -76,6 +95,32 @@ class _ChangesWindowState extends State<_ChangesWindow> {
   final _listScroll = ScrollController();
   late final String _name = widget.scope.store.workers[widget.workerId]!.name;
 
+  /// The other floor's repository on screen, for a worker across repositories; null for its own floor's.
+  late String? _repo = _known(widget.repo.value) ? widget.repo.value : null;
+
+  bool _known(String? repo) =>
+      repo == null || (store.workers[widget.workerId]?.repos ?? const <WorkerRepo>[]).any((r) => r.floor == repo);
+
+  /// Switches to another of its repositories: stops following the one on screen and follows that one.
+  void _show(String? next) {
+    if (next == _repo || !_known(next)) return;
+    _send(ChangesUnwatchCmd(widget.workerId, repo: _repo));
+    setState(() {
+      _repo = next;
+      _state = null;
+      _selected = null;
+      _shownSig = null;
+      _loading = false;
+      _diff = null;
+      _diffError = null;
+    });
+    _send(ChangesWatchCmd(widget.workerId, repo: _repo));
+    // What's on screen is what's asked for, so asking for another switches again.
+    widget.repo.value = next;
+  }
+
+  void _asked() => _show(widget.repo.value);
+
   Store get store => widget.scope.store;
   void _send(ClientMsg m) => widget.scope.net.send(m);
 
@@ -85,11 +130,12 @@ class _ChangesWindowState extends State<_ChangesWindow> {
     _subs.add(widget.scope.net.messages.listen(_onMsg));
     _subs.add(
       widget.scope.net.status.listen((up) {
-        if (up) _send(ChangesWatchCmd(widget.workerId));
+        if (up) _send(ChangesWatchCmd(widget.workerId, repo: _repo));
       }),
     );
     store.topic(Topic.workers).addListener(_onWorkers);
-    _send(ChangesWatchCmd(widget.workerId));
+    widget.repo.addListener(_asked);
+    _send(ChangesWatchCmd(widget.workerId, repo: _repo));
     Timer(const Duration(milliseconds: 30), () {
       if (mounted) _focus.requestFocus();
     });
@@ -101,7 +147,8 @@ class _ChangesWindowState extends State<_ChangesWindow> {
       s.cancel();
     }
     store.topic(Topic.workers).removeListener(_onWorkers);
-    _send(ChangesUnwatchCmd(widget.workerId));
+    widget.repo.removeListener(_asked);
+    _send(ChangesUnwatchCmd(widget.workerId, repo: _repo));
     _focus.dispose();
     _listScroll.dispose();
     super.dispose();
@@ -122,7 +169,7 @@ class _ChangesWindowState extends State<_ChangesWindow> {
     if (_selected == null || f == null) return;
     _loading = true;
     _requestedSig = f.sig;
-    _send(ChangesDiffCmd(widget.workerId, _selected!));
+    _send(ChangesDiffCmd(widget.workerId, _selected!, repo: _repo));
   }
 
   void _select(String? p) {
@@ -150,9 +197,9 @@ class _ChangesWindowState extends State<_ChangesWindow> {
 
   void _onMsg(ServerMsg msg) {
     switch (msg) {
-      case ChangesMsg(:final state) when state.workerId == widget.workerId:
+      case ChangesMsg(:final state) when state.workerId == widget.workerId && state.repo == _repo:
         _onState(state);
-      case ChangesDiffMsg m when m.workerId == widget.workerId && m.path == _selected:
+      case ChangesDiffMsg m when m.workerId == widget.workerId && m.repo == _repo && m.path == _selected:
         _loading = false;
         _shownSig = _requestedSig;
         setState(() {
@@ -194,7 +241,7 @@ class _ChangesWindowState extends State<_ChangesWindow> {
       'This puts $n file${n == 1 ? '' : 's'} in ${whereText(_state)} back to the last commit and deletes new files. Commits stay.'
           '${_state?.dir.isNotEmpty == true ? '' : " That folder is shared: anyone's uncommitted edits there go too."}',
       'Discard everything',
-      () => _send(ChangesDiscardCmd(widget.workerId)),
+      () => _send(ChangesDiscardCmd(widget.workerId, repo: _repo)),
     );
   }
 
@@ -202,7 +249,7 @@ class _ChangesWindowState extends State<_ChangesWindow> {
     'Discard the changes to ${f.path.split('/').last}?',
     'This puts ${f.path} back to the last commit in ${whereText(_state)}. ${f.status == ChangeStatus.untracked ? 'The file is deleted.' : 'Committed changes stay.'}',
     'Discard',
-    () => _send(ChangesDiscardCmd(widget.workerId, path: f.path)),
+    () => _send(ChangesDiscardCmd(widget.workerId, path: f.path, repo: _repo)),
   );
 
   void _commit() {
@@ -211,10 +258,11 @@ class _ChangesWindowState extends State<_ChangesWindow> {
     openPrompt(
       PromptOptions(
         title: '✅ Commit $n file${n == 1 ? '' : 's'}',
-        subtitle: 'Stages everything in ${whereText(_state)} and commits it${branch != null && branch.isNotEmpty ? ' on $branch' : ''}.',
+        subtitle:
+            'Stages everything in ${whereText(_state)} and commits it${branch != null && branch.isNotEmpty ? ' on $branch' : ''}.',
         placeholder: 'What changed, and why',
         submitLabel: 'Commit',
-        onSubmit: (text, _) => _send(ChangesCommitCmd(widget.workerId, text)),
+        onSubmit: (text, _) => _send(ChangesCommitCmd(widget.workerId, text, repo: _repo)),
       ),
     );
   }
@@ -222,16 +270,52 @@ class _ChangesWindowState extends State<_ChangesWindow> {
   void _openPr(ChangesState s) => openPrompt(
     PromptOptions(
       title: '🔀 Open a pull request',
-      subtitle: 'Pushes ${s.branch} to origin and opens a PR against ${s.prBase}. The first line is the title; the rest is the description.',
+      subtitle:
+          'Pushes ${s.branch} to origin and opens a PR against ${s.prBase}. The first line is the title; the rest is the description.',
       initial: s.subject ?? '',
       placeholder: 'Title',
       submitLabel: 'Open PR ↗',
       onSubmit: (text, _) {
         final lines = text.split('\n');
-        _send(ChangesPrCmd(widget.workerId, title: lines.first.trim(), body: lines.skip(1).join('\n').trim()));
+        _send(
+          ChangesPrCmd(widget.workerId, title: lines.first.trim(), body: lines.skip(1).join('\n').trim(), repo: _repo),
+        );
       },
     ),
   );
+
+  /// Across repositories: a tab per repository, its own floor's first, each followed on its own.
+  Widget? _tabs(WorkerInfo w) {
+    final repos = w.repos ?? const <WorkerRepo>[];
+    if (repos.isEmpty) return null;
+    final own = w.worktree?.path.split(RegExp(r'[\\/]')).where((p) => p.isNotEmpty).lastOrNull ?? 'this project';
+    final all = [
+      (id: null as String?, name: own, pr: w.pr?.number),
+      for (final r in repos) (id: r.floor as String?, name: r.name, pr: r.pr?.number),
+    ];
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      child: Semantics(
+        label: 'Repositories',
+        container: true,
+        child: Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            for (final t in all)
+              OfficeButton(
+                key: ValueKey('changes-tab-${t.id ?? 'own'}'),
+                label: '📁 ${t.name}${t.pr != null ? ' · #${t.pr}' : ''}',
+                kind: t.id == _repo ? BtnKind.on : BtnKind.plain,
+                dense: true,
+                tooltip: t.id != null ? 'Its worktree of ${t.name}' : "Its worktree of this floor's project, ${t.name}",
+                onPressed: () => _show(t.id),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -284,14 +368,27 @@ class _ChangesWindowState extends State<_ChangesWindow> {
               error: _diffError,
               name: _name,
               onDiscard: _discardOne,
-              pictureUrl: (f, side) => serverUrl(pictureUrl(widget.scope.store.floor, widget.workerId, f, side)),
+              pictureUrl: (f, side) =>
+                  serverUrl(pictureUrl(widget.scope.store.floor, widget.workerId, f, side, repo: _repo)),
             );
-            return Flex(
+            final tabs = w == null ? null : _tabs(w);
+            final split = Flex(
               direction: narrow ? Axis.vertical : Axis.horizontal,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                if (narrow) SizedBox(height: box.maxHeight * 0.38, child: files) else SizedBox(width: 320, child: files),
+                if (narrow)
+                  SizedBox(height: box.maxHeight * 0.38, child: files)
+                else
+                  SizedBox(width: 320, child: files),
                 Expanded(child: diff),
+              ],
+            );
+            if (tabs == null) return split;
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                tabs,
+                Expanded(child: split),
               ],
             );
           },
@@ -444,7 +541,9 @@ class _FileRowState extends State<_FileRow> {
     if (widget.on && !old.on) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) Scrollable.ensureVisible(context, alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd);
-        if (mounted) Scrollable.ensureVisible(context, alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtStart);
+        if (mounted) {
+          Scrollable.ensureVisible(context, alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtStart);
+        }
       });
     }
   }
@@ -580,7 +679,12 @@ class _DiffPane extends StatelessWidget {
         ),
         _PlusMinus(f.additions, f.deletions, binary: f.binary),
         if (f.uncommitted && state?.busy == null)
-          OfficeButton(label: '↩︎ Discard', dense: true, tooltip: 'Throw away the uncommitted changes to this file', onPressed: () => onDiscard(f)),
+          OfficeButton(
+            label: '↩︎ Discard',
+            dense: true,
+            tooltip: 'Throw away the uncommitted changes to this file',
+            onPressed: () => onDiscard(f),
+          ),
       ],
     ),
   );
@@ -589,12 +693,21 @@ class _DiffPane extends StatelessWidget {
     final s = state;
     if (f == null) {
       if (s == null) return const _Empty(children: [Spinner()]);
-      if (s.error != null) return _Empty(big: '🚧', children: [_EmptyText("Couldn't read ${whereText(s)}: ${s.error}")]);
+      if (s.error != null) {
+        return _Empty(big: '🚧', children: [_EmptyText("Couldn't read ${whereText(s)}: ${s.error}")]);
+      }
       return _Empty(
         big: '🌱',
         children: [
-          _EmptyText(s.base == 'HEAD' ? 'Nothing uncommitted in ${whereText(s)}.' : "$name hasn't changed anything since ${s.base} yet."),
-          const _EmptyText('This window follows the checkout as the worker works, so changes show up here as they are made.', note: true),
+          _EmptyText(
+            s.base == 'HEAD'
+                ? 'Nothing uncommitted in ${whereText(s)}.'
+                : "$name hasn't changed anything since ${s.base} yet.",
+          ),
+          const _EmptyText(
+            'This window follows the checkout as the worker works, so changes show up here as they are made.',
+            note: true,
+          ),
         ],
       );
     }
@@ -602,14 +715,14 @@ class _DiffPane extends StatelessWidget {
     final text = error != null
         ? _Empty(children: [_EmptyText(error!)])
         : diff == null
-            ? null
-            : SelectionArea(
-                child: ListView.builder(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  itemCount: diff!.length,
-                  itemBuilder: (context, i) => _DiffRow(diff![i]),
-                ),
-              );
+        ? null
+        : SelectionArea(
+            child: ListView.builder(
+              padding: const EdgeInsets.only(bottom: 12),
+              itemCount: diff!.length,
+              itemBuilder: (context, i) => _DiffRow(diff![i]),
+            ),
+          );
     if (text == null) return const SizedBox.shrink();
     if (type == null) return text;
     // A picture's diff only says it differs, so show the picture instead. An SVG is text too: its diff stays below.
@@ -618,7 +731,10 @@ class _DiffPane extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        ConstrainedBox(constraints: const BoxConstraints(maxHeight: 320), child: SingleChildScrollView(child: preview)),
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 320),
+          child: SingleChildScrollView(child: preview),
+        ),
         Expanded(child: text),
       ],
     );
@@ -635,13 +751,26 @@ class _PicturePreview extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final sides = pictureSides(file);
-    final figures = [for (final side in sides) Expanded(child: _Figure(file: file, side: side, url: url(file, side)))];
+    final figures = [
+      for (final side in sides)
+        Expanded(
+          child: _Figure(file: file, side: side, url: url(file, side)),
+        ),
+    ];
     return Padding(
       padding: const EdgeInsets.all(12),
       child: LayoutBuilder(
         builder: (context, c) => c.maxWidth < 500
-            ? Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [for (final side in sides) _Figure(file: file, side: side, url: url(file, side))])
-            : Row(crossAxisAlignment: CrossAxisAlignment.start, children: [for (var i = 0; i < figures.length; i++) ...[if (i > 0) const SizedBox(width: 12), figures[i]]]),
+            ? Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [for (final side in sides) _Figure(file: file, side: side, url: url(file, side))],
+              )
+            : Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (var i = 0; i < figures.length; i++) ...[if (i > 0) const SizedBox(width: 12), figures[i]],
+                ],
+              ),
       ),
     );
   }
@@ -673,7 +802,10 @@ class _FigureState extends State<_Figure> {
         children: [
           Row(
             children: [
-              Text(label.toUpperCase(), style: heavy(12, color: Swatch.muted, weight: FontWeight.w900)),
+              Text(
+                label.toUpperCase(),
+                style: heavy(12, color: Swatch.muted, weight: FontWeight.w900),
+              ),
               const SizedBox(width: 8),
               Text(_size, style: heavy(12, color: Swatch.muted)),
             ],
@@ -682,7 +814,10 @@ class _FigureState extends State<_Figure> {
           Container(
             constraints: const BoxConstraints(minHeight: 120),
             padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(borderRadius: BorderRadius.circular(10), border: Border.all(color: _faint, width: 2)),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: _faint, width: 2),
+            ),
             child: CustomPaint(
               painter: const _Checkerboard(),
               child: Center(
@@ -696,7 +831,8 @@ class _FigureState extends State<_Figure> {
                       key: ValueKey(widget.url),
                       headers: imageHeaders(),
                       fit: BoxFit.contain,
-                      loadingBuilder: (context, child, progress) => progress == null ? child : const Padding(padding: EdgeInsets.all(20), child: Spinner()),
+                      loadingBuilder: (context, child, progress) =>
+                          progress == null ? child : const Padding(padding: EdgeInsets.all(20), child: Spinner()),
                       errorBuilder: (_, _, _) => Container(
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                         decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(8)),
@@ -893,7 +1029,11 @@ class _Footer extends StatelessWidget {
           tooltip: 'Throw away every uncommitted change in this checkout',
           onPressed: busy || uncommitted == 0 ? null : onDiscardAll,
         ),
-        OfficeButton(label: commitLabel(uncommitted), tooltip: 'git add -A && git commit', onPressed: busy || uncommitted == 0 ? null : onCommit),
+        OfficeButton(
+          label: commitLabel(uncommitted),
+          tooltip: 'git add -A && git commit',
+          onPressed: busy || uncommitted == 0 ? null : onCommit,
+        ),
         ?_prSlot(s, busy),
       ],
     );
@@ -938,7 +1078,12 @@ class _Footer extends StatelessWidget {
     if (s == null) return null;
     final pr = s.pr;
     if (pr != null) {
-      return OfficeButton(label: '🔀 PR #${pr.number} ↗', kind: BtnKind.primary, tooltip: 'Open on GitHub', onPressed: () => openInNewTab(pr.url));
+      return OfficeButton(
+        label: '🔀 PR #${pr.number} ↗',
+        kind: BtnKind.primary,
+        tooltip: 'Open on GitHub',
+        onPressed: () => openInNewTab(pr.url),
+      );
     }
     if (s.prBase == null) return null;
     final why = prBlocked(s);

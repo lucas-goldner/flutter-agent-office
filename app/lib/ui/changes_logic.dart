@@ -65,7 +65,9 @@ List<DiffLine> parseDiff(String text, bool truncated) {
     }
     out.add((kind: kind, old: o, now: n, code: code));
   }
-  if (truncated) out.add((kind: DiffKind.meta, old: '', now: '', code: '… the rest of this diff is too long to show here'));
+  if (truncated) {
+    out.add((kind: DiffKind.meta, old: '', now: '', code: '… the rest of this diff is too long to show here'));
+  }
   return out;
 }
 
@@ -87,7 +89,8 @@ String whereText(ChangesState? s) => s != null && s.dir.isNotEmpty ? s.dir : 'th
 
 int uncommittedCount(ChangesState? s) => s?.files.where((f) => f.uncommitted).length ?? 0;
 
-String commitLabel(int uncommitted) => uncommitted > 0 ? '✅ Commit $uncommitted file${uncommitted > 1 ? 's' : ''}…' : '✅ Commit…';
+String commitLabel(int uncommitted) =>
+    uncommitted > 0 ? '✅ Commit $uncommitted file${uncommitted > 1 ? 's' : ''}…' : '✅ Commit…';
 
 /// Why the Open PR button is off ('' when it is on).
 String prBlocked(ChangesState s) {
@@ -123,14 +126,24 @@ List<({String text, String? tip})> summaryBits(ChangesState s) {
 
 /// Which sides of a changed picture there are to show: new and deleted files only have the one.
 List<String> pictureSides(ChangedFile f) => switch (f.status) {
-      ChangeStatus.untracked || ChangeStatus.added => const ['new'],
-      ChangeStatus.deleted => const ['old'],
-      _ => const ['old', 'new'],
-    };
+  ChangeStatus.untracked || ChangeStatus.added => const ['new'],
+  ChangeStatus.deleted => const ['old'],
+  _ => const ['old', 'new'],
+};
 
 /// Where one side of a changed picture loads from (GET /api/changes/file, which serves only pictures
 /// in the worker's list of changes). The file's signature makes a new URL whenever it changes.
-String pictureUrl(String? floor, String workerId, ChangedFile f, String side) {
-  final q = Uri(queryParameters: {'floor': floor ?? '', 'worker': workerId, 'path': f.path, 'side': side, 'v': f.sig}).query;
+/// [repo]: another floor's repository of a worker across repositories (see WorkerInfo.repos).
+String pictureUrl(String? floor, String workerId, ChangedFile f, String side, {String? repo}) {
+  final q = Uri(
+    queryParameters: {
+      'floor': floor ?? '',
+      'worker': workerId,
+      'path': f.path,
+      'side': side,
+      'v': f.sig,
+      'repo': ?repo,
+    },
+  ).query;
   return '/api/changes/file?$q';
 }

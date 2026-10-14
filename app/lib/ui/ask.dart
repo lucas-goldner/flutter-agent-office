@@ -12,6 +12,7 @@ import 'child_button.dart';
 import 'modal.dart';
 import 'prompt.dart';
 import 'provider.dart';
+import 'repos.dart';
 import 'theme.dart';
 import 'worker_text.dart';
 
@@ -34,6 +35,7 @@ class AskOptions {
     required this.workers,
     required this.worktreeOption,
     this.providerOption = false,
+    this.repoOptions = const [],
     required this.onSubmit,
   });
 
@@ -56,7 +58,10 @@ class AskOptions {
   /// Offer the configured provider choice for a new worker.
   final bool providerOption;
 
-  /// `to` is a worker id, or null for a new worker.
+  /// Other floors' projects a new worker in its own worktree can work in too (see WorkerInfo.repos).
+  final List<FloorChoice> repoOptions;
+
+  /// `to` is a worker id, or null for a new worker; [repos], other floors' ids it works in too.
   final void Function(
     String prompt,
     String? to,
@@ -64,6 +69,7 @@ class AskOptions {
     AgentProvider? provider,
     String? model,
     AgentEffort? effort,
+    List<String> repos,
   )
   onSubmit;
 }
@@ -91,6 +97,7 @@ class _AskWindowState extends State<_AskWindow> {
   final _focus = FocusNode();
   // Shared with the hire prompt, so the choice sticks either way.
   late bool _worktree = worktreePref();
+  final Set<String> _repos = {};
   late final ProviderPickerController? _provider = widget.opts.providerOption
       ? ProviderPickerController(widget.project, office: widget.office)
       : null;
@@ -121,13 +128,20 @@ class _AskWindowState extends State<_AskWindow> {
     if (_to == null && p != null && !p.valid()) return;
     widget.modal.close();
     if (_to == null && o.worktreeOption) saveWorktreePref(_worktree);
+    final worktree = _to == null && o.worktreeOption && _worktree;
     o.onSubmit(
       o.context != null ? '${o.context}\n\n$text' : text,
       _to,
-      _to == null && o.worktreeOption && _worktree,
+      worktree,
       _to == null ? p?.value() : null,
       _to == null ? p?.model() : null,
       _to == null ? p?.effort() : null,
+      worktree
+          ? [
+              for (final r in o.repoOptions)
+                if (_repos.contains(r.id)) r.id,
+            ]
+          : const [],
     );
   }
 
@@ -197,8 +211,20 @@ class _AskWindowState extends State<_AskWindow> {
           if (_to == null && o.worktreeOption)
             WorktreeToggle(
               value: _worktree,
-              onChanged: (v) => setState(() => _worktree = v),
+              onChanged: (v) => setState(() {
+                _worktree = v;
+                if (!v) _repos.clear();
+              }),
               tooltip: 'Isolate the new worker on its own branch so parallel workers never collide',
+            ),
+          if (_to == null && o.worktreeOption && o.repoOptions.isNotEmpty)
+            RepoPicker(
+              options: o.repoOptions,
+              picked: _repos,
+              onChanged: (id, on) => setState(() {
+                on ? _repos.add(id) : _repos.remove(id);
+                if (on) _worktree = true;
+              }),
             ),
         ],
       ),

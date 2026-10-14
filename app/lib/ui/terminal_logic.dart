@@ -66,6 +66,8 @@ String terminalTitle(WorkerInfo w, ProjectInfo? project) => [
   w.name,
   if (w.title != null && w.title!.isNotEmpty) w.title!,
   if (w.worktree != null) '🌿 ${w.worktree!.branch}',
+  if (w.repos?.isNotEmpty ?? false)
+    '🗂️ ${[w.worktree?.path.split(RegExp(r'[\\/]')).last, ...w.repos!.map((r) => r.name)].nonNulls.join(' + ')}',
 ].join(' · ');
 
 /// A row of the xterm buffer as xterm.js's translateToString gives it: blank cells are spaces,

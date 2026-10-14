@@ -51,6 +51,7 @@ import '../ui/palette.dart';
 import '../ui/prompt.dart';
 import '../ui/provider.dart';
 import '../ui/pull.dart';
+import '../ui/repos.dart';
 import '../ui/queue.dart';
 import '../ui/search.dart';
 import '../ui/services.dart';
@@ -1904,6 +1905,7 @@ class OfficeController implements OfficeActions {
     String? model,
     AgentEffort? effort,
     int? issue,
+    List<String> repos = const [],
   }) {
     net.send(
       WorkerSpawnCmd(
@@ -1914,6 +1916,7 @@ class OfficeController implements OfficeActions {
         model: model,
         effort: effort,
         issue: issue,
+        repos: repos.isEmpty ? null : repos,
       ),
     );
     // The moment notifications start to matter: ask once (it has to come from a key press or click).
@@ -1939,8 +1942,16 @@ class OfficeController implements OfficeActions {
           project: store.project,
           office: store.prompts.agent,
           warning: pressureNote(store.machine),
-          onSubmit: (text, o) =>
-              hire(deskId, prompt: text, worktree: o.worktree, provider: o.provider, model: o.model, effort: o.effort),
+          repoOptions: repoChoices(store),
+          onSubmit: (text, o) => hire(
+            deskId,
+            prompt: text,
+            worktree: o.worktree,
+            provider: o.provider,
+            model: o.model,
+            effort: o.effort,
+            repos: o.repos,
+          ),
         ),
       );
     } else if (w.lost != null) {
@@ -1984,6 +1995,7 @@ class OfficeController implements OfficeActions {
         project: store.project,
         office: store.prompts.agent,
         warning: pressureNote(store.machine),
+        repoOptions: repoChoices(store),
         onSubmit: (text, o) => hire(
           deskId,
           prompt: text.isEmpty ? null : text,
@@ -1991,6 +2003,7 @@ class OfficeController implements OfficeActions {
           provider: o.provider,
           model: o.model,
           effort: o.effort,
+          repos: o.repos,
         ),
       ),
     );
@@ -2012,6 +2025,7 @@ class OfficeController implements OfficeActions {
           name: w.name,
           where: where,
           worktree: (path: wt.path, branch: wt.branch),
+          repos: workerRepoFolders(w),
           ask: () => net.send(WorkerWorktreeCmd(workerId)),
           onConfirm: (cleanup) => net.send(WorkerKillCmd(workerId, cleanup: cleanup)),
         ),
@@ -2068,6 +2082,7 @@ class OfficeController implements OfficeActions {
 
   /// O at a desk: see the worker's pull request, or push its branch and open one.
   void _pullRequestFor(WorkerInfo w) {
+    if (w.repos?.isNotEmpty ?? false) return _pullRequestsFor(w);
     final pr = w.pr;
     if (pr != null) {
       final it = store.pulls.items.where((p) => p.number == pr.number).firstOrNull;
@@ -2091,6 +2106,42 @@ class OfficeController implements OfficeActions {
     }
     toast('Pushing ${w.worktree!.branch} and opening a pull request…');
     net.send(WorkerPrCmd(w.id));
+  }
+
+  /// O at the desk of a worker across repositories: with no pull request yet, the office opens one in each
+  /// repository it committed to (and lists them all in each one). Once it has one, O shows each
+  /// repository's, with a button for the ones still missing.
+  void _pullRequestsFor(WorkerInfo w) {
+    void open() {
+      final now = store.workers[w.id];
+      if (now == null || now.prOpening == true) return;
+      if (now.lost != null) return _fixLostWorktree(now);
+      if (!_prReady(now)) {
+        return toast("${now.name} is still ${statusLabel(now.status)} — wait until it's done", ToastKind.warn);
+      }
+      toast(
+        "Pushing ${now.worktree?.branch ?? 'its branch'} in each of ${now.name}'s repositories and opening pull requests…",
+      );
+      net.send(WorkerPrCmd(now.id));
+    }
+
+    if (!workerRepos(w).any((r) => r.pr != null)) return open();
+    openRepoPulls(
+      scope,
+      w.id,
+      RepoPullsActions(
+        openPull: (number, url) {
+          final it = store.pulls.items.where((p) => p.number == number).firstOrNull;
+          if (it != null) {
+            openPull(scope, it);
+          } else {
+            openInNewTab(url);
+          }
+        },
+        openMissing: open,
+        changes: (repo) => openWorkerChanges(w.id, repo),
+      ),
+    );
   }
 
   /// Puts you in front of a desk, looking at it: the PR board's "Go to desk".
@@ -2211,11 +2262,11 @@ class OfficeController implements OfficeActions {
   }
 
   @override
-  void openWorkerChanges(String workerId) {
+  void openWorkerChanges(String workerId, [String? repo]) {
     final w = store.workers[workerId];
     if (w == null) return;
     if (w.lost != null) return _fixLostWorktree(w);
-    openChanges(scope, workerId, onTerminal: () => openWorkerTerminal(workerId));
+    openChanges(scope, workerId, onTerminal: () => openWorkerTerminal(workerId), repo: repo);
   }
 
   @override
@@ -2243,7 +2294,8 @@ class OfficeController implements OfficeActions {
         workers: [for (final w in awake) AskWorker(id: w.id, name: w.name, color: w.color, status: w.status)],
         worktreeOption: store.project?.branch != null,
         providerOption: true,
-        onSubmit: (prompt, to, worktree, provider, model, effort) {
+        repoOptions: repoChoices(store),
+        onSubmit: (prompt, to, worktree, provider, model, effort, repos) {
           if (to != null) {
             net.send(WorkerPromptCmd(to, prompt, issue: issue));
           } else if (desk != null) {
@@ -2255,6 +2307,7 @@ class OfficeController implements OfficeActions {
               model: model,
               effort: effort,
               issue: issue,
+              repos: repos,
             );
           }
         },
@@ -2946,7 +2999,7 @@ class OfficeController implements OfficeActions {
     final spent = w.kind == WorkerKind.agent && w.usage != null ? usageLabel(w.usage!, provider) : '';
     final shell = w.kind == WorkerKind.shell;
     return (
-      '${w.status}${w.id}${w.pr?.number ?? ''}${w.prOpening == true ? '!' : ''}$doing$spent',
+      '${w.status}${w.id}${w.pr?.number ?? ''}${w.repos?.map((r) => r.pr?.number ?? '-').join(',') ?? ''}${w.prOpening == true ? '!' : ''}$doing$spent',
       [
         HintTitle('${w.name} · ${statusLabel(w.status)}'),
         if (doing.isNotEmpty) HintAside(doing),
@@ -2956,7 +3009,13 @@ class OfficeController implements OfficeActions {
         isAsleep(w.status)
             ? HintKey('R', shell ? 'Restart' : 'Resume')
             : HintKey('P', shell ? 'Run command' : 'Prompt'),
-        if (w.pr != null)
+        if (w.repos?.isNotEmpty ?? false)
+          ...switch (reposKey(w, ready: _prReady(w))) {
+            null => const <HintPart>[],
+            (key: true, :final text) => [HintKey('O', text)],
+            (key: false, :final text) => [HintAside(text)],
+          }
+        else if (w.pr != null)
           HintKey('O', 'PR #${w.pr!.number}')
         else if (w.prOpening == true)
           const HintAside('⏳ Opening PR…')

@@ -15,7 +15,9 @@ import 'ui/settings_rows.dart' show SettingsPane;
 /// one is the old main.ts function of the same name.
 abstract class OfficeActions {
   void openWorkerTerminal(String workerId, {({int row, String needle})? find});
-  void openWorkerChanges(String workerId);
+
+  /// [repo]: another floor's repository of a worker across repositories (see WorkerInfo.repos).
+  void openWorkerChanges(String workerId, [String? repo]);
   void hire(
     String deskId, {
     String? prompt,

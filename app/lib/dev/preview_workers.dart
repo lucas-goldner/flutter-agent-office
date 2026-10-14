@@ -96,7 +96,7 @@ class _Actions implements OfficeActions {
       openTerminal(scope, workerId, onChanges: () => openWorkerChanges(workerId), find: find);
 
   @override
-  void openWorkerChanges(String workerId) =>
+  void openWorkerChanges(String workerId, [String? repo]) =>
       openChanges(scope, workerId, onTerminal: () => openWorkerTerminal(workerId));
 
   @override
@@ -241,7 +241,8 @@ class _OfficeState extends State<_Office> {
             ],
             worktreeOption: true,
             providerOption: true,
-            onSubmit: (p, to, wt, provider, model, effort) => debugPrint('ask: $to $wt $provider $model $effort\n$p'),
+            onSubmit: (p, to, wt, provider, model, effort, _) =>
+                debugPrint('ask: $to $wt $provider $model $effort\n$p'),
           ),
         );
       case 'queue':

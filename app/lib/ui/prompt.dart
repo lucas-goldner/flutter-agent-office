@@ -15,11 +15,19 @@ import 'child_button.dart';
 import 'modal.dart';
 import 'prompt_logic.dart';
 import 'provider.dart';
+import 'repos.dart';
 import 'theme.dart';
 import 'window_parts.dart' show StatusBox, StatusKind;
 
 /// What came with the text: the worktree box and the provider picker, when they were offered.
-typedef PromptChoice = ({bool worktree, AgentProvider? provider, String? model, AgentEffort? effort});
+/// [repos]: other floors' ids it works in too, each in a worktree of its own (see WorkerInfo.repos).
+typedef PromptChoice = ({
+  bool worktree,
+  AgentProvider? provider,
+  String? model,
+  AgentEffort? effort,
+  List<String> repos,
+});
 
 class PromptOptions {
   const PromptOptions({
@@ -34,6 +42,7 @@ class PromptOptions {
     this.providerOption = false,
     this.project,
     this.office,
+    this.repoOptions = const [],
     required this.onSubmit,
   });
 
@@ -58,6 +67,9 @@ class PromptOptions {
 
   /// The office's default worker as picked in ⚙️ Settings (store.prompts.agent).
   final PromptsAgent? office;
+
+  /// Other floors' projects a new worker in its own worktree can work in too (see WorkerInfo.repos).
+  final List<FloorChoice> repoOptions;
   final void Function(String text, PromptChoice opts) onSubmit;
 }
 
@@ -81,6 +93,7 @@ class _PromptWindowState extends State<_PromptWindow> {
   late final _text = TextEditingController(text: widget.opts.initial ?? '');
   final _focus = FocusNode();
   late bool _worktree = worktreePref();
+  final Set<String> _repos = {};
   late final ProviderPickerController? _provider = widget.opts.providerOption
       ? ProviderPickerController(widget.opts.project, office: widget.opts.office)
       : null;
@@ -111,11 +124,18 @@ class _PromptWindowState extends State<_PromptWindow> {
     if (p != null && !p.valid()) return;
     widget.modal.close();
     if (o.worktreeOption) saveWorktreePref(_worktree);
+    final worktree = o.worktreeOption && _worktree;
     o.onSubmit(text, (
-      worktree: o.worktreeOption && _worktree,
+      worktree: worktree,
       provider: p?.value(),
       model: p?.model(),
       effort: p?.effort(),
+      repos: worktree
+          ? [
+              for (final r in o.repoOptions)
+                if (_repos.contains(r.id)) r.id,
+            ]
+          : const [],
     ));
   }
 
@@ -156,8 +176,21 @@ class _PromptWindowState extends State<_PromptWindow> {
           if (o.worktreeOption)
             WorktreeToggle(
               value: _worktree,
-              onChanged: (v) => setState(() => _worktree = v),
+              onChanged: (v) => setState(() {
+                _worktree = v;
+                if (!v) _repos.clear();
+              }),
               tooltip: 'Isolate this worker on its own branch so parallel workers never collide',
+            ),
+          if (o.worktreeOption && o.repoOptions.isNotEmpty)
+            RepoPicker(
+              options: o.repoOptions,
+              picked: _repos,
+              onChanged: (id, on) => setState(() {
+                on ? _repos.add(id) : _repos.remove(id);
+                // Across repositories needs a worktree of its own here.
+                if (on) _worktree = true;
+              }),
             ),
         ],
       ),
@@ -203,7 +236,9 @@ class WorktreeToggle extends StatelessWidget {
                 side: const BorderSide(color: Swatch.ink, width: 2),
               ),
             ),
-            Text('🌿 Work in its own git worktree & branch', style: heavy(14, weight: FontWeight.w700)),
+            Flexible(
+              child: Text('🌿 Work in its own git worktree & branch', style: heavy(14, weight: FontWeight.w700)),
+            ),
           ],
         ),
       ),
@@ -251,6 +286,7 @@ class SendHomeOptions {
     required this.worktree,
     required this.onConfirm,
     this.ask,
+    this.repos,
   });
 
   final String workerId;
@@ -259,6 +295,10 @@ class SendHomeOptions {
   /// The desk's label.
   final String where;
   final ({String path, String branch}) worktree;
+
+  /// A worker across repositories: the folders of its workspace, its own floor's first (see
+  /// WorkerInfo.repos).
+  final List<String>? repos;
 
   /// Asks the office what the worktree holds (default: a worker.worktree message); the answer comes
   /// back as a WorkerWorktreeMsg.
@@ -336,6 +376,7 @@ class _SendHomeState extends State<_SendHome> {
   Widget build(BuildContext context) {
     final o = widget.opts;
     final (:path, :branch) = o.worktree;
+    final across = o.repos != null && o.repos!.length > 1 ? o.repos : null;
     final report = _report;
     return CallbackShortcuts(
       bindings: {const SingleActivator(LogicalKeyboardKey.enter): _submit},
@@ -351,11 +392,11 @@ class _SendHomeState extends State<_SendHome> {
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
                 child: Text(
-                  'This stops the session at ${o.where} for everyone and frees the desk. ${o.name} worked in its own worktree on 🌿 $branch:',
+                  'This stops the session at ${o.where} for everyone and frees the desk. ${o.name} worked ${across != null ? 'in worktrees of ${across.join(', ')}, each' : 'in its own worktree'} on 🌿 $branch:',
                   style: heavy(14, weight: FontWeight.w700),
                 ),
               ),
-              for (final (value, title, sub) in cleanupChoices(path, branch))
+              for (final (value, title, sub) in cleanupChoices(path, branch, across))
                 Padding(
                   padding: const EdgeInsets.only(bottom: 8),
                   child: _Choice(
