@@ -27,6 +27,13 @@ int _now() => DateTime.now().millisecondsSinceEpoch;
 /// Needs input and nobody has answered yet.
 bool callsForDog(WorkerInfo w) => w.status == WorkerStatus.needsInput && !w.acked && deskById.containsKey(w.deskId);
 
+/// A coat by its index in [dogCoats] (JS's Number.isInteger: 6.0 counts), or null.
+int? _coatOf(Object? raw) {
+  if (raw is! num || !raw.isFinite || raw != raw.truncate()) return null;
+  final i = raw.toInt();
+  return i >= 0 && i < dogCoats.length ? i : null;
+}
+
 enum _Mode { lounge, nap, wander, follow, bark, pet }
 
 class DogEnv {
@@ -70,13 +77,16 @@ class _Leg {
 /// A floor's dog. It naps under the desks of workers who are busy, trots after people for a while,
 /// sniffs around and hangs out on the lounge rug. When a worker needs input it drops everything, runs
 /// to that desk and barks (the browsers do the barking; see app/lib/world/dog.dart). Its name is kept
-/// in the floor's .agent-office/dog.json.
+/// in the floor's .agent-office/dog.json, with its breed and coat once someone picks them (⚙️ Settings);
+/// until then they come from the floor's id (see dogDefaults).
 class Dog {
   Dog(this.floorId, String dataDir, this._env) : _file = p.join(dataDir, 'dog.json') {
     final d = dogDefaults(floorId);
     _fallbackName = d.name;
-    _coat = d.coat;
-    _name = _load() ?? d.name;
+    final saved = _load();
+    _name = saved.name ?? d.name;
+    _breed = saved.breed ?? d.breed;
+    _coat = saved.coat ?? d.coat;
     // Lying on the rug when the office opens, and up and about a few seconds later.
     final spot = _pick(_lounge);
     _leg = _Leg(path: [spot], speed: 0, act: DogAct.lie, face: math.pi / 2 + _rand(-0.6, 0.6), start: _now() - 60000);
@@ -85,12 +95,10 @@ class Dog {
 
   final String floorId;
   final DogEnv _env;
-
-  /// How far the floor's back office is built out.
-  int get _wing => _env.wing?.call() ?? 0;
   final String _file;
   late String _name;
-  late final int _coat;
+  late int _coat;
+  late DogBreed _breed;
   late final String _fallbackName;
   late _Leg _leg;
   _Mode _mode = _Mode.lounge;
@@ -111,6 +119,7 @@ class Dog {
   DogState view() => DogState(
     name: _name,
     coat: _coat,
+    breed: _breed,
     path: _leg.path,
     speed: _leg.speed,
     act: _leg.act,
@@ -182,13 +191,40 @@ class Dog {
   String rename(String raw) {
     final clean = cleanDogName(raw);
     _name = clean.isNotEmpty ? clean : _fallbackName;
+    _save();
+    _send();
+    return _name;
+  }
+
+  /// Makes it another breed, for everyone on the floor; null when there's no such breed.
+  DogBreed? setBreed(Object? raw) {
+    final breed = DogBreed.values.where((b) => b.wire == raw).firstOrNull;
+    if (breed == null) return null;
+    _breed = breed;
+    _save();
+    _send();
+    return breed;
+  }
+
+  /// Gives it another coat, for everyone on the floor; false when there's no such coat.
+  bool setCoat(Object? raw) {
+    final coat = _coatOf(raw);
+    if (coat == null) return false;
+    _coat = coat;
+    _save();
+    _send();
+    return true;
+  }
+
+  void _save() {
     try {
-      _writePrivate(_file, const JsonEncoder.withIndent('  ').convert({'name': _name}));
+      _writePrivate(
+        _file,
+        const JsonEncoder.withIndent('  ').convert({'name': _name, 'breed': _breed.wire, 'coat': _coat}),
+      );
     } catch (err) {
       stderr.writeln("agent-office: couldn't save the dog's name: $err");
     }
-    _send();
-    return _name;
   }
 
   void stop() {
@@ -196,19 +232,26 @@ class Dog {
     _timer?.cancel();
   }
 
-  String? _load() {
+  ({String? name, DogBreed? breed, int? coat}) _load() {
     final file = File(_file);
-    if (!file.existsSync()) return null;
+    if (!file.existsSync()) return (name: null, breed: null, coat: null);
     try {
       final saved = jsonDecode(file.readAsStringSync());
-      final name = saved is Map ? saved['name'] : null;
-      if (name is! String) return null;
-      final clean = cleanDogName(name);
-      return clean.isNotEmpty ? clean : null;
+      if (saved is! Map) return (name: null, breed: null, coat: null);
+      final name = saved['name'];
+      final clean = name is String ? cleanDogName(name) : '';
+      return (
+        name: clean.isNotEmpty ? clean : null,
+        breed: DogBreed.values.where((b) => b.wire == saved['breed']).firstOrNull,
+        coat: _coatOf(saved['coat']),
+      );
     } catch (_) {
-      return null;
+      return (name: null, breed: null, coat: null);
     }
   }
+
+  /// How far the floor's back office is built out.
+  int get _wing => _env.wing?.call() ?? 0;
 
   void _send() => _env.send(view());
 

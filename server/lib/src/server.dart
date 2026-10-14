@@ -70,6 +70,8 @@ const Map<String, (MimeType, bool)> _mime = {
   '.wav': (MimeType('audio', 'wav'), false),
   '.mp3': (MimeType('audio', 'mpeg'), false),
   '.ogg': (MimeType('audio', 'ogg'), false),
+  // The models (dogs, kitchen, lounge, plants, desk props) the app ships as they are.
+  '.glb': (MimeType('model', 'gltf-binary'), false),
 };
 
 /// Someone in the office: where they stand and what they look like. [PeerInfo] is the wire type,
@@ -84,6 +86,7 @@ class _Peer {
     required this.z,
     this.account,
     this.floor,
+    this.lite,
   });
 
   final String id;
@@ -100,10 +103,16 @@ class _Peer {
   bool sharing = false;
   bool? smoking;
   bool? golfing;
+
+  /// Stepped up to the dart board or the axe lane on the roof.
+  BarGame? throwing;
   String? seat;
   CarriedIssue? carrying;
   DrinkId? drink;
   final bool? account;
+
+  /// On the 2D view (/lite): in the office, but not standing anywhere in it.
+  final bool? lite;
   String? floor;
   String? doing;
   bool? reading;
@@ -123,11 +132,13 @@ class _Peer {
     sharing: sharing,
     smoking: smoking,
     golfing: golfing,
+    throwing: throwing,
     seat: seat,
     carrying: carrying,
     drink: drink,
     account: account,
     floor: floor,
+    lite: lite,
     doing: doing,
     reading: reading,
   );
@@ -161,6 +172,9 @@ class _Client {
   /// When they last blew the DJ's air horn on the roof.
   int lastHornAt = 0;
 
+  /// When they last threw a dart or an axe up there.
+  int lastTossAt = 0;
+
   /// A little more lenient than the page's own, so emotes it let through aren't dropped for arriving bunched up.
   final EmoteBucket emotes = EmoteBucket(emoteEvery * 0.8);
 
@@ -184,6 +198,9 @@ const _slowClientBytes = 8 * 1024 * 1024;
 
 /// The least time between two 'term.typing' notes from one person in one terminal.
 const _typingGapMs = 500;
+
+/// The quickest anyone throws one dart after another, or one axe (ms): a page's own wait is longer.
+const Map<BarGame, int> _tossEvery = {BarGame.darts: 250, BarGame.axe: 700};
 
 /// The most a client may send in one message (the Node server's `maxPayload`).
 const _maxPayload = 2 * 1024 * 1024;
@@ -1547,6 +1564,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
       ..moving = false
       ..seat = null
       ..golfing = null
+      ..throwing = null
       // An issue card belongs to the board it came off, which is on the floor they left; a drink stays at the bar.
       ..carrying = null
       ..drink = null;
@@ -1818,6 +1836,14 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
           broadcast(PeerActMsg(c.id, golf: golf), except: c.id, droppable: true);
           break;
         }
+        if (msg.containsKey('throwing')) {
+          // The dart board and the axe lane are up on the roof.
+          final game = c.peer.floor == roof ? BarGame.tryParse(msg['throwing']) : null;
+          if (game == c.peer.throwing) break;
+          c.peer.throwing = game;
+          broadcast(PeerActMsg(c.id, throwing: game, throwingSet: true), except: c.id, droppable: true);
+          break;
+        }
         final now = _now();
         if (now - c.lastActAt < 100) break;
         c.lastActAt = now;
@@ -1836,6 +1862,28 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         }
         c.lastGolfAt = now;
         toNeighbors(c, GolfMsg(id: c.id, yaw: yaw, loft: loft, power: power));
+      case 'toss':
+        // Only at the line they stepped up to, and no quicker than anyone throws.
+        final now = _now();
+        final game = BarGame.tryParse(msg['game']);
+        if (game == null ||
+            !tossOk(game: msg['game'], u: msg['u'], v: msg['v'], n: msg['n']) ||
+            c.peer.throwing != game ||
+            now - c.lastTossAt < _tossEvery[game]!) {
+          break;
+        }
+        c.lastTossAt = now;
+        toNeighbors(
+          c,
+          TossMsg(
+            id: c.id,
+            game: game,
+            u: (msg['u'] as num).toDouble(),
+            v: (msg['v'] as num).toDouble(),
+            n: (msg['n'] as num).toInt(),
+            stick: msg['stick'] == true,
+          ),
+        );
       case 'emote':
         final emote = Emote.tryParse(msg['emote']);
         if (emote != null && c.emotes.take(_now())) toNeighbors(c, PeerEmoteMsg(c.id, emote), true);
@@ -2424,6 +2472,21 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
       case 'car.honk':
         final car = floorOf(c)?.garage.honk(c.id);
         if (car != null) toNeighbors(c, CarHonkMsg(car));
+      case 'dog.breed':
+        final floor = here();
+        if (floor == null) break;
+        final breed = floor.dog.setBreed(msg['breed']);
+        if (breed != null) {
+          final name = dogBreedNames[breed]!.replaceFirst(RegExp(r'^\S+ '), '');
+          toastFloor(floor, '🐶 $who made ${floor.dog.dogName} a $name');
+        }
+      case 'dog.coat':
+        final floor = here();
+        if (floor == null) break;
+        if (floor.dog.setCoat(msg['coat'])) {
+          final coat = dogCoatNames[(msg['coat'] as num).toInt()].toLowerCase();
+          toastFloor(floor, '🐶 $who gave ${floor.dog.dogName} a $coat coat');
+        }
       case 'map.set':
         // Someone opened the list, or picked a map: either way the folder of maps of your own is read again first.
         final was = maps.pick();
@@ -2988,6 +3051,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         z: spot.z,
         account: account != null ? true : null,
         floor: onRoof ? roof : floor?.id,
+        lite: _query(url, 'lite') == '1' ? true : null,
       ),
       accountId: account?.id,
       admin: me.admin,

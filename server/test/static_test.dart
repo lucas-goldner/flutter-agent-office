@@ -83,7 +83,11 @@ void main() {
   });
 
   test("signed out: the whiteboard's Excalidraw bundle is served (the desktop app's web view has no cookie)", () {
-    for (final path in ['/excalidraw/whiteboard.js', '/excalidraw/host.html', '/excalidraw/fonts/Virgil/Virgil-Regular.woff2']) {
+    for (final path in [
+      '/excalidraw/whiteboard.js',
+      '/excalidraw/host.html',
+      '/excalidraw/fonts/Virgil/Virgil-Regular.woff2',
+    ]) {
       expect(served(path), path.substring(1));
     }
     expect(out('/excalidraw/nope.js'), const StaticNotFound());
@@ -101,6 +105,16 @@ void main() {
     for (final path in ['/', '/office', '/extra.txt', '/api', '/ws']) {
       expect(out(path), const StaticRedirect('/login'));
     }
+  });
+
+  test('signed out: /lite goes to /login, and back to /lite after', () {
+    expect(out('/lite'), const StaticRedirect('/login?next=/lite'));
+    expect(out('/lite.html'), const StaticRedirect('/login'));
+  });
+
+  test('signed in: /lite is the app, for its 2D view', () {
+    expect(served('/lite', true), 'index.html');
+    expect(served('/lite.html', true), 'index.html');
   });
 
   test('path traversal never leaves the bundle, nor borrows a public prefix', () {

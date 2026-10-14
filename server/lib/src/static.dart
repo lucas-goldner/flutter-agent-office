@@ -111,8 +111,10 @@ StaticAnswer flutterStatic(String publicDir, String path, bool signedIn) {
     final file = publicFile(publicDir, path);
     return file != null ? StaticFile(file, cacheRevalidate) : const StaticNotFound();
   }
-  if (!signedIn) return const StaticRedirect('/login');
-  if (path == '/') return index();
+  // Back to the 2D view after signing in, if that's where they were going.
+  if (!signedIn) return StaticRedirect(path == '/lite' ? '/login?next=/lite' : '/login');
+  // The 2D view (C5's /lite) is a route of the app: the workers, their terminals and the boards, without the 3D office.
+  if (path == '/' || path == '/lite' || path == '/lite.html') return index();
   if (path == '/api' || path.startsWith('/api/') || path == '/ws') return const StaticNotFound();
   final file = publicFile(publicDir, path);
   if (file != null) return StaticFile(file, cacheRevalidate);
