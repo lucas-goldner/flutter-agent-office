@@ -272,8 +272,8 @@ class _Meeting {
 /// through the rounds of its pattern (office_shared's meetings.dart): in each step every worker with
 /// a part gets it as a prompt, and the step is over when each of them has ended its turn with its
 /// part written to the file it names. Checking the files, not the talk, is what moves a meeting on.
-/// It ends when the output file is written, and stops early, saying why, when it runs over its token
-/// budget, when a worker won't write its part, or when a worker leaves.
+/// It ends when the output file is written, and stops early, saying why, when a worker won't write its
+/// part or when a worker leaves. What the table has used is added up to be shown, and never stops it.
 ///
 /// Everyone at the table shares the meeting's own git worktree (in a git project). When it's done,
 /// the office commits the output there, or for a review panel posts it on the pull request. The
