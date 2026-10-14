@@ -93,7 +93,9 @@ import '../world/leaving.dart';
 import '../world/office/office.dart';
 import '../world/player.dart';
 import '../world/sky_model.dart';
+import '../ui/loading.dart';
 import '../world/lamplight.dart';
+import '../world/models.dart' show Models;
 import '../world/sky_view.dart';
 import '../world/smoke.dart';
 import '../world/space.dart';
@@ -219,6 +221,10 @@ class OfficeController implements OfficeActions {
 
   // What the page shows over the scene.
   final ValueNotifier<bool> ready = ValueNotifier(false);
+
+  /// The loading screen, up until there's an office to see: it counts the model files and the steps
+  /// [init] gives it (ui/loading.dart).
+  final Loading loading = Loading(Models.instance.onProgress);
   final ValueNotifier<bool> connected = ValueNotifier(true);
   final ValueNotifier<List<HintPart>?> hint = ValueNotifier(null);
   final ValueNotifier<CrosshairState> crosshair = ValueNotifier(const CrosshairState());
@@ -408,6 +414,8 @@ class OfficeController implements OfficeActions {
   Future<void> init() async {
     await Scene.initializeStaticResources();
     await Toon.init();
+    // The models made in Blender, loaded before the world they're in is built (world/models.dart).
+    await Models.instance.preload();
     scene.toneMapping = ToneMappingMode.linear;
     scene.fog
       ..enabled = true
@@ -588,8 +596,22 @@ class OfficeController implements OfficeActions {
 
     ready.value = true;
     if (saved?.look != null) {
+      // In as soon as the floor you're on is here (with its dog), so nothing pops in after.
+      final welcomed = Completer<void>();
+      void came() {
+        if (!welcomed.isCompleted) welcomed.complete();
+      }
+
+      store.topic(Topic.floor).addListener(came);
+      unawaited(welcomed.future.then((_) => store.topic(Topic.floor).removeListener(came)));
+      loading.until([
+        (say: 'Knocking on the door', done: welcomed.future),
+        (say: 'Fetching the dog', done: dog.firstReady),
+      ]);
       net.connect();
     } else {
+      // No floor comes before you pick, so only the office behind the character select is waited for.
+      loading.until([]);
       // Pick a character first (people from before there was a choice keep their name and colour).
       openCharacter(
         scope,
@@ -3802,6 +3824,7 @@ class OfficeController implements OfficeActions {
   int _perfN = 0;
 
   void tick(double dt, Size view) {
+    loading.drew();
     _perf
       ..reset()
       ..start();

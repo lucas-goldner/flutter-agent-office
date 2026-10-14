@@ -15,6 +15,7 @@ import '../toon.dart';
 import 'geo.dart';
 import 'office_colliders.dart';
 import 'parts.dart';
+import 'props.dart';
 import 'shell.dart';
 
 /// A flat face something is shown on later: a board, the TV, the boss's monitor. [node] is a
@@ -226,8 +227,9 @@ Face buildLoft(Node group, List<Interactable> interactables, Looks looks) {
   tagInteract(scope, telescope);
   interactables.add(telescope);
 
-  for (final (px, pz, s) in LoftPlan.plants) {
-    stat.add(place(plant(s), x: px, y: floorY, z: pz, scale: s));
+  for (final (i, (px, pz, s)) in LoftPlan.plants.indexed) {
+    // Starting past the monstera, which spreads too wide for a corner this tight.
+    stat.add(place(pottedPlant(floorPlant(i + 1), s), x: px, y: floorY, z: pz));
   }
 
   stat.add(place(pendant(), x: deskX, y: roofY - 0.4, z: cz, scale: 0.8));

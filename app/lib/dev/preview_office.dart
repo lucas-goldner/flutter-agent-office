@@ -5,15 +5,21 @@
 //   &beanbags=1   brings every bean bag out;  &look=2  paints floor palette 2;
 //   &elevator=1   opens the elevator;          &juke=1  plays the jukebox.
 //   &roof=1       the rooftop bar instead, &dj=seconds into the DJ's set, &dark=0-1 how dark it is.
+//   &dog=corgi[,act[,coat]]  the office dog of that breed in the lounge, doing that (stand, sit, lie, nap,
+//                 sniff, wag, bark, walk), in that coat; &costume=halloween|christmas dresses it up.
+//   &models=0     the code-built furniture instead of the models made in Blender.
 //   &map=castle   a map of its own instead (castle, station), lit by its own mood; &day=0-1 how light it is.
 
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_scene/scene.dart';
 import 'package:vector_math/vector_math.dart' as vm;
 
+import 'package:office_shared/dog.dart';
 import 'package:office_shared/floorplan.dart' show DeskLabel;
+import 'package:office_shared/protocol.dart' show HolidayTheme;
 import 'package:office_shared/floors.dart';
 import 'package:office_shared/layout.dart' as lay;
 import 'package:office_shared/layout.dart' show deskBuilt;
@@ -21,6 +27,9 @@ import 'package:office_shared/layout.dart' show deskBuilt;
 import '../ui/theme.dart';
 import '../world/labels.dart';
 import '../audio/dnb_score.dart';
+import '../audio/sound_model.dart' show DogSounds;
+import '../world/dog.dart';
+import '../world/models.dart' show Models;
 import '../world/office/office.dart';
 
 import 'package:office_shared/maps/maps.dart' show planOf;
@@ -67,6 +76,14 @@ String _dump(Office o) => jsonEncode({
   'bulbs': o.night.bulbs.length,
 });
 
+class _Quiet implements DogSounds {
+  @override
+  void bark(double x, double z, int times) {}
+
+  @override
+  void yip(double x, double z) {}
+}
+
 class PreviewOffice extends StatefulWidget {
   const PreviewOffice({super.key});
 
@@ -81,6 +98,7 @@ class _PreviewOfficeState extends State<PreviewOffice> {
   Office? office;
   Rooftop? roof;
   World? map;
+  Dog? dog;
   double t = 0;
 
   @override
@@ -98,6 +116,8 @@ class _PreviewOfficeState extends State<PreviewOffice> {
     () async {
       await Scene.initializeStaticResources();
       await Toon.init();
+      // The models made in Blender (&models=0 builds the code-built stand-ins instead).
+      if (q['models'] != '0') await Models.instance.preload();
       scene.toneMapping = ToneMappingMode.linear;
       final sw = Stopwatch()..start();
       final o = buildOffice(labels: labels);
@@ -148,6 +168,28 @@ class _PreviewOfficeState extends State<PreviewOffice> {
         if (q['look'] != null) w.setLook(floorPalettes[int.parse(q['look']!)]);
         (scene.root.children.first).add(w.group);
       }
+      final d = q['dog']?.split(',');
+      if (d != null) {
+        final walking = d.length > 1 && d[1] == 'walk';
+        final act = DogAct.values.where((a) => d.length > 1 && a.name == d[1]).firstOrNull ?? DogAct.stand;
+        final pup = dog = Dog(_Quiet(), (_) => false, labels, now: () => t * 1000);
+        (scene.root.children.first).add(pup.root);
+        pup.sync(
+          DogState(
+            name: 'Biscuit',
+            coat: d.length > 2 ? int.parse(d[2]) : 0,
+            breed: dogBreed(d[0]),
+            path: walking ? const [(9.0, 2.0), (16.0, 2.0)] : const [(12.0, 2.0)],
+            speed: walking ? 1.3 : 0,
+            elapsed: 0,
+            act: act,
+            face: math.pi / 2,
+          ),
+          0,
+        );
+        final c = q['costume'];
+        if (c != null) pup.setCostume(HolidayTheme.values.byName(c));
+      }
       if (mounted) setState(() => office = o);
     }();
   }
@@ -159,6 +201,7 @@ class _PreviewOfficeState extends State<PreviewOffice> {
     final eye = camera.position;
     o.update(t, dt, [vm.Vector3(eye.x, eye.y, -eye.z)]);
     o.jukebox.update(t, dt, 0.5);
+    dog?.update(dt);
     final q = Uri.base.queryParameters;
     final w = map;
     if (w != null) {

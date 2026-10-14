@@ -92,12 +92,16 @@ List<vm.Vector2> clipToBox(List<vm.Vector2> points, double ex, double ey) {
   return out;
 }
 
+/// The code-built potted plant from before the models (see props.dart's pottedPlant, which uses it when
+/// plants.glb didn't load): the pot, and its leaves under `plant_leaves`, as a model's are.
 Node plant([double scale = 1]) {
   final g = group('plant');
   g.add(mesh(cyl(0.28, 0.22, 0.5, 12), tc(Palette.pot), 0, 0.25, 0));
-  g.add(mesh(sphere(0.42, 12, 10), tc(Palette.plant), 0, 0.85, 0));
-  g.add(mesh(sphere(0.3, 12, 10), tc(Palette.plantDark), 0.22, 1.1, 0.1));
-  g.add(mesh(sphere(0.26, 12, 10), tc(Palette.plant), -0.2, 1.15, -0.08));
+  final leaves = group('plant_leaves');
+  leaves.add(mesh(sphere(0.42, 12, 10), tc(Palette.plant), 0, 0.85, 0));
+  leaves.add(mesh(sphere(0.3, 12, 10), tc(Palette.plantDark), 0.22, 1.1, 0.1));
+  leaves.add(mesh(sphere(0.26, 12, 10), tc(Palette.plant), -0.2, 1.15, -0.08));
+  g.add(leaves);
   g.scale = vm.Vector3.all(scale);
   return g;
 }

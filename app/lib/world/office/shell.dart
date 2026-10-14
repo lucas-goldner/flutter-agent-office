@@ -18,6 +18,7 @@ import 'geo.dart';
 import 'office_colliders.dart';
 import 'outside.dart';
 import 'parts.dart';
+import 'props.dart';
 
 /// A door that opens by itself when someone comes up to it, and closes behind them.
 class Door {
@@ -359,8 +360,9 @@ void buildBalcony(Node group, List<Interactable> interactables, NightParts night
     group.add(stool);
     seatable(stool, sx < 0 ? 'stool-1' : 'stool-2', 0.9, interactables);
   }
-  for (final (px, pz, sc) in balconyPlants) {
-    parts.add(place(plant(sc), x: px, z: pz, scale: sc));
+  for (final (i, (px, pz, sc)) in balconyPlants.indexed) {
+    // Starting past the monstera, which spreads too wide for a spot this near the rail.
+    parts.add(place(pottedPlant(floorPlant(i + 1), sc), x: px, z: pz));
   }
 
   group.add(mergeByMaterial(parts));

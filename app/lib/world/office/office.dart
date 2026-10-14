@@ -29,6 +29,9 @@ import 'loft.dart';
 import 'office_colliders.dart';
 import 'outside.dart';
 import 'parts.dart';
+import 'props.dart' as props show plantLeaves;
+import 'props.dart' hide plantLeaves;
+import '../kitchen.dart';
 import 'shell.dart';
 import 'stack.dart';
 import 'tower.dart';
@@ -304,18 +307,17 @@ DeskView _buildDesk(DeskDef def, int index, Material trimMat) {
   // Modesty panel facing away from the worker.
   body.add(mesh(box(width - 0.3, 0.32, 0.03), trimMat, 0, height - 0.26, -depth / 2 + 0.06));
   // Little desk decorations.
+  // Which desk gets which stays as it was: the holiday present goes in whichever back corner it leaves
+  // free. The mug and books are pieces of desk_props.glb, the succulent of plants.glb (see props.dart).
   switch (index % 3) {
     case 0:
-      body.add(mesh(cyl(0.06, 0.05, 0.12, 10), tc(Palette.chairs[index % 6]), width / 2 - 0.25, height + 0.06, -0.2));
+      // In the chair's colour.
+      body.add(place(deskMug(Palette.chairs[index % 6]), x: width / 2 - 0.25, y: height, z: -0.2));
     case 1:
-      body.add(place(plant(0.35), x: -width / 2 + 0.25, y: height, z: -0.25, scale: 0.35));
+      body.add(place(pottedPlant(PlantSpecies.succulent), x: -width / 2 + 0.25, y: height, z: -0.25));
     default:
-      final books = Node(name: 'books');
-      const colors = ['#e63946', '#457b9d', '#f4a261'];
-      for (var i = 0; i < 3; i++) {
-        books.add(mesh(box(0.08, 0.24, 0.18), tc(colors[i]), i * 0.09, 0.12, 0));
-      }
-      body.add(place(books, x: width / 2 - 0.35, y: height, z: -0.3));
+      // Where the old three boxes stood, the desks with books taking turns with the arrangements.
+      body.add(place(deskBooks(index ~/ 3), x: width / 2 - 0.26, y: height, z: -0.3));
   }
   group.add(mergeByMaterial(body));
 
@@ -568,53 +570,31 @@ Office buildOffice({required LabelHub labels}) {
   tagInteract(tvGroup, tv);
   fixture(Side.east, Tv.z, Tv.y, Tv.width + 0.3, Tv.height + 0.3);
 
-  final couch = Node(name: 'couch');
-  final couchMat = tc('#5b8def');
-  couch.add(mesh(roundedBox(1, 0.45, 4.2, 0.2), couchMat, 0, 0.3, 0));
-  couch.add(mesh(roundedBox(0.35, 0.9, 4.2, 0.15), couchMat, -0.45, 0.55, 0));
-  couch.add(mesh(roundedBox(1, 0.7, 0.35, 0.15), couchMat, 0, 0.45, -2.0));
-  couch.add(mesh(roundedBox(1, 0.7, 0.35, 0.15), couchMat, 0, 0.45, 2.0));
-  couch.add(mesh(roundedBox(0.2, 0.45, 0.5, 0.1), tc('#ffd166'), -0.2, 0.75, -0.9));
-  couch.add(mesh(roundedBox(0.2, 0.45, 0.5, 0.1), tc('#ef476f'), -0.2, 0.75, 0.9));
-  final sofa = place(mergeByMaterial(couch), x: 10.5);
+  // The couch, its back to the room, turned from the model's +z to face the TV on the east wall (+x).
+  final sofa = place(mergeByMaterial(loungeCouch()), x: 10.5, rot: yaw(math.pi / 2));
   group.add(sofa);
   seatable(sofa, 'couch', 2.6, interactables);
 
-  final table = Node(name: 'coffee-table');
-  table.add(mesh(cyl(0.9, 0.9, 0.08, 24), tc(Palette.wood), 0, 0.42, 0));
-  table.add(mesh(cyl(0.12, 0.2, 0.4, 12), tc(Palette.deskLeg), 0, 0.2, 0));
-  table.position = vm.Vector3(13, 0, 0);
-  decor.add(table);
+  decor.add(place(coffeeTable(), x: 13));
   decor.add(mesh(roundedBox(7, 0.02, 7, 1.2), tc('#ffc6ff'), 13.4, 0.011, 0, false));
 
+  // A pouf either side of the lounge (the seats still called beanbags), turned to the TV like whoever sits on it.
   for (var i = 0; i < loungeBeanbags.length; i++) {
     final (c, x, z) = loungeBeanbags[i];
-    final bean = place(mesh(sphere(0.6, 16, 12), tc(c)), x: x, y: 0.35, z: z, scale3: vm.Vector3(1, 0.6, 1));
-    group.add(bean);
-    seatable(bean, 'lounge-beanbag-${i + 1}', 1.4, interactables);
+    final id = 'lounge-beanbag-${i + 1}';
+    final seat = place(mergeByMaterial(pouf(c)), x: x, z: z, rot: yaw(seatingById[id]!.rotY));
+    group.add(seat);
+    seatable(seat, id, 1.4, interactables);
   }
   final jukebox = buildJukebox(labels: labels);
   group.add(jukebox.group);
   interactables.add(jukebox.interactable);
   fixture(Side.east, lay.Jukebox.z, lay.Jukebox.height / 2, lay.Jukebox.width + 0.1, lay.Jukebox.height);
 
-  // Kitchen corner: counter, coffee machine and fridge.
-  final kitchen = Node(name: 'kitchen');
-  kitchen.add(mesh(box(5, 0.95, 1), tc('#8ecae6'), 0, 0.475, 0));
-  kitchen.add(mesh(box(5.1, 0.08, 1.1), tc(Palette.desk), 0, 0.99, 0));
-  final machine = Node(name: 'coffee');
-  machine.add(mesh(roundedBox(0.6, 0.7, 0.5, 0.08), tc('#343a40'), 0, 0.35, 0));
-  machine.add(mesh(cyl(0.08, 0.07, 0.14, 10), tc('#ffffff'), 0, 0.1, 0.12));
-  machine.add(mesh(sphere(0.05, 8, 8), tc('#ef476f', emissive: '#ef476f'), 0.18, 0.55, 0.26));
-  // Clickable, so a node of its own (at -1.2 along the counter, as the TS places it in the kitchen).
-  final coffee = place(mergeByMaterial(machine), x: -14.5 - 1.2, y: 1.03, z: 12.2);
-  group.add(coffee);
-  kitchen.add(mesh(roundedBox(1.1, 2.2, 1, 0.1), tc('#f8f9fa'), 3.2, 1.1, 0));
-  kitchen.add(mesh(box(0.06, 0.5, 0.06), tc('#adb5bd'), 2.75, 1.4, 0.52));
-  decor.add(place(kitchen, x: -14.5, z: 12.2));
-  final cup = Interactable(kind: InteractKind.coffee, x: -15.7, z: 10.9, radius: 1.4);
-  interactables.add(cup);
-  tagInteract(coffee, cup);
+  // Kitchen corner: counter, coffee machine and fridge (world/kitchen.dart, from kitchen.glb).
+  final kitchen = buildKitchen();
+  group.add(kitchen.group);
+  interactables.add(kitchen.interactable);
   // Counter, coffee machine and fridge, in front of the south wall.
   fixture(Side.south, -14.5, 0.55, 5.1, 1.1);
   fixture(Side.south, -15.7, 0.9, 0.6, 1.8);
@@ -625,20 +605,27 @@ Office buildOffice({required LabelHub labels}) {
   final leaves = Node(name: 'plant-leaves');
   // The ones in the way into the back office stand on their own, to put away while it's built.
   final byWing = <({Node group, Collider collider})>[];
-  for (final (x, z, s) in roomPlants) {
+  for (final (i, (x, z, s)) in roomPlants.indexed) {
+    // A species of plants.glb each, taking turns (see props.dart).
+    final species = floorPlant(i);
     if (plantByWing((x, z, s))) {
-      final p = place(plant(s), x: x, z: z, scale: s);
+      final p = place(pottedPlant(species, s), x: x, z: z);
       group.add(p);
       final r = 0.3 * s;
       byWing.add((group: p, collider: Collider(minX: x - r, maxX: x + r, minZ: z - r, maxZ: z + r, top: 0.5 * s)));
       continue;
     }
-    final pot = place(plant(s), x: x, z: z, scale: s);
-    final leaf = place(plant(s), x: x, z: z, scale: s);
-    for (final c in pot.children.skip(1).toList()) {
-      c.detach();
+    final pot = place(pottedPlant(species, s), x: x, z: z);
+    final leaf = place(
+      Node(name: 'leaves'),
+      x: x,
+      z: z,
+      scale: s,
+    );
+    for (final l in props.plantLeaves(pot)) {
+      l.detach();
+      leaf.add(l);
     }
-    leaf.children.first.detach();
     decor.add(pot);
     leaves.add(leaf);
   }

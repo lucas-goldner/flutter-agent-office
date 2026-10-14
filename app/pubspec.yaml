@@ -41,6 +41,8 @@ flutter:
 
   assets:
     - flutter_scene_generated/
+    # The models made in Blender (world/models.dart): imported when they're first needed.
+    - assets/models/
   uses-material-design: true
   fonts:
     - family: Nunito

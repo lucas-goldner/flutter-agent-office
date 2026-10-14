@@ -338,10 +338,12 @@ Collider jukeboxCollider() {
 }
 
 List<Collider> loungeColliders() => [
-  Collider(minX: 10, maxX: 11, minZ: -2.2, maxZ: 2.2, top: 0.55),
+  // The couch's top on its seat cushions, so someone standing on it stands on them (#186).
+  Collider(minX: 10, maxX: 11, minZ: -2.2, maxZ: 2.2, top: 0.47),
   Collider(minX: 12.2, maxX: 13.8, minZ: -0.8, maxZ: 0.8, top: 0.46),
   for (final (_, x, z) in loungeBeanbags)
-    Collider(minX: x - 0.5, maxX: x + 0.5, minZ: z - 0.5, maxZ: z + 0.5, top: 0.6),
+    // A pouf's top, the button in the middle of it.
+    Collider(minX: x - 0.5, maxX: x + 0.5, minZ: z - 0.5, maxZ: z + 0.5, top: 0.42),
   jukeboxCollider(),
 ];
 

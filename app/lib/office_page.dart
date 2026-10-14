@@ -9,6 +9,7 @@ import 'package:flutter_scene/scene.dart' hide Material;
 
 import 'interop/pointer_lock.dart';
 import 'office/controller.dart';
+import 'ui/loading.dart';
 import 'office_scope.dart';
 import 'ui/arcade.dart';
 import 'ui/compass.dart';
@@ -378,6 +379,8 @@ class _OfficePageState extends State<OfficePage> {
                 Positioned.fill(child: EmotePop(pop: c.emotePop)),
                 Positioned.fill(child: EmoteWheelView(wheel: c.emoteWheel)),
               ],
+              // Up from the start, over everything, until there's an office to see (ui/loading.dart).
+              Positioned.fill(child: LoadingScreen(loading: c.loading)),
             ],
           ),
         ),

@@ -9,13 +9,13 @@ import '../interop/browser.dart' show desktopApp, notInDesktopApp;
 import '../notify.dart';
 import '../office_scope.dart';
 
-import 'package:office_shared/dog.dart';
 import 'package:office_shared/protocol.dart';
 import 'package:office_shared/theme.dart' show themePicks;
 
 import '../state/store.dart';
 import 'prompts.dart';
 import 'provider.dart';
+import 'settings_dog.dart';
 import 'settings_rows.dart';
 import 'worker_limit.dart';
 import '../world/player.dart' show ViewMode;
@@ -561,7 +561,14 @@ void _builtInCards() {
       ],
     );
   });
-  cards.add(SettingsPane.building, id: 'dog', order: 40, (c) => c.store.dog == null ? null : _DogCard(c: c));
+  // The dog on this floor: its name, breed and coat, for everyone here (settings_dog.dart).
+  cards.add(
+    SettingsPane.building,
+    id: 'dog',
+    order: 40,
+    topics: const [Topic.dog],
+    (c) => c.store.dog == null ? null : DogCard(c: c),
+  );
   cards.add(SettingsPane.building, id: 'workspace', order: 50, (c) => _DirCard(c: c));
 
   // Workers.
@@ -744,62 +751,6 @@ class _WebhookCardState extends State<_WebhookCard> {
 }
 
 /// The dog on this floor, named for everyone here.
-class _DogCard extends StatefulWidget {
-  const _DogCard({required this.c});
-  final SettingsContext c;
-
-  @override
-  State<_DogCard> createState() => _DogCardState();
-}
-
-class _DogCardState extends State<_DogCard> {
-  final _dog = TextEditingController();
-  final _focus = FocusNode();
-
-  @override
-  void dispose() {
-    _dog.dispose();
-    _focus.dispose();
-    super.dispose();
-  }
-
-  void _rename() {
-    final name = cleanDogName(_dog.text);
-    if (name.isEmpty) return _focus.requestFocus();
-    widget.c.net.send(DogNameCmd(name));
-    _dog.clear();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final dog = widget.c.store.dog!;
-    return SettingCard(
-      title: 'Office dog',
-      scope: SettingScope.floor,
-      children: [
-        Row(
-          children: [
-            Expanded(
-              child: BoxInput(
-                controller: _dog,
-                focusNode: _focus,
-                maxLength: dogNameMax,
-                hint: dog.name,
-                onSubmitted: (_) => _rename(),
-              ),
-            ),
-            const SizedBox(width: 8),
-            OfficeButton(label: 'Rename', kind: BtnKind.primary, onPressed: _rename),
-          ],
-        ),
-        Note(
-          '${dog.name} lives on this floor. When a worker needs input, ${dog.name} runs to its desk and barks. Walk up and press E to pet it. A new name is for everyone on this floor.',
-        ),
-      ],
-    );
-  }
-}
-
 /// Where the elevator clones new projects on the office's machine. Admins move it.
 class _DirCard extends StatefulWidget {
   const _DirCard({required this.c});

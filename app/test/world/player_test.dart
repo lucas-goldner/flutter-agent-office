@@ -136,7 +136,7 @@ void main() {
   });
 
   test('sits on the lounge couch until you walk off, then gets up clear of it', () {
-    final couch = box(10, 11, -2.2, 2.2, 0.55);
+    final couch = box(10, 11, -2.2, 2.2, 0.47);
     final r = Rig([officeFloor, couch, box(12.2, 13.8, -0.8, 0.8, 0.46)]);
     var gotUp = 0;
     r.player.onStand = () => gotUp++;
@@ -171,7 +171,7 @@ void main() {
 
   test('gets up off a beanbag to the side when something stands in front of it', () {
     final bag = seatingById['lounge-beanbag-1']!;
-    final bean = box(bag.x - 0.5, bag.x + 0.5, bag.z - 0.5, bag.z + 0.5, 0.6);
+    final bean = box(bag.x - 0.5, bag.x + 0.5, bag.z - 0.5, bag.z + 0.5, 0.42);
     final place = seatPlace(bag, 0);
     final ax = place.x + math.sin(bag.rotY) * bag.out;
     final az = place.z + math.cos(bag.rotY) * bag.out;
