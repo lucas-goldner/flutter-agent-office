@@ -2,22 +2,27 @@ import 'package:agent_office/ui/gh_logic.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:office_shared/protocol.dart';
 
-GhIssue issue(int n, {List<String> labels = const [], String state = 'OPEN', String updated = '2026-09-01'}) =>
-    GhIssue.fromJson({
-      'number': n,
-      'title': 'Issue $n',
-      'state': state,
-      'url': 'https://github.com/acme/rocket/issues/$n',
-      'author': 'a',
-      'labels': [
-        for (final l in labels) {'name': l, 'color': '#${l.length}${l.length}0000'},
-      ],
-      'assignees': <String>[],
-      'createdAt': '',
-      'updatedAt': updated,
-      'body': '',
-      'comments': 0,
-    });
+GhIssue issue(
+  int n, {
+  List<String> labels = const [],
+  String state = 'OPEN',
+  String updated = '2026-09-01',
+  String? title,
+}) => GhIssue.fromJson({
+  'number': n,
+  'title': title ?? 'Issue $n',
+  'state': state,
+  'url': 'https://github.com/acme/rocket/issues/$n',
+  'author': 'a',
+  'labels': [
+    for (final l in labels) {'name': l, 'color': '#${l.length}${l.length}0000'},
+  ],
+  'assignees': <String>[],
+  'createdAt': '',
+  'updatedAt': updated,
+  'body': '',
+  'comments': 0,
+});
 
 GhLabel label(String name, [String? description]) => GhLabel(name: name, color: '#ffffff', description: description);
 
@@ -48,6 +53,23 @@ void main() {
     expect(f.count, '3 / 4');
     expect(filterColumn(col, ['nope']).count, '0 / 4');
     expect(filterColumn(col, const []).count, '4');
+  });
+
+  test('a title filter keeps cards with every word typed, any case, with the label filter', () {
+    final col = BoardColumn('open', '📥 Open', [
+      issue(1, title: 'Fix the login page', labels: ['bug']),
+      issue(2, title: 'Login with GitHub'),
+      issue(3, title: 'Page titles', labels: ['bug']),
+    ]);
+    expect(filterColumn(col, const [], 'LOGIN').shown.map((i) => i.number), [1, 2]);
+    expect(filterColumn(col, const [], 'page login').shown.map((i) => i.number), [1]);
+    expect(filterColumn(col, const [], 'login').count, '2 / 3');
+    expect(filterColumn(col, ['bug'], 'login').shown.map((i) => i.number), [1]);
+    expect(filterColumn(col, const [], '  ').count, '3', reason: 'blank is no filter');
+    expect(filterColumn(col, const [], ' zebra ').empty, 'No titles match “zebra”');
+    expect(filterColumn(col, ['bug'], 'zebra').empty, 'No titles match “zebra” with those labels');
+    expect(filterColumn(col, ['nope']).empty, 'Nothing here with those labels');
+    expect(filterColumn(BoardColumn<GhIssue>('x', 'x', const []), const []).empty, 'Nothing here');
   });
 
   test('the picker offers every label on the board A to Z, and ones picked earlier', () {

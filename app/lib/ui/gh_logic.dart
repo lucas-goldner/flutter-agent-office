@@ -6,6 +6,7 @@ import 'dart:convert';
 import 'dart:ui' show Color;
 
 import 'package:office_shared/protocol.dart';
+
 import 'markdown.dart' show repoUrlOf;
 
 // ---- Boards ---------------------------------------------------------------------------------------
@@ -33,7 +34,12 @@ int _byUpdatedDesc(dynamic a, dynamic b) => (b.updatedAt as String).compareTo(a.
 List<BoardColumn<GhIssue>> issueColumns(List<GhIssue> items, QueueTask? Function(int issue) taskForIssue) {
   final open = items.where((i) => i.state == 'OPEN').toList();
   final inProgress = open
-      .where((i) => i.assignees.isNotEmpty || i.labels.any((l) => _progress.hasMatch(l.name)) || taskForIssue(i.number)?.status == TaskStatus.running)
+      .where(
+        (i) =>
+            i.assignees.isNotEmpty ||
+            i.labels.any((l) => _progress.hasMatch(l.name)) ||
+            taskForIssue(i.number)?.status == TaskStatus.running,
+      )
       .toList();
   final todo = open.where((i) => !inProgress.contains(i)).toList();
   final closed = items.where((i) => i.state != 'OPEN').toList()..sort(_byUpdatedDesc);
@@ -51,7 +57,12 @@ List<BoardColumn<GhPull>> pullColumns(List<GhPull> items) {
     BoardColumn('review', '👀 In review', open.where((p) => !p.isDraft && p.reviewDecision != 'APPROVED').toList()),
     BoardColumn('approved', '👍 Approved', open.where((p) => !p.isDraft && p.reviewDecision == 'APPROVED').toList()),
     BoardColumn('merged', '🎉 Merged', items.where((p) => p.state == 'MERGED').toList()..sort(_byUpdatedDesc), max: 30),
-    BoardColumn('closed', '🗑️ Closed', items.where((p) => p.state == 'CLOSED').toList()..sort(_byUpdatedDesc), max: 20),
+    BoardColumn(
+      'closed',
+      '🗑️ Closed',
+      items.where((p) => p.state == 'CLOSED').toList()..sort(_byUpdatedDesc),
+      max: 20,
+    ),
   ];
 }
 
@@ -59,18 +70,49 @@ List<BoardColumn<GhPull>> pullColumns(List<GhPull> items) {
 
 /// The labels an issue or PR carries.
 List<GhLabel> labelsOf(Object it) => switch (it) {
-      GhIssue i => i.labels,
-      GhPull p => p.labels,
-      _ => const [],
-    };
+  GhIssue i => i.labels,
+  GhPull p => p.labels,
+  _ => const [],
+};
 
-/// A column's cards after its label filter: the ones with any of [picked] (every one when none
-/// is), capped at the column's max, and its count ("shown / total" while a filter is on).
-({List<T> shown, String count}) filterColumn<T extends Object>(BoardColumn<T> col, List<String> picked) {
+/// An issue's or PR's title.
+String titleOf(Object it) => switch (it) {
+  GhIssue i => i.title,
+  GhPull p => p.title,
+  _ => '',
+};
+
+/// A column's cards after its label filter and its title filter: the ones with any of [picked] (every one
+/// when none is) whose titles have every word of [query] (any case, any order), capped at the column's max;
+/// its count ("shown / total" while a filter is on), and what it says when nothing's left.
+({List<T> shown, String count, String empty}) filterColumn<T extends Object>(
+  BoardColumn<T> col,
+  List<String> picked, [
+  String query = '',
+]) {
   List<T> cap(List<T> xs) => col.max == null ? xs : xs.take(col.max!).toList();
-  final matching = picked.isEmpty ? col.items : col.items.where((it) => labelsOf(it).any((l) => picked.contains(l.name))).toList();
+  final labelled = picked.isEmpty
+      ? col.items
+      : col.items.where((it) => labelsOf(it).any((l) => picked.contains(l.name))).toList();
+  final words = query.toLowerCase().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+  final matching = words.isEmpty
+      ? labelled
+      : labelled.where((it) {
+          final title = titleOf(it).toLowerCase();
+          return words.every(title.contains);
+        }).toList();
   final shown = cap(matching);
-  return (shown: shown, count: picked.isEmpty ? '${shown.length}' : '${shown.length} / ${cap(col.items).length}');
+  final filtered = picked.isNotEmpty || words.isNotEmpty;
+  final empty = words.isNotEmpty
+      ? 'No titles match “${query.trim()}”${picked.isNotEmpty ? ' with those labels' : ''}'
+      : picked.isNotEmpty
+      ? 'Nothing here with those labels'
+      : 'Nothing here';
+  return (
+    shown: shown,
+    count: filtered ? '${shown.length} / ${cap(col.items).length}' : '${shown.length}',
+    empty: empty,
+  );
 }
 
 /// Every label on the board's cards, by name (first colour seen), for the column filters.
@@ -91,15 +133,21 @@ int _byNameCi(String a, String b) {
 
 /// The labels a column's picker offers, A to Z: every one on the board and any picked earlier that
 /// no card carries now; with how many of the column's cards carry each.
-List<({String name, int count})> pickerLabels<T extends Object>(BoardColumn<T> col, Map<String, String> all, List<String> picked) {
+List<({String name, int count})> pickerLabels<T extends Object>(
+  BoardColumn<T> col,
+  Map<String, String> all,
+  List<String> picked,
+) {
   final names = {...all.keys, ...picked}.toList()..sort(_byNameCi);
   return [
-    for (final name in names) (name: name, count: col.items.where((it) => labelsOf(it).any((l) => l.name == name)).length),
+    for (final name in names)
+      (name: name, count: col.items.where((it) => labelsOf(it).any((l) => l.name == name)).length),
   ];
 }
 
 /// Where a board's label filters are kept, per floor (or project) and board.
-String labelFiltersKey(String? floor, String? projectDir, String kind) => 'agent-office.board-labels.${floor ?? projectDir ?? ''}.$kind';
+String labelFiltersKey(String? floor, String? projectDir, String kind) =>
+    'agent-office.board-labels.${floor ?? projectDir ?? ''}.$kind';
 
 /// The saved filters (column key → label names), ignoring anything garbled.
 Map<String, List<String>> parseLabelFilters(String? saved) {
@@ -188,7 +236,12 @@ const reviewBadge = <String, (String, String)>{
   'DISMISSED': ('review dismissed', 'muted'),
 };
 
-const checkStateIcon = {GhCheckState.pass: '✅', GhCheckState.fail: '❌', GhCheckState.pending: '🟡', GhCheckState.skip: '⚪'};
+const checkStateIcon = {
+  GhCheckState.pass: '✅',
+  GhCheckState.fail: '❌',
+  GhCheckState.pending: '🟡',
+  GhCheckState.skip: '⚪',
+};
 
 /// The pill for an issue or PR: its word and its CSS class.
 (String, String) stateOf(String state, {bool isDraft = false}) {
@@ -213,43 +266,89 @@ class MergeStatus {
 }
 
 /// An open PR whose branch can't merge until someone resolves conflicts with the base.
-bool conflicted(GhPullDetail d) => d.state == 'OPEN' && !d.isDraft && (d.mergeable == 'CONFLICTING' || d.mergeStateStatus == 'DIRTY');
+bool conflicted(GhPullDetail d) =>
+    d.state == 'OPEN' && !d.isDraft && (d.mergeable == 'CONFLICTING' || d.mergeStateStatus == 'DIRTY');
 
 MergeStatus mergeStatus(GhPullDetail d) {
   final failing = d.checks.where((c) => c.state == GhCheckState.fail).length;
   final pending = d.checks.where((c) => c.state == GhCheckState.pending).length;
   if (d.state == 'MERGED') return const MergeStatus('🎉', 'Merged.', Tone.ok, can: false, auto: false);
-  if (d.state == 'CLOSED') return const MergeStatus('🗑️', 'Closed without merging.', Tone.muted, can: false, auto: false);
+  if (d.state == 'CLOSED') {
+    return const MergeStatus('🗑️', 'Closed without merging.', Tone.muted, can: false, auto: false);
+  }
   if (d.isDraft) {
-    return const MergeStatus('📝', 'This is still a draft. Mark it ready for review on GitHub before merging.', Tone.muted, can: false, auto: false);
+    return const MergeStatus(
+      '📝',
+      'This is still a draft. Mark it ready for review on GitHub before merging.',
+      Tone.muted,
+      can: false,
+      auto: false,
+    );
   }
   if (conflicted(d)) {
-    return MergeStatus('⚠️', 'This branch has conflicts with ${d.baseRefName} that must be resolved first.', Tone.bad, can: false, auto: false);
+    return MergeStatus(
+      '⚠️',
+      'This branch has conflicts with ${d.baseRefName} that must be resolved first.',
+      Tone.bad,
+      can: false,
+      auto: false,
+    );
   }
   if (d.mergeStateStatus == 'BEHIND') {
-    return MergeStatus('⤵️', 'The branch is behind ${d.baseRefName}, and this repo wants it up to date before merging.', Tone.warn, can: true, auto: true);
+    return MergeStatus(
+      '⤵️',
+      'The branch is behind ${d.baseRefName}, and this repo wants it up to date before merging.',
+      Tone.warn,
+      can: true,
+      auto: true,
+    );
   }
   if (d.mergeStateStatus == 'BLOCKED') {
     final why = d.reviewDecision == 'CHANGES_REQUESTED'
         ? 'changes were requested'
         : d.reviewDecision == 'REVIEW_REQUIRED'
-            ? 'it needs an approving review'
-            : failing > 0
-                ? '$failing check${failing > 1 ? 's are' : ' is'} failing'
-                : pending > 0
-                    ? 'required checks are still running'
-                    : 'a branch rule is not met yet';
+        ? 'it needs an approving review'
+        : failing > 0
+        ? '$failing check${failing > 1 ? 's are' : ' is'} failing'
+        : pending > 0
+        ? 'required checks are still running'
+        : 'a branch rule is not met yet';
     return MergeStatus('🚫', 'Merging is blocked: $why.', Tone.bad, can: true, auto: true);
   }
-  if (failing > 0) return MergeStatus('❌', '$failing check${failing > 1 ? 's' : ''} failing. It can still be merged.', Tone.warn, can: true, auto: false);
+  if (failing > 0) {
+    return MergeStatus(
+      '❌',
+      '$failing check${failing > 1 ? 's' : ''} failing. It can still be merged.',
+      Tone.warn,
+      can: true,
+      auto: false,
+    );
+  }
   if (pending > 0 || d.mergeStateStatus == 'UNSTABLE') {
-    return const MergeStatus('🟡', 'Checks are still running. It can be merged now, or once they pass.', Tone.warn, can: true, auto: true);
+    return const MergeStatus(
+      '🟡',
+      'Checks are still running. It can be merged now, or once they pass.',
+      Tone.warn,
+      can: true,
+      auto: true,
+    );
   }
   if (d.mergeStateStatus == 'UNKNOWN' || d.mergeable == 'UNKNOWN') {
-    return const MergeStatus('⏳', 'GitHub is still working out whether this can merge. Refresh in a moment.', Tone.muted, can: true, auto: false);
+    return const MergeStatus(
+      '⏳',
+      'GitHub is still working out whether this can merge. Refresh in a moment.',
+      Tone.muted,
+      can: true,
+      auto: false,
+    );
   }
-  return MergeStatus('✅', 'Ready to merge: no conflicts with ${d.baseRefName}${d.checks.isNotEmpty ? ' and all checks passed' : ''}.', Tone.ok,
-      can: true, auto: false);
+  return MergeStatus(
+    '✅',
+    'Ready to merge: no conflicts with ${d.baseRefName}${d.checks.isNotEmpty ? ' and all checks passed' : ''}.',
+    Tone.ok,
+    can: true,
+    auto: false,
+  );
 }
 
 /// Checks worst first: failing, running, passed, skipped.

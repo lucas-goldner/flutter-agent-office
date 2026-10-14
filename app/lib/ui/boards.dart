@@ -10,8 +10,10 @@ import 'package:flutter/material.dart';
 
 import '../interop/portable.dart';
 import '../office_scope.dart';
+
 import 'package:office_shared/layout.dart' show deskById;
 import 'package:office_shared/protocol.dart';
+
 import '../state/store.dart';
 import 'gh_logic.dart';
 import 'modal.dart';
@@ -48,7 +50,14 @@ class _BoardWindowState extends State<_BoardWindow> {
   /// The column whose label picker is open, if any.
   String? picking;
 
-  String get _filtersKey => labelFiltersKey(store.floor, store.project?.dir, widget.kind == BoardKind.issues ? 'issues' : 'pulls');
+  /// What each column's filter box holds (column key → its box), for as long as the board is open. The boxes
+  /// outlive a refresh from GitHub, so the text, the focus and the caret stay put.
+  final Map<String, TextEditingController> _queries = {};
+
+  TextEditingController _query(String key) => _queries.putIfAbsent(key, () => TextEditingController());
+
+  String get _filtersKey =>
+      labelFiltersKey(store.floor, store.project?.dir, widget.kind == BoardKind.issues ? 'issues' : 'pulls');
 
   void _setFilter(String key, List<String> labels) {
     setState(() {
@@ -61,16 +70,25 @@ class _BoardWindowState extends State<_BoardWindow> {
     storageSet(_filtersKey, jsonEncode(filters));
   }
 
-  /// A column of cards. Click its header to filter it by label.
+  /// A column of cards. Type in its box to narrow it by title; click its header to filter it by label.
   Widget _column<T extends Object>(BoardColumn<T> col, Map<String, String> all, Widget Function(T it, int i) cardOf) {
     final picked = filters[col.key] ?? const <String>[];
-    final f = filterColumn(col, picked);
+    final query = _query(col.key);
+    final f = filterColumn(col, picked, query.text);
     return _ColumnView(
+      key: ValueKey('column-${col.key}'),
       title: col.title,
       count: f.count,
       picked: picked,
       open: picking == col.key,
-      empty: picked.isEmpty ? 'Nothing here' : 'Nothing here with those labels',
+      empty: f.empty,
+      search: _TitleFilter(
+        key: ValueKey('search-${col.key}'),
+        controller: query,
+        name: col.title.replaceFirst(RegExp(r'^\S+ '), ''),
+        onChanged: () => setState(() {}),
+      ),
+      searching: query.text.trim().isNotEmpty,
       colors: all,
       choices: picking == col.key ? pickerLabels(col, all, picked) : const [],
       onHead: () => setState(() => picking = picking == col.key ? null : col.key),
@@ -89,6 +107,9 @@ class _BoardWindowState extends State<_BoardWindow> {
   @override
   void dispose() {
     _timer?.cancel();
+    for (final q in _queries.values) {
+      q.dispose();
+    }
     super.dispose();
   }
 
@@ -117,11 +138,21 @@ class _BoardWindowState extends State<_BoardWindow> {
               children: [
                 Text(issues ? '📌 Issues' : '🔀 Pull Requests'),
                 const SizedBox(width: 10),
-                Flexible(child: Text(status, style: heavy(12, color: Swatch.muted, weight: FontWeight.w700), overflow: TextOverflow.ellipsis)),
+                Flexible(
+                  child: Text(
+                    status,
+                    style: heavy(12, color: Swatch.muted, weight: FontWeight.w700),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
               ],
             ),
             headerExtras: [
-              OfficeButton(label: '🔄 Refresh', tooltip: 'Refresh from GitHub', onPressed: () => widget.scope.net.send(const GhRefreshCmd())),
+              OfficeButton(
+                label: '🔄 Refresh',
+                tooltip: 'Refresh from GitHub',
+                onPressed: () => widget.scope.net.send(const GhRefreshCmd()),
+              ),
             ],
             body: CustomPaint(painter: const _CorkPainter(), child: _body(issues)),
           ),
@@ -145,11 +176,17 @@ class _BoardWindowState extends State<_BoardWindow> {
           final row = Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              for (var i = 0; i < n; i++) ...[if (i > 0) const SizedBox(width: 12), SizedBox(width: w, child: columns[i])],
+              for (var i = 0; i < n; i++) ...[
+                if (i > 0) const SizedBox(width: 12),
+                SizedBox(width: w, child: columns[i]),
+              ],
             ],
           );
           return w * n + 12 * (n - 1) > c.maxWidth + 0.5
-              ? SingleChildScrollView(scrollDirection: Axis.horizontal, child: SizedBox(height: c.maxHeight, child: row))
+              ? SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: SizedBox(height: c.maxHeight, child: row),
+                )
               : row;
         },
       ),
@@ -157,54 +194,50 @@ class _BoardWindowState extends State<_BoardWindow> {
   }
 
   List<Widget> _issueColumns() => [
-        for (final col in issueColumns(store.issues.items, store.taskForIssue))
-          _column<GhIssue>(
-            col,
-            boardLabels(store.issues.items),
-            (it, i) => BoardCard(
-                    number: it.number,
-                    title: it.title,
-                    index: i,
-                    onTap: () => openIssue(widget.scope, it),
-                    onLabels: () => openLabels(widget.scope, GhKind.issue, it.number, it.title, it.url, it.labels),
-                    meta: [
-                      ...it.labels.take(4).map(LabelChip.new),
-                      ?_queueChip(it.number),
-                      _metaText(it.assignees.isNotEmpty ? '👤 ${it.assignees.join(', ')}' : 'by ${it.author}'),
-                      if (it.comments > 0) _metaText('💬 ${it.comments}'),
-                      _metaText(timeAgo(it.updatedAt)),
-                    ],
-                  ),
-          ),
-      ];
+    for (final col in issueColumns(store.issues.items, store.taskForIssue))
+      _column<GhIssue>(
+        col,
+        boardLabels(store.issues.items),
+        (it, i) => BoardCard(
+          number: it.number,
+          title: it.title,
+          index: i,
+          onTap: () => openIssue(widget.scope, it),
+          onLabels: () => openLabels(widget.scope, GhKind.issue, it.number, it.title, it.url, it.labels),
+          meta: [
+            ...it.labels.take(4).map(LabelChip.new),
+            ?_queueChip(it.number),
+            _metaText(it.assignees.isNotEmpty ? '👤 ${it.assignees.join(', ')}' : 'by ${it.author}'),
+            if (it.comments > 0) _metaText('💬 ${it.comments}'),
+            _metaText(timeAgo(it.updatedAt)),
+          ],
+        ),
+      ),
+  ];
 
   List<Widget> _pullColumns() => [
-        for (final col in pullColumns(store.pulls.items))
-          _column<GhPull>(
-            col,
-            boardLabels(store.pulls.items),
-            (it, i) {
-                  final w = workerForPull(store.workers.values, it);
-                  return BoardCard(
-                    number: it.number,
-                    title: it.title,
-                    index: i,
-                    onTap: () => openPull(widget.scope, it),
-                    onLabels: () => openLabels(widget.scope, GhKind.pull, it.number, it.title, it.url, it.labels),
-                    meta: [
-                      if (w != null) DeskChip(w),
-                      ...it.labels.take(4).map(LabelChip.new),
-                      _metaText('by ${it.author}'),
-                      if (it.reviewDecision == 'CHANGES_REQUESTED') _metaText('🛠 changes requested'),
-                      if (checkIcon[it.checks]!.isNotEmpty) _metaText(checkIcon[it.checks]!),
-                      _metaText('+${it.additions}', color: const Color(0xFF2A9D4B)),
-                      _metaText('-${it.deletions}', color: const Color(0xFFC3423F)),
-                      _metaText(timeAgo(it.updatedAt)),
-                    ],
-                  );
-            },
-          ),
-      ];
+    for (final col in pullColumns(store.pulls.items))
+      _column<GhPull>(col, boardLabels(store.pulls.items), (it, i) {
+        final w = workerForPull(store.workers.values, it);
+        return BoardCard(
+          number: it.number,
+          title: it.title,
+          index: i,
+          onTap: () => openPull(widget.scope, it),
+          onLabels: () => openLabels(widget.scope, GhKind.pull, it.number, it.title, it.url, it.labels),
+          meta: [
+            if (w != null) DeskChip(w),
+            ...it.labels.take(4).map(LabelChip.new),
+            _metaText('by ${it.author}'),
+            if (it.reviewDecision == 'CHANGES_REQUESTED') _metaText('🛠 changes requested'),
+            if (checkIcon[it.checks]!.isNotEmpty) _metaText(checkIcon[it.checks]!),
+            _metaText('+${it.additions}', color: const Color(0xFF2A9D4B)),
+            _metaText('-${it.deletions}', color: const Color(0xFFC3423F)),
+            _metaText(timeAgo(it.updatedAt)),
+          ],
+        );
+      }),
+  ];
 
   /// Where an issue stands on the 📋 queue, for its card.
   Widget? _queueChip(int issue) {
@@ -217,14 +250,22 @@ class _BoardWindowState extends State<_BoardWindow> {
     }
     if (t.status == TaskStatus.running) {
       final w = t.workerId == null ? null : store.workers[t.workerId];
-      if (w != null) return DeskChip(w, tooltip: '${w.name} is working on this at ${deskById[w.deskId]?.label ?? 'a desk'}$provider');
+      if (w != null) {
+        return DeskChip(
+          w,
+          tooltip: '${w.name} is working on this at ${deskById[w.deskId]?.label ?? 'a desk'}$provider',
+        );
+      }
       return _QChip('🤖 ${t.workerName ?? 'a worker'}$provider', const Color(0xFFD8F5E3));
     }
     return t.pr != null ? _QChip('🔀 PR #${t.pr!.number}$provider', Swatch.paper2) : null;
   }
 }
 
-Widget _metaText(String s, {Color color = Swatch.muted}) => Text(s, style: heavy(11, color: color, weight: FontWeight.w700));
+Widget _metaText(String s, {Color color = Swatch.muted}) => Text(
+  s,
+  style: heavy(11, color: color, weight: FontWeight.w700),
+);
 
 class _QChip extends StatelessWidget {
   const _QChip(this.text, this.color);
@@ -233,10 +274,14 @@ class _QChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-        decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(999), border: Border.all(color: Swatch.ink, width: 1.5)),
-        child: Text(text, style: heavy(10, weight: FontWeight.w900)),
-      );
+    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+    decoration: BoxDecoration(
+      color: color,
+      borderRadius: BorderRadius.circular(999),
+      border: Border.all(color: Swatch.ink, width: 1.5),
+    ),
+    child: Text(text, style: heavy(10, weight: FontWeight.w900)),
+  );
 }
 
 /// A chip naming the worker and desk a pull request came from.
@@ -249,28 +294,39 @@ class DeskChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Tooltip(
-        message: tooltip ?? "Opened from ${w.name}'s desk (${w.worktree?.branch ?? 'its branch'})",
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
-          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(999), border: Border.all(color: Swatch.ink, width: 2)),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(color: parseHex(w.color, Swatch.accent), shape: BoxShape.circle, border: Border.all(color: Swatch.ink, width: 1)),
-              ),
-              const SizedBox(width: 5),
-              Text('🪑 ${w.name} · ${deskById[w.deskId]?.label ?? 'a desk'}', style: heavy(11)),
-            ],
+    message: tooltip ?? "Opened from ${w.name}'s desk (${w.worktree?.branch ?? 'its branch'})",
+    child: Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Swatch.ink, width: 2),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: parseHex(w.color, Swatch.accent),
+              shape: BoxShape.circle,
+              border: Border.all(color: Swatch.ink, width: 1),
+            ),
           ),
-        ),
-      );
+          const SizedBox(width: 5),
+          Text('🪑 ${w.name} · ${deskById[w.deskId]?.label ?? 'a desk'}', style: heavy(11)),
+        ],
+      ),
+    ),
+  );
 }
 
 class _ColumnView extends StatelessWidget {
   const _ColumnView({
+    super.key,
+    required this.search,
+    required this.searching,
     required this.title,
     required this.count,
     required this.cards,
@@ -285,6 +341,10 @@ class _ColumnView extends StatelessWidget {
   final String title;
   final String count;
   final List<Widget> cards;
+
+  /// The box that narrows the column by title, and whether it holds anything.
+  final Widget search;
+  final bool searching;
 
   /// The labels the column is filtered to.
   final List<String> picked;
@@ -305,7 +365,7 @@ class _ColumnView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final filtered = picked.isNotEmpty;
+    final filtered = picked.isNotEmpty || searching;
     return Container(
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
@@ -321,19 +381,27 @@ class _ColumnView extends StatelessWidget {
             count: count,
             open: open,
             filtered: filtered,
-            tooltip: filtered ? 'Only cards labelled ${picked.join(' or ')}. Click to change.' : 'Filter by label',
+            tooltip: picked.isNotEmpty
+                ? 'Only cards labelled ${picked.join(' or ')}. Click to change.'
+                : 'Filter by label',
             onTap: onHead,
           ),
+          search,
           if (open)
             _picker()
-          else if (filtered)
+          else if (picked.isNotEmpty)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-              decoration: const BoxDecoration(color: Swatch.paper, border: Border(bottom: BorderSide(color: Swatch.ink, width: 3))),
+              decoration: const BoxDecoration(
+                color: Swatch.paper,
+                border: Border(bottom: BorderSide(color: Swatch.ink, width: 3)),
+              ),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(child: Wrap(spacing: 4, runSpacing: 4, children: [for (final n in picked) LabelChip(_label(n))])),
+                  Expanded(
+                    child: Wrap(spacing: 4, runSpacing: 4, children: [for (final n in picked) LabelChip(_label(n))]),
+                  ),
                   Tooltip(
                     message: 'Show every card',
                     child: Semantics(
@@ -341,7 +409,13 @@ class _ColumnView extends StatelessWidget {
                       label: 'Clear label filter',
                       child: InkWell(
                         onTap: () => onPick(const []),
-                        child: Padding(padding: const EdgeInsets.symmetric(horizontal: 2), child: Text('✕', style: heavy(12, color: Swatch.muted, weight: FontWeight.w900))),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 2),
+                          child: Text(
+                            '✕',
+                            style: heavy(12, color: Swatch.muted, weight: FontWeight.w900),
+                          ),
+                        ),
                       ),
                     ),
                   ),
@@ -352,7 +426,11 @@ class _ColumnView extends StatelessWidget {
             child: cards.isEmpty
                 ? Padding(
                     padding: const EdgeInsets.all(10),
-                    child: Text(empty, textAlign: TextAlign.center, style: heavy(13, color: Swatch.muted, weight: FontWeight.w700)),
+                    child: Text(
+                      empty,
+                      textAlign: TextAlign.center,
+                      style: heavy(13, color: Swatch.muted, weight: FontWeight.w700),
+                    ),
                   )
                 : ListView.separated(
                     // Room above the first card for its pin.
@@ -374,7 +452,10 @@ class _ColumnView extends StatelessWidget {
       builder: (context, _) => Container(
         constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.3),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-        decoration: const BoxDecoration(color: Swatch.paper, border: Border(bottom: BorderSide(color: Swatch.ink, width: 3))),
+        decoration: const BoxDecoration(
+          color: Swatch.paper,
+          border: Border(bottom: BorderSide(color: Swatch.ink, width: 3)),
+        ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -382,7 +463,10 @@ class _ColumnView extends StatelessWidget {
             Flexible(
               child: SingleChildScrollView(
                 child: choices.isEmpty
-                    ? Text('No labels on this board yet.', style: heavy(11, color: Swatch.muted, weight: FontWeight.w700))
+                    ? Text(
+                        'No labels on this board yet.',
+                        style: heavy(11, color: Swatch.muted, weight: FontWeight.w700),
+                      )
                     : Wrap(
                         spacing: 5,
                         runSpacing: 5,
@@ -393,7 +477,11 @@ class _ColumnView extends StatelessWidget {
                               count: c.count,
                               on: picked.contains(c.name),
                               tooltip: '${c.count} in $what',
-                              onTap: () => onPick(picked.contains(c.name) ? picked.where((x) => x != c.name).toList() : [...picked, c.name]),
+                              onTap: () => onPick(
+                                picked.contains(c.name)
+                                    ? picked.where((x) => x != c.name).toList()
+                                    : [...picked, c.name],
+                              ),
                             ),
                         ],
                       ),
@@ -404,7 +492,9 @@ class _ColumnView extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    picked.isNotEmpty ? 'Showing cards with any of these labels' : 'Pick labels to show only their cards',
+                    picked.isNotEmpty
+                        ? 'Showing cards with any of these labels'
+                        : 'Pick labels to show only their cards',
                     style: heavy(11, color: Swatch.muted, weight: FontWeight.w700),
                   ),
                 ),
@@ -420,7 +510,14 @@ class _ColumnView extends StatelessWidget {
 
 /// A column's header: its title and count, a button that opens its label filter.
 class _ColumnHead extends StatefulWidget {
-  const _ColumnHead({required this.title, required this.count, required this.open, required this.filtered, required this.tooltip, required this.onTap});
+  const _ColumnHead({
+    required this.title,
+    required this.count,
+    required this.open,
+    required this.filtered,
+    required this.tooltip,
+    required this.onTap,
+  });
   final String title;
   final String count;
   final bool open;
@@ -458,7 +555,9 @@ class _ColumnHeadState extends State<_ColumnHead> {
               ),
               child: Row(
                 children: [
-                  Expanded(child: Text(widget.title, style: heavy(14, weight: FontWeight.w900))),
+                  Expanded(
+                    child: Text(widget.title, style: heavy(14, weight: FontWeight.w900)),
+                  ),
                   const SizedBox(width: 8),
                   Text(widget.count, style: heavy(14, weight: FontWeight.w900)),
                   const SizedBox(width: 5),
@@ -475,7 +574,13 @@ class _ColumnHeadState extends State<_ColumnHead> {
 
 /// One label in a column's picker: its chip and how many of the column's cards carry it.
 class _LabelPick extends StatefulWidget {
-  const _LabelPick({required this.label, required this.count, required this.on, required this.tooltip, required this.onTap});
+  const _LabelPick({
+    required this.label,
+    required this.count,
+    required this.on,
+    required this.tooltip,
+    required this.onTap,
+  });
   final GhLabel label;
   final int count;
   final bool on;
@@ -491,45 +596,56 @@ class _LabelPickState extends State<_LabelPick> {
 
   @override
   Widget build(BuildContext context) => Tooltip(
-        message: widget.tooltip,
-        waitDuration: const Duration(milliseconds: 500),
-        child: Semantics(
-          button: true,
-          toggled: widget.on,
-          child: FocusableActionDetector(
-            mouseCursor: SystemMouseCursors.click,
-            onShowHoverHighlight: (v) => setState(() => hover = v),
-            actions: {ActivateIntent: CallbackAction<ActivateIntent>(onInvoke: (_) => widget.onTap())},
-            child: GestureDetector(
-              onTap: widget.onTap,
-              child: Opacity(
-                opacity: widget.on || hover ? 1 : 0.55,
-                child: Container(
-                  padding: const EdgeInsets.fromLTRB(2, 2, 6, 2),
-                  decoration: BoxDecoration(
-                    color: widget.on ? Colors.white : null,
-                    borderRadius: BorderRadius.circular(999),
-                    border: Border.all(color: widget.on ? Swatch.ink : Colors.transparent, width: 2),
+    message: widget.tooltip,
+    waitDuration: const Duration(milliseconds: 500),
+    child: Semantics(
+      button: true,
+      toggled: widget.on,
+      child: FocusableActionDetector(
+        mouseCursor: SystemMouseCursors.click,
+        onShowHoverHighlight: (v) => setState(() => hover = v),
+        actions: {ActivateIntent: CallbackAction<ActivateIntent>(onInvoke: (_) => widget.onTap())},
+        child: GestureDetector(
+          onTap: widget.onTap,
+          child: Opacity(
+            opacity: widget.on || hover ? 1 : 0.55,
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(2, 2, 6, 2),
+              decoration: BoxDecoration(
+                color: widget.on ? Colors.white : null,
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: widget.on ? Swatch.ink : Colors.transparent, width: 2),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  LabelChip(widget.label),
+                  const SizedBox(width: 4),
+                  Text(
+                    '${widget.count}',
+                    style: heavy(11, color: widget.on ? Swatch.ink : Swatch.muted, weight: FontWeight.w800),
                   ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      LabelChip(widget.label),
-                      const SizedBox(width: 4),
-                      Text('${widget.count}', style: heavy(11, color: widget.on ? Swatch.ink : Swatch.muted, weight: FontWeight.w800)),
-                    ],
-                  ),
-                ),
+                ],
               ),
             ),
           ),
         ),
-      );
+      ),
+    ),
+  );
 }
 
 /// A sticky note on the board: tilted a little, pinned at the top, straightening up on hover.
 class BoardCard extends StatefulWidget {
-  const BoardCard({super.key, required this.number, required this.title, required this.meta, required this.index, required this.onTap, this.onLabels});
+  const BoardCard({
+    super.key,
+    required this.number,
+    required this.title,
+    required this.meta,
+    required this.index,
+    required this.onTap,
+    this.onLabels,
+  });
   final int number;
   final String title;
   final List<Widget> meta;
@@ -577,12 +693,20 @@ class _BoardCardState extends State<BoardCard> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('#$n', style: heavy(12, color: Swatch.muted, weight: FontWeight.w900)),
+                      Text(
+                        '#$n',
+                        style: heavy(12, color: Swatch.muted, weight: FontWeight.w900),
+                      ),
                       Padding(
                         padding: const EdgeInsets.only(top: 2, bottom: 6),
                         child: Text(widget.title, style: heavy(14)),
                       ),
-                      Wrap(spacing: 4, runSpacing: 4, crossAxisAlignment: WrapCrossAlignment.center, children: widget.meta),
+                      Wrap(
+                        spacing: 4,
+                        runSpacing: 4,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: widget.meta,
+                      ),
                     ],
                   ),
                 ),
@@ -621,7 +745,11 @@ class _BoardCardState extends State<BoardCard> {
                     child: Container(
                       width: 12,
                       height: 12,
-                      decoration: BoxDecoration(color: kPins[widget.index % 4], shape: BoxShape.circle, border: Border.all(color: Swatch.ink, width: 2)),
+                      decoration: BoxDecoration(
+                        color: kPins[widget.index % 4],
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Swatch.ink, width: 2),
+                      ),
                     ),
                   ),
                 ),
@@ -640,22 +768,28 @@ class _BoardError extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Center(
-        child: Container(
-          constraints: const BoxConstraints(maxWidth: 520),
-          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 18),
-          decoration: BoxDecoration(color: Swatch.paper, borderRadius: BorderRadius.circular(14), border: Border.all(color: Swatch.ink, width: 3)),
-          child: Text.rich(
-            TextSpan(children: [
-              TextSpan(text: "Couldn't load from GitHub: $error\n", style: heavy(15)),
-              TextSpan(
-                text: 'The server runs `gh` in the project directory — make sure it is installed and authenticated (gh auth login).',
-                style: heavy(12),
-              ),
-            ]),
-            textAlign: TextAlign.center,
-          ),
+    child: Container(
+      constraints: const BoxConstraints(maxWidth: 520),
+      padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 18),
+      decoration: BoxDecoration(
+        color: Swatch.paper,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Swatch.ink, width: 3),
+      ),
+      child: Text.rich(
+        TextSpan(
+          children: [
+            TextSpan(text: "Couldn't load from GitHub: $error\n", style: heavy(15)),
+            TextSpan(
+              text: 'The server runs `gh` in the project directory — make sure it is installed and authenticated (gh auth login).',
+              style: heavy(12),
+            ),
+          ],
         ),
-      );
+        textAlign: TextAlign.center,
+      ),
+    ),
+  );
 }
 
 /// Cork: the tan board with a fine grid of darker dots.
@@ -681,4 +815,67 @@ class _CorkPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_CorkPainter old) => false;
+}
+
+/// A column's "Filter by title…" box, with a ✕ to clear it (.col-search).
+class _TitleFilter extends StatelessWidget {
+  const _TitleFilter({super.key, required this.controller, required this.name, required this.onChanged});
+
+  final TextEditingController controller;
+
+  /// The column's name, for screen readers.
+  final String name;
+  final VoidCallback onChanged;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+    decoration: const BoxDecoration(
+      color: Swatch.paper,
+      border: Border(bottom: BorderSide(color: Swatch.ink, width: 3)),
+    ),
+    child: Semantics(
+      label: 'Filter $name by title',
+      textField: true,
+      child: TextField(
+        controller: controller,
+        onChanged: (_) => onChanged(),
+        autocorrect: false,
+        style: heavy(13, weight: FontWeight.w700),
+        decoration: InputDecoration(
+          isDense: true,
+          hintText: 'Filter by title…',
+          contentPadding: const EdgeInsets.fromLTRB(9, 7, 9, 7),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(9),
+            borderSide: const BorderSide(color: Swatch.ink, width: 2),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(9),
+            borderSide: const BorderSide(color: Swatch.accent, width: 2),
+          ),
+          suffixIconConstraints: const BoxConstraints(minWidth: 24, minHeight: 20),
+          suffixIcon: controller.text.isEmpty
+              ? null
+              : Tooltip(
+                  message: 'Clear',
+                  child: Semantics(
+                    button: true,
+                    label: 'Clear the title filter',
+                    child: InkWell(
+                      onTap: () {
+                        controller.clear();
+                        onChanged();
+                      },
+                      child: Text(
+                        '✕',
+                        style: heavy(12, color: Swatch.muted, weight: FontWeight.w900),
+                      ),
+                    ),
+                  ),
+                ),
+        ),
+      ),
+    ),
+  );
 }
