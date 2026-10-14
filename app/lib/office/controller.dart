@@ -38,6 +38,7 @@ import '../ui/ask.dart';
 import '../ui/boards.dart';
 import '../ui/changes.dart';
 import '../ui/compass.dart';
+import '../ui/dictate.dart' show dictating;
 import '../ui/character.dart';
 import '../ui/elevator.dart';
 import '../ui/floormenu.dart';
@@ -345,6 +346,8 @@ class OfficeController implements OfficeActions {
     office = buildOffice(labels: labels);
     root.add(office.group);
     voiceRoom = OfficeVoice(store: store, net: net, tv: office.tvScreen, state: voice);
+    dictating.addListener(_dictatingChanged);
+    _unsubscribe.add(() => dictating.removeListener(_dictatingChanged));
     whiteboard = WhiteboardHub(scope, office.whiteboard);
     if (q['boards'] != '0') _mountBoards();
     skyView = SkyView(root, office.night);
@@ -502,6 +505,23 @@ class OfficeController implements OfficeActions {
   void _listen(Topic t, VoidCallback fn) {
     store.topic(t).addListener(fn);
     _unsubscribe.add(() => store.topic(t).removeListener(fn));
+  }
+
+  /// Dictation muted your voice-chat mic, so it's the one to unmute it.
+  bool _mutedToDictate = false;
+
+  /// Dictating a prompt while you're in voice with an open mic: the office mutes you for as long as it
+  /// listens, so the others don't hear you talk to a worker.
+  void _dictatingChanged() {
+    final v = voice.value;
+    if (dictating.value) {
+      if (!v.inVoice || v.muted) return;
+      voiceRoom.setMuted(true);
+      _mutedToDictate = true;
+    } else if (_mutedToDictate) {
+      _mutedToDictate = false;
+      if (v.inVoice && v.muted) voiceRoom.setMuted(false);
+    }
   }
 
   void dispose() {

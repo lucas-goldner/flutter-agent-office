@@ -5,6 +5,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'dictate.dart' show DictateField, canDictate;
 import 'theme.dart';
 
 class ChildButton extends StatefulWidget {
@@ -54,7 +55,10 @@ class _ChildButtonState extends State<ChildButton> {
       mouseCursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
       onShowHoverHighlight: (v) => setState(() => _hover = v),
       onShowFocusHighlight: (v) => setState(() => _focused = v),
-      shortcuts: const {SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(), SingleActivator(LogicalKeyboardKey.space): ActivateIntent()},
+      shortcuts: const {
+        SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
+        SingleActivator(LogicalKeyboardKey.space): ActivateIntent(),
+      },
       actions: {ActivateIntent: CallbackAction<ActivateIntent>(onInvoke: (_) => widget.onPressed?.call())},
       child: GestureDetector(
         onTapDown: enabled ? (_) => setState(() => _down = true) : null,
@@ -115,10 +119,14 @@ class PromptField extends StatelessWidget {
     this.minLines = 5,
     this.maxLines = 12,
     this.autofocus = true,
+    this.dictate = true,
   });
 
   final TextEditingController controller;
   final VoidCallback onSend;
+
+  /// With a 🎤 in its corner, where the browser can listen (see dictate.dart).
+  final bool dictate;
   final FocusNode? focusNode;
   final String? hint;
   final int minLines;
@@ -126,7 +134,13 @@ class PromptField extends StatelessWidget {
   final bool autofocus;
 
   @override
-  Widget build(BuildContext context) => Focus(
+  Widget build(BuildContext context) {
+    final mic = dictate && canDictate;
+    final box = _box(mic);
+    return mic ? DictateField(controller: controller, child: box) : box;
+  }
+
+  Widget _box(bool mic) => Focus(
     canRequestFocus: false,
     skipTraversal: true,
     onKeyEvent: (node, e) {
@@ -150,7 +164,8 @@ class PromptField extends StatelessWidget {
       decoration: InputDecoration(
         hintText: hint,
         hintStyle: heavy(15, color: Swatch.muted, weight: FontWeight.w600),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        // Clear of the 🎤.
+        contentPadding: EdgeInsets.fromLTRB(12, 10, mic ? 50 : 12, 10),
       ),
     ),
   );

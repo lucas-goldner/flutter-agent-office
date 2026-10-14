@@ -23,6 +23,7 @@ import 'package:office_shared/status.dart';
 
 import '../state/store.dart';
 import '../world/laptop_screen.dart';
+import 'dictate.dart';
 import 'modal.dart';
 import 'provider.dart';
 import 'terminal_logic.dart';
@@ -132,6 +133,18 @@ class _TerminalWindowState extends State<_TerminalWindow> {
   late final void Function() _stopPaste;
   bool _ready = false;
   TerminalFind? _pendingFind;
+
+  /// What you say is typed in at the terminal's cursor, as a paste, for you to read over and send.
+  late final Dictation? _mic = canDictate
+      ? Dictation(
+          off: () => !_ready || isAsleep(worker?.status ?? WorkerStatus.exited),
+          insert: (text) {
+            _sendSize(typing: true);
+            _sayTyping();
+            _term.paste('$text ');
+          },
+        )
+      : null;
   Size? _host;
   Timer? _resizeDebounce;
   Size? _cell;
@@ -207,6 +220,7 @@ class _TerminalWindowState extends State<_TerminalWindow> {
     store.topic(Topic.peers).removeListener(_refreshPeers);
     _typingTimer?.cancel();
     _stopPaste();
+    _mic?.dispose();
     _resizeDebounce?.cancel();
     widget.scope.net.send(WorkerDetachCmd(widget.workerId));
     _ctl.dispose();
@@ -369,6 +383,8 @@ class _TerminalWindowState extends State<_TerminalWindow> {
 
   KeyEventResult _onKey(FocusNode node, KeyEvent e) {
     if (e is! KeyDownEvent && e is! KeyRepeatEvent) return KeyEventResult.ignored;
+    // Ctrl+Space, held: push to talk.
+    if (_mic?.key(e) ?? false) return KeyEventResult.handled;
     final keys = HardwareKeyboard.instance;
     final ctrl = keys.isControlPressed;
     final meta = keys.isMetaPressed;
@@ -499,21 +515,29 @@ class _TerminalWindowState extends State<_TerminalWindow> {
               onPointerDown: (e) => _downAt = e.buttons == kPrimaryButton ? e.localPosition : null,
               onPointerUp: _pointerUp,
               onPointerHover: _hover,
-              child: x.TerminalView(
-                _term,
-                key: _viewKey,
-                mouseCursor: _overLink ? SystemMouseCursors.click : SystemMouseCursors.text,
-                controller: _ctl,
-                scrollController: _scroll,
-                focusNode: _focus,
-                autofocus: true,
-                autoResize: false,
-                theme: kTermTheme,
-                textStyle: kTermStyle,
-                cursorType: x.TerminalCursorType.block,
-                shortcuts: _termShortcuts,
-                onKeyEvent: _onKey,
-                hardwareKeyboardOnly: false,
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: x.TerminalView(
+                      _term,
+                      key: _viewKey,
+                      mouseCursor: _overLink ? SystemMouseCursors.click : SystemMouseCursors.text,
+                      controller: _ctl,
+                      scrollController: _scroll,
+                      focusNode: _focus,
+                      autofocus: true,
+                      autoResize: false,
+                      theme: kTermTheme,
+                      textStyle: kTermStyle,
+                      cursorType: x.TerminalCursorType.block,
+                      shortcuts: _termShortcuts,
+                      onKeyEvent: _onKey,
+                      hardwareKeyboardOnly: false,
+                    ),
+                  ),
+                  if (_mic != null)
+                    Positioned(left: 20, right: 20, bottom: 14, child: Center(child: DictateLive(_mic))),
+                ],
               ),
             ),
           );
@@ -571,6 +595,7 @@ class _TerminalWindowState extends State<_TerminalWindow> {
           tooltip: 'OpenCode models: Ctrl+X then M (use /models if custom bindings override it)',
           onPressed: _ready && !isAsleep(w.status) ? _openModels : null,
         ),
+      if (_mic != null) MicButton(_mic, label: 'Dictate', enabled: _ready && !isAsleep(w.status)),
       // The Esc key leaves the terminal, so this is how Esc reaches the program: to close a menu like
       // Claude's /skills, or to interrupt it. Ctrl+[ does the same from the keyboard.
       OfficeButton(

@@ -9,6 +9,7 @@ import 'package:office_shared/protocol.dart';
 import '../interop/open_link.dart';
 import '../state/store.dart';
 import 'confirm.dart';
+import 'dictate.dart' show DictateField, canDictate;
 import 'modal.dart';
 import 'provider.dart';
 import 'theme.dart';
@@ -474,16 +475,22 @@ class _MeetingWindowState extends State<_MeetingWindow> {
     ),
   );
 
-  Widget _area(TextEditingController c, String hint, int lines) => TextField(
-    controller: c,
-    minLines: lines,
-    maxLines: lines + 4,
-    style: heavy(14, weight: FontWeight.w500),
-    decoration: InputDecoration(
-      hintText: hint,
-      hintStyle: heavy(14, color: Swatch.muted, weight: FontWeight.w400),
-    ),
-  );
+  /// [dictate]: with a 🎤 in its corner (see dictate.dart).
+  Widget _area(TextEditingController c, String hint, int lines, {bool dictate = false}) {
+    final mic = dictate && canDictate;
+    final box = TextField(
+      controller: c,
+      minLines: lines,
+      maxLines: lines + 4,
+      style: heavy(14, weight: FontWeight.w500),
+      decoration: InputDecoration(
+        hintText: hint,
+        hintStyle: heavy(14, color: Swatch.muted, weight: FontWeight.w400),
+        contentPadding: mic ? const EdgeInsets.fromLTRB(12, 10, 50, 10) : null,
+      ),
+    );
+    return mic ? DictateField(controller: c, child: box) : box;
+  }
 
   Widget _formBody() {
     final def = _def;
@@ -498,7 +505,12 @@ class _MeetingWindowState extends State<_MeetingWindow> {
         const SizedBox(height: 12),
         _field(
           'What’s it about?',
-          _area(_about, 'The question to settle, or the task to do: e.g. “Should the dog use A* or a navmesh?”', 3),
+          _area(
+            _about,
+            'The question to settle, or the task to do: e.g. “Should the dog use A* or a navmesh?”',
+            3,
+            dictate: true,
+          ),
         ),
         _field('', BoxInput(controller: _title, hint: 'Title (optional): the first line otherwise', maxLength: 100)),
         if (def.needs == PatternNeeds.pr)
