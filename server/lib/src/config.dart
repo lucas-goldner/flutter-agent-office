@@ -48,13 +48,16 @@ class Config {
     this.tls,
     required this.trustProxy,
     required this.iceServers,
+    this.deployScript,
     this.publicHost,
+    this.tailnet,
     this.budget,
     required this.budgetPause,
     this.maxWorkers,
     this.webhook,
     this.city,
     this.weather,
+    this.realTimeSky = false,
   }) : _markClaimed = markClaimed;
 
   /// The office's own folder: the building's data lives in its .agent-office.
@@ -100,8 +103,16 @@ class Config {
   final bool trustProxy;
   final List<IceServer> iceServers;
 
-  /// Address teammates SSH-tunnel to (set by deploy/aws.sh); enables invites from the office.
+  /// How to run the script that deployed the office, e.g. "deploy/azure.sh --name team2" (set by
+  /// deploy/provision.sh), for the commands it suggests.
+  final String? deployScript;
+
+  /// Address teammates SSH-tunnel to (set by deploy/provision.sh); enables invites from the office.
   final String? publicHost;
+
+  /// The office's name on a Tailscale network, e.g. agent-office.tail1234.ts.net (set by
+  /// deploy/provision.sh --tailscale).
+  final String? tailnet;
 
   /// Daily tracked Claude Code spend budget, USD. OpenCode/Codex spend is excluded.
   final double? budget;
@@ -120,6 +131,9 @@ class Config {
 
   /// Weather pinned for good, instead of made up or forecast.
   final Weather? weather;
+
+  /// The sky keeps real time (a day a day), instead of a whole day and night every hour.
+  final bool realTimeSky;
 }
 
 const help =
@@ -133,6 +147,7 @@ Usage:
   agent-office accounts [list|invite|revoke|role|password] ...
   agent-office queue [list|add|remove] ...
   agent-office workers [list|hire|home|tell|pr|mcp] ...   (office-workers, in a worker's terminal)
+  agent-office tunnel [office@address | url]
 
 Runs the office. Every project is a floor of the building: ride the elevator,
 pick one of the repositories your `gh` login can see, and the office clones it
@@ -159,6 +174,9 @@ Commands:
   queue                   The task queue, for the agents standing by the boards:
                           list, add --title "…" [--issue n] (prompt on stdin),
                           remove <id>. Only works from a board agent's terminal
+  tunnel                  On your own computer, for an office that runs somewhere
+                          else: every web server a worker starts there opens on the
+                          same port here, by itself (see tunnel --help)
 
 Options:
       --home <dir>        Where the office keeps its data when no [dir] is given
@@ -190,7 +208,8 @@ Options:
       --self-signed       Serve HTTPS with a generated self-signed certificate
       --trust-proxy       Trust X-Forwarded-* headers (behind Caddy/nginx)
       --turn <url>        Add a TURN server for voice (repeatable), e.g.
-                          turn:user:pass@turn.example.com:3478
+                          turn:user:pass@turn.example.com:3478 (env
+                          AGENT_OFFICE_TURN, several separated by spaces)
       --budget <usd>      Daily budget for tracked Claude Code spend (env
                           AGENT_OFFICE_BUDGET). Everyone is warned when the
                           day's spend passes it. OpenCode/Codex/Grok/Muse spend is excluded
@@ -204,12 +223,17 @@ Options:
                           needs input or finishes (env AGENT_OFFICE_WEBHOOK).
                           Also settable from ⚙️ Settings in the office; "" turns it off
       --city <name>       Put the office in a real city, e.g. "Berlin" or
-                          "Portland, Oregon" (env AGENT_OFFICE_CITY): day, night
-                          and the weather outside follow its live forecast from
-                          open-meteo.com. Without it the sun follows this
-                          machine's clock and the weather is made up
+                          "Portland, Oregon" (env AGENT_OFFICE_CITY): the sun
+                          keeps its hours of daylight and the weather outside
+                          follows its live forecast from open-meteo.com.
+                          Without it the weather is made up. Either way a
+                          whole day and night go by every hour
       --weather <kind>    Pin the weather: clear, cloudy, rain, storm, snow or
                           fog (env AGENT_OFFICE_WEATHER)
+      --real-time-sky     Start the sky on the office's real clock, so it's night when
+                          it's night there, instead of a day and night every hour
+                          (⚙️ Settings can switch it)
+                          (env AGENT_OFFICE_SKY_CLOCK=real)
       --version           Print the office's version
   -h, --help              Show this help
 
@@ -252,6 +276,12 @@ IceServer parseTurn(String url) {
   }
   return IceServer(urls: [url], urlsIsList: false);
 }
+
+/// AGENT_OFFICE_TURN: TURN URLs as [parseTurn] reads them, several separated by spaces.
+List<IceServer> turnServersFromEnv(String? value) => [
+  for (final url in (value ?? '').split(RegExp(r'\s+')))
+    if (url.isNotEmpty) parseTurn(url),
+];
 
 /// JavaScript's `Number(s)` for the strings a flag can hold: '' is 0, junk is NaN.
 double _jsNumber(String? s) {
@@ -323,8 +353,11 @@ Config loadConfig(List<String> argv) {
   var webhook = Platform.environment['AGENT_OFFICE_WEBHOOK'];
   var city = _env('AGENT_OFFICE_CITY') ?? '';
   var weather = _env('AGENT_OFFICE_WEATHER') ?? '';
+  var realTimeSky = Platform.environment['AGENT_OFFICE_SKY_CLOCK'] == 'real';
   final iceServers = <IceServer>[
     const IceServer(urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302']),
+    // A container can't take --turn (deploy/container), so the TURN servers come from the environment too.
+    ...turnServersFromEnv(Platform.environment['AGENT_OFFICE_TURN']),
   ];
 
   for (var i = 0; i < argv.length; i++) {
@@ -383,6 +416,8 @@ Config loadConfig(List<String> argv) {
         city = _takeValue(argv, i++, a);
       case '--weather':
         weather = _takeValue(argv, i++, a);
+      case '--real-time-sky':
+        realTimeSky = true;
       default:
         if (a.startsWith('-')) {
           stderr.writeln('agent-office: unknown option $a\n');
@@ -513,14 +548,22 @@ Config loadConfig(List<String> argv) {
     tls: tls,
     trustProxy: trustProxy,
     iceServers: iceServers,
+    deployScript: _env('AGENT_OFFICE_DEPLOY_SCRIPT'),
     publicHost: _env('AGENT_OFFICE_PUBLIC_HOST'),
+    tailnet: _tailnetName(_env('AGENT_OFFICE_TAILSCALE_HOST')),
     budget: budgetUsd,
     budgetPause: budgetPause,
     maxWorkers: workerLimit,
     webhook: webhook,
     city: city.trim().isEmpty ? null : city.trim(),
     weather: weather.isEmpty ? null : Weather.parse(weather),
+    realTimeSky: realTimeSky,
   );
+}
+
+String? _tailnetName(String? host) {
+  final h = (host ?? '').toLowerCase().replaceFirst(RegExp(r'\.$'), '');
+  return h.isEmpty ? null : h;
 }
 
 /// Fills in `--self-signed`'s certificate: the one made on an earlier start, or a new one from

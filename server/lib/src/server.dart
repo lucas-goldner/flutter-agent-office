@@ -687,7 +687,14 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
   writePrivateFile(hookPortPath, '$hookPort');
 
   // Day, night and the weather outside the windows, the same for everyone.
-  final sky = Sky(city: cfg.city, weather: cfg.weather, onChange: (state) => broadcast(SkyMsg(state)))..start();
+  final sky = Sky(
+    city: cfg.city,
+    weather: cfg.weather,
+    realTime: cfg.realTimeSky,
+    placeFile: p.join(cfg.dataDir, 'sky-place.json'),
+    clockFile: p.join(cfg.dataDir, 'sky-clock.json'),
+    onChange: (state) => broadcast(SkyMsg(state)),
+  )..start();
   // The prompts the office writes for workers by itself, and the worker everyone starts on (⚙️ Settings).
   final configured = configuredProvider(cfg.agentCmd);
   final officePrompts = OfficePrompts(cfg.dataDir, (
@@ -2538,6 +2545,13 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
             '📅 $who set the decorations to follow the calendar'
                 '${now != null ? " (it's ${now == HolidayTheme.halloween ? 'Halloween 🎃' : 'Christmas 🎄'} season)" : ''}',
         });
+      case 'sky.clock':
+        final real = msg['real'] == true;
+        if (real == (sky.state.realTime ?? false)) break;
+        sky.setClock(real);
+        toastAll(
+          real ? '🕰️ $who put the sky on the real time of day' : '⏩ $who set the sky to a whole day every hour',
+        );
       case 'ping':
         sendTo(c, PongMsg(at: _num(msg['at']), now: _now().toDouble()));
     }

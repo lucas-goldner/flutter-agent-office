@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:agent_office_server/src/limits.dart';
 import 'package:agent_office_server/src/sky.dart';
 import 'package:office_shared/shared.dart';
@@ -47,5 +49,34 @@ void main() {
       final w = wander(Weather.rain, 0, false);
       expect(w.intensity, w.weather == Weather.clear ? 0 : inInclusiveRange(0.35, 1));
     }
+  });
+
+  test('the sky keeps the clock someone picked, and keeps it across a restart', () {
+    final dir = Directory.systemTemp.createTempSync('sky-clock-');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final clockFile = '${dir.path}/sky-clock.json';
+    final heard = <bool>[];
+    final sky = Sky(weather: Weather.clear, clockFile: clockFile, onChange: (s) => heard.add(s.realTime ?? false));
+    expect(sky.state.realTime, isNull);
+    sky.setClock(true);
+    expect(sky.state.realTime, isTrue);
+    expect(heard, [true]);
+    // After a restart the pick wins over the command line.
+    expect(Sky(weather: Weather.clear, clockFile: clockFile, onChange: (_) {}).state.realTime, isTrue);
+    sky.setClock(false);
+    expect(sky.state.realTime, isNull);
+    expect(Sky(weather: Weather.clear, realTime: true, clockFile: clockFile, onChange: (_) {}).state.realTime, isNull);
+  });
+
+  test('a city starts where the last forecast put it', () {
+    final dir = Directory.systemTemp.createTempSync('sky-place-');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final placeFile = '${dir.path}/sky-place.json';
+    File(
+      placeFile,
+    ).writeAsStringSync('{"city":"Berlin","lat":52.52,"lon":13.41,"name":"Berlin, Germany","utcOffset":120}');
+    final s = Sky(city: 'Berlin', placeFile: placeFile, onChange: (_) {}).state;
+    expect((s.lat, s.lon, s.utcOffset, s.city), (52.52, 13.41, 120, 'Berlin, Germany'));
+    expect(Sky(city: 'Paris', placeFile: placeFile, onChange: (_) {}).state.city, isNull);
   });
 }

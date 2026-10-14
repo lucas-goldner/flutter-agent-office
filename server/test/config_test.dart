@@ -66,6 +66,24 @@ void main() {
     expect(stored().keys.toSet(), {'secret', 'salt'});
   });
 
+  test('TURN servers come from --turn and from AGENT_OFFICE_TURN', () {
+    final env = turnServersFromEnv(
+      ' turn:office:p%40ss@office.example.com:3478  turn:office:p%40ss@office.example.com:3478?transport=tcp ',
+    );
+    expect([...env, parseTurn('turns:relay.example.com:5349')].map((s) => s.toJson()), [
+      {'urls': 'turn:office.example.com:3478', 'username': 'office', 'credential': 'p@ss'},
+      {'urls': 'turn:office.example.com:3478?transport=tcp', 'username': 'office', 'credential': 'p@ss'},
+      {'urls': 'turns:relay.example.com:5349'},
+    ]);
+    expect(turnServersFromEnv(null), isEmpty);
+    expect(turnServersFromEnv('  '), isEmpty);
+  });
+
+  test('--real-time-sky', () {
+    expect(loadConfig(['--home', home.path]).realTimeSky, isFalse);
+    expect(loadConfig(['--home', home.path, '--real-time-sky']).realTimeSky, isTrue);
+  });
+
   test('bad flags exit 2, --help exits 0', () {
     int code(List<String> args) {
       try {
