@@ -140,6 +140,9 @@ void storageRemove(String key) {
 /// Nothing asks before the app quits (stage 2: AppLifecycleListener.onExitRequested).
 void Function() warnBeforeUnload(bool Function() shouldWarn) => () {};
 
+/// The desktop app saves as it goes (every second); there's no page to hide.
+void Function() onPageHide(void Function() f) => () {};
+
 /// The window keeps the app's own title (setting it needs a plugin).
 set documentTitle(String title) {}
 

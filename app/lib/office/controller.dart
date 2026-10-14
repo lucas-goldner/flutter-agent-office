@@ -30,7 +30,7 @@ import 'package:office_shared/layout.dart' hide Elevator, Gong, Jukebox, Whitebo
 import 'package:office_shared/layout.dart' as lay show Elevator;
 import 'package:office_shared/palette.dart' show isPaletteKey;
 import 'package:office_shared/protocol.dart';
-import 'package:office_shared/rooftop.dart' show roof;
+import 'package:office_shared/rooftop.dart' show roof, roofName;
 import 'package:office_shared/status.dart';
 
 import '../state/store.dart';
@@ -178,6 +178,7 @@ class OfficeController implements OfficeActions {
   late final OfficeSocket net = OfficeSocket(
     profile: () => (name: store.profile.name, color: store.profile.color, look: store.profile.look),
     floor: () => store.floor ?? lastFloor(),
+    where: _whereNow,
   );
   final Settings settings = Settings.load();
   final Scene scene = Scene();
@@ -470,6 +471,8 @@ class OfficeController implements OfficeActions {
       if (store.sky != null) skyModel.set(store.sky!);
     });
     _unsubscribe
+      // Closing the tab, or reloading: the frame loop saves where you are every second, and here's the last word.
+      ..add(onPageHide(_saveSpot))
       ..add(watchTabTitle(store))
       ..add(watchFloorsWaiting(store, ding: () => sound.ding(Ding.needsInput)));
     net.status.listen((up) => connected.value = up);
@@ -546,6 +549,8 @@ class OfficeController implements OfficeActions {
     if (held != null && msg is! WelcomeMsg) return held.add(msg);
     if (msg is FloorsMsg && floorBlownUp(store.floor, msg.floors)) _blowUp();
     if (msg is WelcomeMsg) voiceRoom.beforeWelcome();
+    // The floor you asked to come back to (see OfficeSocket.connect), to tell if the office put you somewhere else.
+    final wasOn = msg is WelcomeMsg ? (store.floor ?? lastFloor()) : null;
     if (msg is WelcomeMsg || msg is FloorEnterMsg) departures.clear();
     if (msg is WorkerRemoveMsg) _sentHome.add(msg.workerId);
     try {
@@ -565,10 +570,23 @@ class OfficeController implements OfficeActions {
         }
         final mine = store.peers[store.you];
         if (_firstWelcome && mine != null) {
-          _placeInCar((x: mine.x, z: mine.z));
           _firstWelcome = false;
-          _arrive();
+          // Where the office put you: back in the spot you left (if there's still room there), or in the car.
+          if (!inElevator(mine.x, mine.z) && player.fits(mine.x, mine.z, mine.y)) {
+            _placeAt((x: mine.x, y: mine.y, z: mine.z, rotY: mine.rotY));
+            _arrive(back: true);
+          } else {
+            _placeInCar((x: mine.x, z: mine.z));
+            _arrive();
+          }
           _devPlace();
+          _floorWentWhileAway(wasOn);
+        } else if (store.floor != null && store.floor != wasOn) {
+          // Back after the office restarted, but not on your floor: it went while the office was down.
+          _takenAway();
+          if (_carrying != null) _setCarrying(null);
+          _arrive();
+          _floorWentWhileAway(wasOn);
         } else if (store.floor == null) {
           _arrive();
         }
@@ -590,6 +608,8 @@ class OfficeController implements OfficeActions {
       case RtcMsg m:
         voiceRoom.signal(m.from, m.data);
       case FloorEnterMsg _:
+        // Not a trip of yours: the floor you were on was taken off the building, and the elevator took you away.
+        if (_riding == null && _climbing == null) _takenAway();
         // The card belongs to the board downstairs (or up): the office already put it back there.
         final card = _carrying;
         if (card != null) {
@@ -661,15 +681,61 @@ class OfficeController implements OfficeActions {
 
   /// In the car, facing out through the doors: where you are when you arrive on a floor.
   void _placeInCar([({double x, double z})? at]) {
-    if (player.seat != null) standUp();
     final spot = at != null && inElevator(at.x, at.z)
         ? at
         : (x: lay.Elevator.x, z: (ElevatorCar.minZ + ElevatorCar.maxZ) / 2);
-    player.pos.setValues(spot.x, 0, spot.z);
+    _placeAt((x: spot.x, y: 0, z: spot.z, rotY: 0));
+  }
+
+  /// On your feet at [at], facing its rotY and looking straight ahead.
+  void _placeAt(({double x, double y, double z, double rotY}) at) {
+    if (player.seat != null) standUp();
+    player.pos.setValues(at.x, at.y, at.z);
     player.vy = 0;
-    player.facing = 0;
+    player.facing = at.rotY;
     player.camYaw = player.facing - math.pi;
     player.lookPitch = -0.08;
+  }
+
+  /// Not a trip of yours: the office put you on another floor (yours went), in its elevator car. Whatever you
+  /// were doing stops.
+  void _takenAway() {
+    ModalStack.instance.closeAll();
+    hanger.cancel();
+    climber.abort();
+    _stopWalking();
+    _placeInCar();
+  }
+
+  /// Where you're standing, to come back to (see lastSpot): nowhere while you're between floors, or climbing
+  /// between them.
+  SavedSpot? _spotHere() {
+    final floor = store.floor;
+    if (floor == null || _riding != null || _climbing != null || climber.active) return null;
+    // Sitting, it's where you'd get up to.
+    final at = player.standingSpot() ?? (x: player.pos.x, y: player.pos.y, z: player.pos.z);
+    final name = floor == roof ? roofName : (store.floors.where((f) => f.id == floor).firstOrNull?.name ?? '');
+    return SavedSpot(floor: floor, name: name, x: at.x, y: at.y, z: at.z, facing: player.facing);
+  }
+
+  /// Where to put you back when the office lets you in: where you are now, or before this page was loaded,
+  /// where you were last time.
+  SavedSpot? _whereNow() => _firstWelcome ? lastSpot() : _spotHere();
+
+  void _saveSpot() {
+    final s = _spotHere();
+    if (s != null) rememberSpot(s);
+  }
+
+  double _spotSavedAt = 0;
+
+  /// You asked to come back to floor [was], and it's gone (taken off the building, or its checkout deleted):
+  /// the office sent you up to the roof.
+  void _floorWentWhileAway(String? was) {
+    if (was == null || was == roof || store.floor != roof || store.floors.any((f) => f.id == was)) return;
+    final saved = lastSpot();
+    final name = saved?.floor == was && saved!.name.isNotEmpty ? saved.name : 'Your floor';
+    toast("🛗 $name isn't in the building any more, so the elevator brought you up to the roof", ToastKind.warn);
   }
 
   @override
@@ -1139,7 +1205,9 @@ class OfficeController implements OfficeActions {
   }
 
   /// You're on a floor (or in the building without one): paint it, and open the doors.
-  void _arrive() {
+  /// You're on a floor (or in the building without one): paint it, and open the doors. [back] is standing in
+  /// the spot you left from last time, the doors open already.
+  void _arrive({bool back = false}) {
     // Up on the roof, or back down: the roof has no dog, and no walls for pictures.
     if (roofHub.setPlace()) {
       dog.root.visible = !roofHub.upTop;
@@ -1177,6 +1245,12 @@ class OfficeController implements OfficeActions {
       return;
     }
     fade.value = false;
+    if (back) {
+      // The doors stand open, the way the last one out left them.
+      roofHub.lift().setOpen(true);
+      player.enabled = !ModalStack.instance.open;
+      return;
+    }
     Timer(const Duration(milliseconds: 450), () {
       roofHub.lift().setOpen(true);
       sound.ding(Ding.done);
@@ -2586,7 +2660,8 @@ class OfficeController implements OfficeActions {
     final t = _target;
     final card = _carrying;
     if ((t == null && card == null) || ModalStack.instance.open) {
-      if (_hintKey.isNotEmpty) {
+      // Still up after a redraw was asked for (the key cleared) just as you walked away from it, too.
+      if (_hintKey.isNotEmpty || hint.value != null) {
         hint.value = null;
         _hintKey = '';
       }
@@ -3040,6 +3115,11 @@ class OfficeController implements OfficeActions {
       _lastSent = (x: p.x, y: p.y, z: p.z, rotY: player.facing, moving: player.moving);
       _lastSentAt = now;
       net.send(MoveCmd(x: p.x, y: p.y, z: p.z, rotY: player.facing, moving: player.moving));
+    }
+    // Where you are, to come back to next time.
+    if (now - _spotSavedAt > 1000) {
+      _spotSavedAt = now;
+      _saveSpot();
     }
 
     for (final e in _remotes.entries) {

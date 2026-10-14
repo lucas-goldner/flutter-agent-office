@@ -8,20 +8,25 @@ import 'dart:js_interop';
 import 'package:web/web.dart' as web;
 
 import '../interop/browser.dart';
+import '../state/spot.dart';
 import '../net/api.dart';
+
 import 'package:office_shared/avatar.dart';
 import 'package:office_shared/protocol.dart';
 
 typedef Profile = ({String name, String color, Look look});
 
 class OfficeSocket {
-  OfficeSocket({required this.profile, required this.floor});
+  OfficeSocket({required this.profile, required this.floor, this.where});
 
   /// Who you are, read on every (re)connect.
   final Profile Function() profile;
 
   /// The floor to come back to after a reload or a restart.
   final String? Function() floor;
+
+  /// Where you are (or were, before this page), to be put back in the same spot on that floor.
+  final SavedSpot? Function()? where;
 
   web.WebSocket? _ws;
   int _retry = 0;
@@ -48,6 +53,14 @@ class OfficeSocket {
     };
     final f = floor();
     if (f != null) q['floor'] = f;
+    // Back to the floor you were on (after a reload or a restart), in the spot you were in there.
+    final at = where?.call();
+    if (f != null && at != null && at.floor == f) {
+      q['x'] = at.x.toStringAsFixed(2);
+      q['y'] = at.y.toStringAsFixed(2);
+      q['z'] = at.z.toStringAsFixed(2);
+      q['rotY'] = at.facing.toStringAsFixed(3);
+    }
     final proto = isSecure ? 'wss' : 'ws';
     final ws = web.WebSocket('$proto://$locationHost/ws?${Uri(queryParameters: q).query}');
     _ws = ws;

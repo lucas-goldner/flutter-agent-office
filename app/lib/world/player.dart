@@ -158,6 +158,7 @@ class PlayerController {
       onPathEnd?.call(PathEnd.stuck);
     }
   }
+
   bool enabled = true;
   final PlayerInput input = PlayerInput();
 
@@ -212,19 +213,28 @@ class PlayerController {
 
   /// Gets you up off your seat onto the floor beside it: out in front (or behind), else wherever there's room.
   void stand() {
-    final s = seat;
-    if (s == null) return;
+    final at = standingSpot();
     seat = null;
+    if (at != null) pos.setValues(at.x, at.y, at.z);
+  }
+
+  /// Where getting up would put you (see [stand]): out in front (or behind), else wherever there's room; or
+  /// where you're standing if you aren't sitting. Null if there's no room.
+  ({double x, double y, double z})? standingSpot() {
+    final s = seat;
+    if (s == null) return (x: pos.x, y: pos.y, z: pos.z);
     final ahead = s.rotY + (s.out < 0 ? math.pi : 0);
     final d = s.out.abs();
     for (final turn in [0.0, 0.6, -0.6, 1.2, -1.2, math.pi / 2, -math.pi / 2, math.pi]) {
       final x = s.x + math.sin(ahead + turn) * d;
       final z = s.z + math.cos(ahead + turn) * d;
-      if (_blocker(x, z, s.y) != null) continue;
-      pos.setValues(x, s.y, z);
-      return;
+      if (_blocker(x, z, s.y) == null) return (x: x, y: s.y, z: z);
     }
+    return null;
   }
+
+  /// Whether there's room to stand at (x, z) with your feet at [y].
+  bool fits(double x, double z, double y) => _blocker(x, z, y) == null;
 
   /// How far sitting moves your hips (and eyes) from where they are standing.
   double get _lift => seat == null ? 0 : seat!.hips - kHips;

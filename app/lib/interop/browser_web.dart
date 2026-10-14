@@ -76,6 +76,13 @@ void Function() warnBeforeUnload(bool Function() shouldWarn) {
   return () => web.window.removeEventListener('beforeunload', handler);
 }
 
+/// Runs [f] as the page goes away (closing the tab, or reloading): pagehide. Returns a remover.
+void Function() onPageHide(void Function() f) {
+  final handler = ((web.Event _) => f()).toJS;
+  web.window.addEventListener('pagehide', handler);
+  return () => web.window.removeEventListener('pagehide', handler);
+}
+
 /// The tab's title.
 set documentTitle(String title) => web.document.title = title;
 

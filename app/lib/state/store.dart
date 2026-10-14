@@ -19,6 +19,7 @@ import 'rooms.dart';
 import 'screen_state.dart';
 
 export 'rooms.dart';
+export 'spot.dart';
 export 'screen_state.dart';
 
 enum Topic {
