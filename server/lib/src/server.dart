@@ -292,6 +292,12 @@ double _num(Object? v) => v is num && v.isFinite ? v.toDouble() : 0;
 /// JavaScript's truthiness, for fields the Node server read with `!!`.
 bool _truthy(Object? v) => v != null && v != false && v != '' && !(v is num && (v == 0 || v.isNaN));
 
+/// A list index the client named, as JS's Math.trunc(num(v)): anything else (or out of range) is -1.
+int _index(Object? v) {
+  final n = _num(v);
+  return n.abs() < 1e9 ? n.truncate() : -1;
+}
+
 bool _isSafeInteger(double n) => n == n.truncateToDouble() && n.abs() <= 9007199254740991;
 
 /// A spot someone stands on, facing `rotY`.
@@ -1029,6 +1035,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         floor?.jukebox.state() ??
         JukeboxState(on: false, track: jukeboxTunes.first.id, startedAt: _now().toDouble(), elapsed: 0),
     ball: floor?.court.state() ?? const BallState(),
+    cars: floor?.garage.state() ?? const [],
     cabinet: () {
       final s = cabinetState(floor);
       return CabinetView(player: s.player, scores: s.scores, frame: floor != null ? cabinetPlayer(floor)?.frame : null);
@@ -1496,6 +1503,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
   }
 
   void ballChanged(Floor floor) => toFloor(floor, BallMsg(floor.court.state()));
+  void carsChanged(Floor floor) => toFloor(floor, CarsMsg(floor.garage.state()));
   void jukeboxChanged(Floor floor) => toFloor(floor, JukeboxMsg(floor.jukebox.state()));
   Future<void> teamChanged() async => broadcast(TeamMsg(await team.state()));
 
@@ -1511,7 +1519,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
   }
 
   /// Off the floor (or the roof) `c` was on, to [at] on the next one, or into its elevator car.
-  ({Floor? was, bool wasDrawing, bool ballLeft}) leave(_Client c, [_Spot? at]) {
+  ({Floor? was, bool wasDrawing, bool ballLeft, bool carLeft}) leave(_Client c, [_Spot? at]) {
     final was = floorOf(c);
     if (was != null) {
       was.workers.detachAll(c.id);
@@ -1520,6 +1528,8 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     // The ball stays on its floor, back under the hoop. That floor hears so once they're off it (see
     // arrived), or their own page would put it down before it knew they'd gone.
     final ballLeft = was?.court.left(c.id) ?? false;
+    // So does a car they were in, parked where they left it.
+    final carLeft = was?.garage.leave(c.id) ?? false;
     c.attached.clear();
     c.typingAt.clear();
     c.stale.clear();
@@ -1540,14 +1550,15 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
       // An issue card belongs to the board it came off, which is on the floor they left; a drink stays at the bar.
       ..carrying = null
       ..drink = null;
-    return (was: was, wasDrawing: wasDrawing, ballLeft: ballLeft);
+    return (was: was, wasDrawing: wasDrawing, ballLeft: ballLeft, carLeft: carLeft);
   }
 
-  void arrived(_Client c, ({Floor? was, bool wasDrawing, bool ballLeft}) left) {
+  void arrived(_Client c, ({Floor? was, bool wasDrawing, bool ballLeft, bool carLeft}) left) {
     broadcast(PeerUpdateMsg(c.peer.info), except: c.id);
     if (left.wasDrawing) drawingChanged(left.was);
     final was = left.was;
     if (left.ballLeft && was != null) ballChanged(was);
+    if (left.carLeft && was != null) carsChanged(was);
   }
 
   /// Takes `c` to another floor: everyone sees them leave and arrive, and they get the new floor's
@@ -2380,6 +2391,39 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
           floor,
           '🧱 $who walled the back office back up, and ${r.desks!.map((id) => deskById[id]?.label).join(' and ')} went with it',
         );
+      case 'car.enter':
+      case 'car.leave':
+        final floor = floorOf(c);
+        if (floor == null) break;
+        final changed = t == 'car.enter'
+            ? floor.garage.enter(c.id, _index(msg['car']), CarSeat.tryParse(msg['seat']))
+            : floor.garage.leave(c.id);
+        // They hear back either way: someone who didn't get in (someone beat them to the seat) learns who did.
+        if (changed) toNeighbors(c, CarsMsg(floor.garage.state()));
+        sendTo(c, CarsMsg(floor.garage.state(), answer: true));
+      case 'car.drive':
+        final car = _index(msg['car']);
+        final now = floorOf(c)?.garage.drive(
+          c.id,
+          car,
+          CarPose(
+            x: _num(msg['x']),
+            z: _num(msg['z']),
+            rotY: _num(msg['rotY']),
+            speed: _num(msg['speed']),
+            steer: _num(msg['steer']),
+          ),
+        );
+        if (now != null) {
+          toNeighbors(
+            c,
+            CarMoveMsg(car: car, x: now.x, z: now.z, rotY: now.rotY, speed: now.speed, steer: now.steer),
+            true,
+          );
+        }
+      case 'car.honk':
+        final car = floorOf(c)?.garage.honk(c.id);
+        if (car != null) toNeighbors(c, CarHonkMsg(car));
       case 'map.set':
         // Someone opened the list, or picked a map: either way the folder of maps of your own is read again first.
         final was = maps.pick();
@@ -3012,6 +3056,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         f.workers.detachAll(id);
         f.changes.unwatchAll(id);
         if (f.court.left(id)) ballChanged(f);
+        if (f.garage.leave(id)) carsChanged(f);
       }
       broadcast(PeerLeaveMsg(id));
       if (account != null) accountsChanged();

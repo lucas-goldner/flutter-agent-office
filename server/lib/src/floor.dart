@@ -12,6 +12,7 @@ import 'config.dart' show excludeFromGit;
 import 'court.dart';
 import 'decor.dart';
 import 'docs.dart';
+import 'garage.dart';
 import 'floorplan.dart';
 import 'dog.dart';
 import 'github.dart';
@@ -334,6 +335,9 @@ class Floor {
 
   /// The basketball by the hoop: who has it, or its last throw.
   final Court court = Court();
+
+  /// The cars in the garage: who's in which, and where their drivers have left them.
+  final Garage garage = Garage();
 
   /// The bookshelf: the project's Markdown files.
   late final Docs docs = Docs(dir);
