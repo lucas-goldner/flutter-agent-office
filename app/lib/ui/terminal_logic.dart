@@ -236,3 +236,47 @@ bool screenMentionsEsc(Iterable<String> lines) => lines.any(_escMention.hasMatch
 /// The tip when Esc left a terminal whose program wanted one.
 String escLeftTip(String name) =>
     'Esc left the terminal. To send $name an Esc (to close a menu), use ⎋ Esc at the top or Ctrl+[';
+
+/// The mouse handler for workers' terminals: the xterm package's, except for the wheel. That package
+/// reports a wheel notch as buttons 68/69 (which a program reads as Shift + wheel) and at the pointer's
+/// place in the window rather than in the terminal, so a full-screen program that scrolls itself
+/// (Claude Code's no-flicker mode: alternate screen + mouse reporting) ignored it and its window
+/// couldn't be scrolled. Here a notch is 64 up / 65 down (66/67 sideways), at the cell [cellAt] says the
+/// pointer is over.
+class WheelMouseHandler implements x.TerminalMouseHandler {
+  WheelMouseHandler(this.cellAt);
+
+  /// The cell under the pointer (0-based), or null when it isn't known.
+  final x.CellOffset? Function() cellAt;
+
+  @override
+  String? call(x.TerminalMouseEvent event) {
+    if (!event.button.isWheel) return x.defaultMouseHandler(event);
+    final mode = event.state.mouseMode;
+    if (mode == x.MouseMode.none || mode == x.MouseMode.clickOnly) return null;
+    if (event.buttonState != x.TerminalMouseButtonState.down) return null;
+    final at = cellAt() ?? event.position;
+    return wheelReport(
+      switch (event.button) {
+        x.TerminalMouseButton.wheelUp => 64,
+        x.TerminalMouseButton.wheelDown => 65,
+        x.TerminalMouseButton.wheelLeft => 66,
+        _ => 67,
+      },
+      at.x.clamp(0, event.state.viewWidth - 1),
+      at.y.clamp(0, event.state.viewHeight - 1),
+      event.state.mouseReportMode,
+    );
+  }
+}
+
+/// A wheel notch ([code] 64-67) at cell ([col], [row]), 0-based, as a terminal reports it in [mode].
+String wheelReport(int code, int col, int row, x.MouseReportMode mode) {
+  final cx = col + 1, cy = row + 1;
+  return switch (mode) {
+    x.MouseReportMode.sgr => '\x1b[<$code;$cx;${cy}M',
+    x.MouseReportMode.urxvt => '\x1b[${32 + code};$cx;${cy}M',
+    x.MouseReportMode.normal || x.MouseReportMode.utf =>
+      '\x1b[M${String.fromCharCode(32 + code)}${String.fromCharCode(32 + cx)}${String.fromCharCode(32 + cy)}',
+  };
+}

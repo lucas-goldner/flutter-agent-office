@@ -290,7 +290,18 @@ class _TerminalWindowState extends State<_TerminalWindow> {
     super.dispose();
   }
 
-  x.Terminal _makeTerminal() => x.Terminal(maxLines: 5000, onOutput: _onData);
+  x.Terminal _makeTerminal() =>
+      x.Terminal(maxLines: 5000, onOutput: _onData, mouseHandler: WheelMouseHandler(_wheelCell));
+
+  /// Where the wheel or the trackpad last was over the terminal (in its own pixels).
+  Offset? _wheelAt;
+
+  /// The cell under the wheel, for a full-screen program that scrolls itself.
+  x.CellOffset? _wheelCell() {
+    final at = _wheelAt, cell = _cell;
+    if (at == null || cell == null || cell.width <= 0 || cell.height <= 0) return null;
+    return x.CellOffset((at.dx / cell.width).floor(), (at.dy / cell.height).floor());
+  }
 
   void _onData(String data) {
     _sendSize(typing: true);
@@ -621,6 +632,8 @@ class _TerminalWindowState extends State<_TerminalWindow> {
                   onPointerDown: (e) => _downAt = e.buttons == kPrimaryButton ? e.localPosition : null,
                   onPointerUp: _pointerUp,
                   onPointerHover: _hover,
+                  onPointerSignal: (e) => _wheelAt = e.localPosition,
+                  onPointerPanZoomStart: (e) => _wheelAt = e.localPosition,
                   child: Stack(
                     children: [
                       Positioned.fill(
