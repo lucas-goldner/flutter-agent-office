@@ -3913,6 +3913,7 @@ ClientMsg _parseClient(Map<String, dynamic> j) {
     'floor.add' => FloorAddCmd(s('repo')),
     'floor.cancel' => FloorCancelCmd(s('floor')),
     'floor.remove' => FloorRemoveCmd(s('floor')),
+    'floor.pull' => FloorPullCmd(s('floor')),
     'theme.set' => ThemeSetCmd(ThemePick.parse(j['pick'])),
     'sky.clock' => SkyClockCmd(asBool(j['real'])),
     'map.set' => MapSetCmd(so('map')),
@@ -4898,6 +4899,16 @@ class FloorCancelCmd extends ClientMsg {
   final String floor;
   @override
   String get t => 'floor.cancel';
+  @override
+  Map<String, dynamic> get fields => {'floor': floor};
+}
+
+/// ⬇️ Bring a floor's checkout up to date with its branch on GitHub (fast-forward only).
+class FloorPullCmd extends ClientMsg {
+  const FloorPullCmd(this.floor);
+  final String floor;
+  @override
+  String get t => 'floor.pull';
   @override
   Map<String, dynamic> get fields => {'floor': floor};
 }

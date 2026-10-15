@@ -413,6 +413,15 @@ class _ElevatorWindowState extends State<_ElevatorWindow> with ListenTo {
                         onPressed: () => _stopClone(f),
                       ),
                     ],
+                    if (f.cloning != true) ...[
+                      const SizedBox(width: 8),
+                      OfficeButton(
+                        key: ValueKey('pull-${f.id}'),
+                        label: '⬇️',
+                        tooltip: 'Pull the latest${f.branch != null ? ' ${f.branch}' : ''} from GitHub into ${f.name}',
+                        onPressed: () => widget.scope.net.send(FloorPullCmd(f.id)),
+                      ),
+                    ],
                     if (store.me.admin && f.cloning != true) ...[
                       const SizedBox(width: 8),
                       OfficeButton(

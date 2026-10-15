@@ -18,6 +18,7 @@ import 'config.dart';
 import 'decor.dart' show ImageData, ImageError, ImageProxy, ImageResult;
 import 'docs.dart' show DocFailed, DocFound;
 import 'floor.dart';
+import 'floor_pull.dart';
 import 'headless.dart' show ScreenFrame;
 import 'history.dart';
 import 'leave_on_merge.dart';
@@ -473,6 +474,9 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
       sendRaw(c, json);
     }
   }
+
+  /// ⬇️ Floors whose checkout is being pulled.
+  final Set<String> pulling = {};
 
   void toastAll(String text, [ToastLevel level = ToastLevel.info]) => broadcast(ToastMsg(text, level));
 
@@ -2044,6 +2048,28 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         } else {
           toastAll('🛗 $who stopped cloning ${def?.repo ?? def?.name ?? 'a floor'}');
         }
+      case 'floor.pull':
+        // ⬇️ The floor's checkout, up to date with its branch on GitHub: fast-forward only, so it can't
+        // lose anything; one pull at a time per floor.
+        final floor = floors[_str(msg['floor'], 64)];
+        if (floor == null) return warn(c, 'That floor isn’t open');
+        if (!pulling.add(floor.id)) return warn(c, '${floor.def.name} is being pulled already');
+        toastFloor(floor, '⬇️ $who is pulling the latest into ${floor.def.name}…');
+        unawaited(
+          pullLatest(floor.dir).then((r) {
+            pulling.remove(floor.id);
+            if (r.error != null) {
+              warn(c, '⬇️ ${floor.def.name}: ${r.error}');
+              return;
+            }
+            if (r.commits == 0) {
+              sendTo(c, ToastMsg('⬇️ ${floor.def.name} is up to date with ${r.branch}', ToastLevel.info));
+              return;
+            }
+            toastAll('⬇️ $who pulled ${r.commits} new commit${r.commits == 1 ? '' : 's'} into ${floor.def.name} (${r.branch})');
+            unawaited(floor.github.refresh());
+          }),
+        );
       case 'floor.remove':
         // Everyone's workers on it stop: admins do it.
         if (!meOf(c.accountId).admin) return warn(c, 'Only admins can take a floor off the building');

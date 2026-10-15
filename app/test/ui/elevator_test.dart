@@ -135,6 +135,16 @@ void main() {
     expect(find.byKey(const ValueKey('blow-f1')), findsNothing);
   });
 
+  testWidgets('⬇️ pulls the latest into a floor, for anyone', (tester) async {
+    final office = Office()..welcome(floors: [floorJson('f1', 'one')], admin: false);
+    await office.pump(tester, const SizedBox());
+    openElevator(office.scope(), ride: (_) {});
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('pull-f1')));
+    await tester.pump();
+    expect(office.net.sent.whereType<FloorPullCmd>().map((c) => c.floor), ['f1']);
+  });
+
   testWidgets('a new office: the steps, and the workspace folder moved right there', (tester) async {
     final office = Office()..welcome(floor: null);
     await office.pump(tester, const SizedBox());
