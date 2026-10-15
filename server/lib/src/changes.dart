@@ -311,7 +311,10 @@ class Changes {
 
   // ignore: unused_field
   final String _dir;
-  final String? _baseBranch;
+  String? _baseBranch;
+
+  /// The floor's base branch changed (⚙️ Settings → 🌿 Base branch).
+  set baseBranch(String? b) => _baseBranch = b == 'HEAD' ? null : b;
 
   /// A worker's checkout; with `repo`, its worktree of that floor's repository (see WorkerInfo.repos).
   final ChangesTarget? Function(String workerId, String? repo) _target;

@@ -50,6 +50,32 @@ class GitException implements Exception {
   String toString() => message;
 }
 
+/// Where a floor's base branch is kept, when one is set (⚙️ Settings → 🌿 Base branch).
+String _baseBranchFile(String dir) => p.join(dir, '.agent-office', 'base-branch');
+
+/// The branch set as [dir]'s base (e.g. `develop`): workers start from it, their pull requests go to
+/// it, and ⬇️ pulls it. Null when none is set: then it's the branch the checkout is on.
+String? readBaseBranch(String dir) {
+  try {
+    final b = File(_baseBranchFile(dir)).readAsStringSync().trim();
+    return b.isEmpty ? null : b;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// Sets [dir]'s base branch; null or '' goes back to the branch the checkout is on.
+void writeBaseBranch(String dir, String? branch) {
+  final f = File(_baseBranchFile(dir));
+  final b = branch?.trim() ?? '';
+  if (b.isEmpty) {
+    if (f.existsSync()) f.deleteSync();
+    return;
+  }
+  f.parent.createSync(recursive: true);
+  f.writeAsStringSync('$b\n');
+}
+
 /// Git plumbing for the worktrees the office makes for its workers: hiring, sending home and pruning.
 class Worktrees {
   Worktrees(this._dir) : _root = _real(_dir);
@@ -77,7 +103,7 @@ class Worktrees {
   /// returns is relative to [root].
   ({WorkerWorktree? worktree, String? note, String? error}) create(String slug, [String? sub, String? root]) {
     try {
-      final from = currentBranch();
+      final from = baseBranch();
       final start = _startPoint(from);
       final rel = sub != null ? p.join(worktreesDir, slug, sub) : p.join(worktreesDir, slug);
       final branch = '$branchPrefix$slug';
@@ -100,7 +126,7 @@ class Worktrees {
     final fetching = _fetching;
     if (fetching != null) return fetching;
     if (DateTime.now().millisecondsSinceEpoch - _fetchedAt < fetchFreshMs) return null;
-    final from = currentBranch();
+    final from = baseBranch();
     if (from == null || !_hasOrigin()) return null;
     return _fetching = () async {
       try {
@@ -144,6 +170,17 @@ class Worktrees {
   ({String base, String? note}) _startPoint(String? from) {
     final head = _gitSync(['rev-parse', 'HEAD']);
     if (from == null) return (base: head, note: null);
+    if (from != currentBranch()) {
+      // A base branch the checkout isn't on (🌿 develop, say): origin's copy, else the one here.
+      for (final ref in ['refs/remotes/origin/$from', 'refs/heads/$from']) {
+        try {
+          return (base: _gitSync(['rev-parse', '--verify', '--quiet', '$ref^{commit}']), note: null);
+        } catch (_) {
+          // not this one
+        }
+      }
+      return (base: head, note: "starts from what the checkout has: there's no $from on origin or here");
+    }
     String remote;
     try {
       remote = _gitSync(['rev-parse', '--verify', '--quiet', 'refs/remotes/origin/$from^{commit}']);
@@ -180,6 +217,10 @@ class Worktrees {
   }
 
   /// The branch the project is on, or null when HEAD is detached.
+  /// The branch workers start from and open their pull requests to: the floor's base branch when one
+  /// is set, else the one the checkout is on.
+  String? baseBranch() => readBaseBranch(_dir) ?? currentBranch();
+
   String? currentBranch() {
     try {
       final b = _gitSync(['rev-parse', '--abbrev-ref', 'HEAD']);

@@ -78,6 +78,24 @@ void main() {
     expect(f.git(['rev-parse', 'HEAD']), stale);
   });
 
+  test('🌿 with a base branch set, workers start from it and their PRs go to it', () async {
+    final f = Fixture();
+    f.run(f.github, ['checkout', '-q', '-b', 'develop']);
+    final dev = f.commitIn(f.github, 'dev.txt');
+    f.run(f.github, ['push', '-q', 'origin', 'develop']);
+    final trees = Worktrees(f.dir);
+    writeBaseBranch(f.dir, 'develop');
+    expect(readBaseBranch(f.dir), 'develop');
+    expect(trees.baseBranch(), 'develop');
+    await trees.fetch();
+    final made = trees.create('rex-dev');
+    expect(made.error, isNull);
+    expect((made.worktree!.from, made.worktree!.base), ('develop', dev));
+    expect(f.git(['rev-parse', '--abbrev-ref', 'HEAD']), 'main', reason: 'the checkout stays on main');
+    writeBaseBranch(f.dir, '');
+    expect(trees.baseBranch(), 'main', reason: 'cleared: back to the branch the checkout is on');
+  });
+
   test('a project ahead of origin (commits not pushed yet) still branches from its HEAD', () async {
     final f = Fixture();
     final local = f.commit('wip.txt');

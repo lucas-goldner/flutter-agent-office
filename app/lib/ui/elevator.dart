@@ -418,7 +418,7 @@ class _ElevatorWindowState extends State<_ElevatorWindow> with ListenTo {
                       OfficeButton(
                         key: ValueKey('pull-${f.id}'),
                         label: '⬇️',
-                        tooltip: 'Pull the latest${f.branch != null ? ' ${f.branch}' : ''} from GitHub into ${f.name}',
+                        tooltip: 'Pull the latest${(f.base ?? f.branch) != null ? ' ${f.base ?? f.branch}' : ''} from GitHub into ${f.name}',
                         onPressed: () => widget.scope.net.send(FloorPullCmd(f.id)),
                       ),
                     ],

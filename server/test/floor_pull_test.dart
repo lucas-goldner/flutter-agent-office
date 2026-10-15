@@ -61,4 +61,19 @@ void main() {
     git(floor, ['checkout', '-q', '-b', 'only-here']);
     expect((await pullLatest(floor)).error, contains('no branch on GitHub'));
   });
+
+  test('a base branch the checkout is not on is brought up to date without switching', () async {
+    git(other, ['checkout', '-q', '-b', 'develop']);
+    commit(other, 'd.txt', 'd');
+    git(other, ['push', '-q', 'origin', 'develop']);
+    // Not here yet: made, tracking GitHub's.
+    expect(await pullLatest(floor, base: 'develop'), (branch: 'develop', commits: 0, error: null));
+    commit(other, 'e.txt', 'e');
+    commit(other, 'f.txt', 'f');
+    git(other, ['push', '-q', 'origin', 'develop']);
+    expect(await pullLatest(floor, base: 'develop'), (branch: 'develop', commits: 2, error: null));
+    final head = Process.runSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], workingDirectory: floor);
+    expect('${head.stdout}'.trim(), 'main', reason: 'the checkout stays where it was');
+    expect((await pullLatest(floor, base: 'nope')).error, contains('no nope on GitHub'));
+  });
 }

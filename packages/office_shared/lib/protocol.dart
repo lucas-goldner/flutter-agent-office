@@ -2469,6 +2469,7 @@ class FloorInfo implements JsonObject {
     this.repo,
     required this.dir,
     this.branch,
+    this.base,
     required this.palette,
     this.cloning,
     this.clone,
@@ -2488,6 +2489,7 @@ class FloorInfo implements JsonObject {
     repo: asStringOrNull(j['repo']),
     dir: asString(j['dir']),
     branch: asStringOrNull(j['branch']),
+    base: asStringOrNull(j['base']),
     palette: asInt(j['palette']),
     cloning: asBoolOrNull(j['cloning']),
     clone: _obj(j['clone'], CloneProgress.fromJson),
@@ -2514,6 +2516,10 @@ class FloorInfo implements JsonObject {
 
   /// The branch that checkout is on ('HEAD' when detached); none when it isn't a git checkout.
   final String? branch;
+
+  /// The branch set as its base in ⚙️ Settings (workers start from it, their PRs go to it, ⬇️ pulls
+  /// it); none: the branch the checkout is on.
+  final String? base;
 
   /// Which of floorPalettes it's painted in.
   final int palette;
@@ -2548,6 +2554,7 @@ class FloorInfo implements JsonObject {
     'repo': ?repo,
     'dir': dir,
     'branch': ?branch,
+    'base': ?base,
     'palette': palette,
     'cloning': ?cloning,
     'clone': ?clone?.toJson(),
@@ -3914,6 +3921,7 @@ ClientMsg _parseClient(Map<String, dynamic> j) {
     'floor.cancel' => FloorCancelCmd(s('floor')),
     'floor.remove' => FloorRemoveCmd(s('floor')),
     'floor.pull' => FloorPullCmd(s('floor')),
+    'floor.base' => FloorBaseCmd(s('floor'), s('branch')),
     'theme.set' => ThemeSetCmd(ThemePick.parse(j['pick'])),
     'sky.clock' => SkyClockCmd(asBool(j['real'])),
     'map.set' => MapSetCmd(so('map')),
@@ -4901,6 +4909,17 @@ class FloorCancelCmd extends ClientMsg {
   String get t => 'floor.cancel';
   @override
   Map<String, dynamic> get fields => {'floor': floor};
+}
+
+/// 🌿 A floor's base branch ([branch] '': the branch its checkout is on).
+class FloorBaseCmd extends ClientMsg {
+  const FloorBaseCmd(this.floor, this.branch);
+  final String floor;
+  final String branch;
+  @override
+  String get t => 'floor.base';
+  @override
+  Map<String, dynamic> get fields => {'floor': floor, 'branch': branch};
 }
 
 /// ⬇️ Bring a floor's checkout up to date with its branch on GitHub (fast-forward only).

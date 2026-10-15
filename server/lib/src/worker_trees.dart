@@ -426,7 +426,7 @@ extension _WorkerTrees on WorkerManager {
         );
       }
       await _run('git', ['push', '-u', 'origin', branch], cwd, 90000, as?.env);
-      final base = await _pushedBranch([wt.from, _trees.currentBranch()], branch);
+      final base = await _pushedBranch([wt.from, _trees.baseBranch()], branch);
       final draft = draftPr(info, commits, by);
       final pr = await createPr(branch, base, draft.title, draft.body, cwd, as?.env);
       info.pr = pr;
@@ -527,7 +527,7 @@ extension _WorkerTrees on WorkerManager {
             continue;
           }
           await _run('git', ['push', '-u', 'origin', x.branch], cwd, 90000, as?.env);
-          final base = await _pushedBranch([x.from, Worktrees(x.dir).currentBranch()], x.branch, x.dir);
+          final base = await _pushedBranch([x.from, Worktrees(x.dir).baseBranch()], x.branch, x.dir);
           final draft = draftPr(info, commits, by, other: x.index == null ? null : (home: home));
           final pr = await createPr(x.branch, base, draft.title, draft.body, cwd, as?.env);
           set(x.index, pr);

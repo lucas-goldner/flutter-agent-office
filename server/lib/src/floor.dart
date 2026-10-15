@@ -27,7 +27,7 @@ import 'signins.dart' show GhRunAs;
 import 'usage.dart' show Ledger;
 import 'whiteboard.dart';
 import 'workers.dart';
-import 'worktrees.dart' show WorktreeCleanup, Worktrees;
+import 'worktrees.dart' show WorktreeCleanup, Worktrees, readBaseBranch;
 
 /// What a floor needs from the building around it.
 abstract interface class FloorContext {
@@ -262,7 +262,7 @@ class Floor {
     // What each worker changed, for the Changes window at its desk (see changes.dart).
     _changes = Changes(
       def.dir,
-      project.branch,
+      readBaseBranch(def.dir) ?? project.branch,
       (workerId, repo) {
         final w = workers.get(workerId);
         if (w == null) return null;
@@ -438,6 +438,9 @@ class Floor {
       queue.state().tasks.any((t) => t.status != TaskStatus.done) ||
       meetings.state().current?.status == MeetingStatus.running;
 
+  /// 🌿 The base branch changed: Changes diffs against it and its PRs go to it.
+  void baseChanged() => _changes?.baseBranch = readBaseBranch(dir) ?? project.branch;
+
   /// [local]: the project the office was started in (see Building.isLocal).
   FloorInfo info({bool? local}) {
     final ws = workers.list();
@@ -447,6 +450,7 @@ class Floor {
       repo: def.repo,
       dir: dir,
       branch: project.branch,
+      base: readBaseBranch(dir),
       palette: def.palette,
       local: local,
       addedBy: def.addedBy,

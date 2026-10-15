@@ -574,6 +574,12 @@ void _builtInCards() {
   // Workers.
   cards.add(SettingsPane.workers, id: 'default-worker', order: 10, (c) => _AgentCard(c: c));
   cards.add(SettingsPane.workers, id: 'limit', order: 20, (c) => _LimitCard(c: c));
+  cards.add(
+    SettingsPane.workers,
+    id: 'base-branch',
+    order: 35,
+    (c) => c.store.floors.any((f) => f.id == c.store.floor && f.cloning != true) ? _BaseBranchCard(c: c) : null,
+  );
   cards.add(SettingsPane.workers, id: 'leave-on-merge', order: 30, (c) {
     final l = c.store.leaveOnMerge;
     return SettingCard(
@@ -752,6 +758,82 @@ class _WebhookCardState extends State<_WebhookCard> {
 
 /// The dog on this floor, named for everyone here.
 /// Where the elevator clones new projects on the office's machine. Admins move it.
+/// 🌿 The floor's base branch: what workers start from, open their PRs to, and ⬇️ pulls.
+class _BaseBranchCard extends StatefulWidget {
+  const _BaseBranchCard({required this.c});
+  final SettingsContext c;
+
+  @override
+  State<_BaseBranchCard> createState() => _BaseBranchCardState();
+}
+
+class _BaseBranchCardState extends State<_BaseBranchCard> {
+  final _branch = TextEditingController();
+  String? _shown;
+
+  @override
+  void dispose() {
+    _branch.dispose();
+    super.dispose();
+  }
+
+  FloorInfo? get _floor => widget.c.store.floors.where((f) => f.id == widget.c.store.floor).firstOrNull;
+
+  void _save() {
+    final f = _floor;
+    if (f == null) return;
+    final b = _branch.text.trim();
+    if (b != (f.base ?? '')) widget.c.net.send(FloorBaseCmd(f.id, b));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final f = _floor;
+    final admin = widget.c.store.me.admin;
+    final base = f?.base ?? '';
+    // Set here or by someone else: show what it is now.
+    if (base != _shown) {
+      _shown = base;
+      _branch.text = base;
+    }
+    final on = f?.branch;
+    return SettingCard(
+      title: '🌿 Base branch',
+      scope: SettingScope.floor,
+      children: [
+        if (admin)
+          Row(
+            children: [
+              Expanded(
+                child: BoxInput(
+                  key: const ValueKey('base-branch'),
+                  controller: _branch,
+                  hint: on != null && on != 'HEAD' ? '$on (the branch the checkout is on)' : 'develop',
+                  onSubmitted: (_) => _save(),
+                ),
+              ),
+              const SizedBox(width: 8),
+              OfficeButton(
+                key: const ValueKey('base-branch-save'),
+                label: 'Save',
+                kind: BtnKind.primary,
+                onPressed: _save,
+              ),
+            ],
+          )
+        else
+          Text(base.isNotEmpty ? base : (on ?? '—'), style: heavy(14, weight: FontWeight.w800)),
+        Note(
+          'New workers start from the latest of this branch on GitHub and open their pull requests to it, '
+          'Changes compare against it, and ⬇️ in the elevator pulls it. Leave it empty for the branch '
+          'the checkout is on${on != null && on != 'HEAD' ? ' ($on)' : ''}.',
+          top: 6,
+        ),
+      ],
+    );
+  }
+}
+
 class _DirCard extends StatefulWidget {
   const _DirCard({required this.c});
   final SettingsContext c;

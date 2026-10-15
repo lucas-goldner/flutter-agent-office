@@ -19,6 +19,7 @@ import 'decor.dart' show ImageData, ImageError, ImageProxy, ImageResult;
 import 'docs.dart' show DocFailed, DocFound;
 import 'floor.dart';
 import 'floor_pull.dart';
+import 'worktrees.dart' show readBaseBranch, writeBaseBranch;
 import 'headless.dart' show ScreenFrame;
 import 'history.dart';
 import 'leave_on_merge.dart';
@@ -2048,6 +2049,31 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         } else {
           toastAll('🛗 $who stopped cloning ${def?.repo ?? def?.name ?? 'a floor'}');
         }
+      case 'floor.base':
+        // 🌿 Which branch workers start from and open their PRs to: admins pick it.
+        if (!meOf(c.accountId).admin) return warn(c, 'Only admins can change a floor’s base branch');
+        final floor = floors[_str(msg['floor'], 64)];
+        if (floor == null) return warn(c, 'That floor isn’t open');
+        final branch = _str(msg['branch'], 200).trim();
+        if (branch.isNotEmpty) {
+          final ok = Process.runSync('git', ['check-ref-format', '--branch', branch], workingDirectory: floor.dir);
+          if (ok.exitCode != 0) return warn(c, '“$branch” isn’t a branch name git takes');
+          final known = [
+            for (final ref in ['refs/remotes/origin/$branch', 'refs/heads/$branch'])
+              Process.runSync('git', ['rev-parse', '--verify', '--quiet', ref], workingDirectory: floor.dir).exitCode ==
+                  0,
+          ].any((x) => x);
+          if (!known) return warn(c, 'There’s no $branch on GitHub or in ${floor.def.name}’s checkout');
+        }
+        writeBaseBranch(floor.dir, branch);
+        floor.baseChanged();
+        floorsChanged();
+        toastFloor(
+          floor,
+          branch.isEmpty
+              ? '🌿 $who set ${floor.def.name} back to the branch its checkout is on'
+              : '🌿 $who set ${floor.def.name}’s base branch to $branch: new workers start from it and open their PRs to it',
+        );
       case 'floor.pull':
         // ⬇️ The floor's checkout, up to date with its branch on GitHub: fast-forward only, so it can't
         // lose anything; one pull at a time per floor.
@@ -2056,7 +2082,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         if (!pulling.add(floor.id)) return warn(c, '${floor.def.name} is being pulled already');
         toastFloor(floor, '⬇️ $who is pulling the latest into ${floor.def.name}…');
         unawaited(
-          pullLatest(floor.dir).then((r) {
+          pullLatest(floor.dir, base: readBaseBranch(floor.dir)).then((r) {
             pulling.remove(floor.id);
             if (r.error != null) {
               warn(c, '⬇️ ${floor.def.name}: ${r.error}');
@@ -2066,7 +2092,9 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
               sendTo(c, ToastMsg('⬇️ ${floor.def.name} is up to date with ${r.branch}', ToastLevel.info));
               return;
             }
-            toastAll('⬇️ $who pulled ${r.commits} new commit${r.commits == 1 ? '' : 's'} into ${floor.def.name} (${r.branch})');
+            toastAll(
+              '⬇️ $who pulled ${r.commits} new commit${r.commits == 1 ? '' : 's'} into ${floor.def.name} (${r.branch})',
+            );
             unawaited(floor.github.refresh());
           }),
         );

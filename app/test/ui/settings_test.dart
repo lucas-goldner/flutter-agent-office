@@ -76,8 +76,13 @@ void main() {
     });
   });
 
-  Future<Office> openIt(WidgetTester tester, {bool admin = true, List<Settings>? changes}) async {
-    final office = Office()..welcome(admin: admin);
+  Future<Office> openIt(
+    WidgetTester tester, {
+    bool admin = true,
+    List<Settings>? changes,
+    List<Map<String, dynamic>> floors = const [],
+  }) async {
+    final office = Office()..welcome(admin: admin, floors: floors);
     await office.pump(tester, const SizedBox(), size: const Size(1400, 3000));
     openSettings(
       office.scope(),
@@ -140,6 +145,17 @@ void main() {
     await tester.pump();
     final agent = sent.whereType<PromptsAgentCmd>().single.choice!;
     expect((agent.provider, agent.model), (AgentProvider.claude, 'opus'));
+  });
+
+  testWidgets('🌿 an admin sets the floor’s base branch', (tester) async {
+    final office = await openIt(tester, floors: [floorJson('f1', 'youtrust-app')]);
+    await pane(tester, SettingsPane.workers);
+    await tester.ensureVisible(find.byKey(const ValueKey('base-branch')));
+    await tester.enterText(find.byKey(const ValueKey('base-branch')), 'develop');
+    await tap(tester, find.byKey(const ValueKey('base-branch-save')));
+    await tester.pump();
+    final cmd = office.net.sent.whereType<FloorBaseCmd>().single;
+    expect((cmd.floor, cmd.branch), (office.store.floor, 'develop'));
   });
 
   testWidgets('everyone else reads them', (tester) async {

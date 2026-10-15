@@ -9,8 +9,11 @@ import 'dart:io';
 typedef PullResult = ({String branch, int commits, String? error});
 
 /// Brings [dir]'s current branch up to date with its upstream (or `origin/<branch>`), fast-forward only.
+/// With a [base] branch the checkout isn't on (🌿 develop, say), that branch is brought up to date
+/// instead, without switching the checkout.
 Future<PullResult> pullLatest(
   String dir, {
+  String? base,
   Map<String, String>? env,
   Duration timeout = const Duration(minutes: 2),
 }) async {
@@ -32,6 +35,30 @@ Future<PullResult> pullLatest(
 
     final fetch = await git(['fetch', '--prune', 'origin']);
     if (fetch.exitCode != 0) return (branch: branch, commits: 0, error: "Couldn't fetch from GitHub: ${err(fetch)}");
+
+    if (base != null && base.isNotEmpty && base != branch) {
+      // The base isn't checked out here: move its branch along without touching the checkout.
+      if ((await git(['rev-parse', '--verify', '--quiet', 'refs/remotes/origin/$base'])).exitCode != 0) {
+        return (branch: base, commits: 0, error: 'There is no $base on GitHub');
+      }
+      final had = await git(['rev-parse', '--verify', '--quiet', 'refs/heads/$base']);
+      if (had.exitCode != 0) {
+        final made = await git(['branch', '--track', base, 'origin/$base']);
+        return (branch: base, commits: 0, error: made.exitCode == 0 ? null : err(made));
+      }
+      // A refspec fetch only fast-forwards, and refuses a branch checked out in a worktree.
+      final moved = await git(['fetch', 'origin', 'refs/heads/$base:refs/heads/$base']);
+      if (moved.exitCode != 0) {
+        final ahead = (await git(['merge-base', '--is-ancestor', 'refs/heads/$base', 'origin/$base'])).exitCode != 0;
+        return (
+          branch: base,
+          commits: 0,
+          error: ahead ? '$base here has commits of its own that GitHub doesn\'t: pull it by hand' : err(moved),
+        );
+      }
+      final n = await git(['rev-list', '--count', '${out(had)}..refs/heads/$base']);
+      return (branch: base, commits: int.tryParse(out(n)) ?? 0, error: null);
+    }
 
     final up = await git(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
     var target = up.exitCode == 0 ? out(up) : 'origin/$branch';
