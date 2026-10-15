@@ -9,6 +9,7 @@ import 'package:flutter_scene/scene.dart' hide Material;
 
 import 'interop/pointer_lock.dart';
 import 'office/controller.dart';
+import 'office2d/office2d_view.dart';
 import 'ui/loading.dart';
 import 'ui/lite_suggest.dart';
 import 'world/character.dart' show Person;
@@ -65,8 +66,9 @@ class _OfficePageState extends State<OfficePage> {
       ..yieldMouse = (() => _lock.finePointer ? _lock.yieldMouse() : _lock.unlock())
       ..backToGame = _backToGame
       ..init();
+    c.show2d.addListener(_on2d);
     _lock
-      ..mayLock = (() => !ModalStack.instance.open && c.player.view == ViewMode.first)
+      ..mayLock = (() => !ModalStack.instance.open && c.player.view == ViewMode.first && !c.show2d.value)
       ..attach();
     ModalStack.instance.changes.addListener(_onModals);
     WidgetsBinding.instance.addPostFrameCallback((_) => ModalStack.instance.attach(Overlay.of(context)));
@@ -75,9 +77,16 @@ class _OfficePageState extends State<OfficePage> {
   @override
   void dispose() {
     ModalStack.instance.changes.removeListener(_onModals);
+    c.show2d.removeListener(_on2d);
     _lock.detach();
     c.dispose();
     super.dispose();
+  }
+
+  /// Into the 2D map, the mouse is yours again to click with.
+  void _on2d() {
+    if (c.show2d.value) _lock.unlock();
+    setState(() {});
   }
 
   void _onModals() {
@@ -115,6 +124,11 @@ class _OfficePageState extends State<OfficePage> {
         !c.hud.typing &&
         _lock.canLock) {
       _lock.lock();
+    }
+    // F2 switches between the 3D office and the 👾 2D map.
+    if (e is KeyDownEvent && e.logicalKey == LogicalKeyboardKey.f2 && !ModalStack.instance.open) {
+      c.toggle2d();
+      return KeyEventResult.handled;
     }
     if (c.onKey(e)) return KeyEventResult.handled;
     // Esc gives the mouse back, as a browser's pointer lock does by itself.
@@ -235,61 +249,65 @@ class _OfficePageState extends State<OfficePage> {
                 ),
               ),
               if (ready) ...[
-                Positioned.fill(
-                  child: LayoutBuilder(
-                    builder: (context, box) {
-                      _view = box.biggest;
-                      c.lockAvailable = _lock.canLock;
-                      return Listener(
-                        onPointerDown: _down,
-                        onPointerMove: _move,
-                        onPointerUp: _up,
-                        onPointerSignal: _wheel,
-                        onPointerPanZoomStart: _panZoomStart,
-                        onPointerPanZoomUpdate: _panZoom,
-                        onPointerHover: (e) {
-                          c.hanger.mouse = e.localPosition;
-                          // The telescope (and the dart in your hand) follows the mouse, pressed or not.
-                          if (!_lock.locked) c.places.pointer(e.localPosition, e.delta, _view);
-                        },
-                        // A few drinks in at the rooftop bar, the frame sways, blurs and warms (world/drunk.dart).
-                        child: DrunkVision(
-                          look: c.roofHub.look,
-                          child: FrameSkipSceneView(
-                            c.scene,
-                            every: () => 1,
-                            onTick: (elapsed, dt) => c.tick(dt, _view),
-                            viewsBuilder: (_) => [
-                              RenderView(
-                                camera: c.camera,
-                                layerMask: kRenderLayerAll & ~Hands.layer & ~Person.firstPersonHidden,
-                              ),
-                              if (c.player.view == ViewMode.first &&
-                                  c.devHands &&
-                                  !c.arcade.zoomed &&
-                                  !c.rooms.zoomed &&
-                                  !c.places.busy)
-                                c.hands.overlayView(),
-                            ],
+                if (c.show2d.value)
+                  Positioned.fill(child: Office2DView(c: c))
+                else ...[
+                  Positioned.fill(
+                    child: LayoutBuilder(
+                      builder: (context, box) {
+                        _view = box.biggest;
+                        c.lockAvailable = _lock.canLock;
+                        return Listener(
+                          onPointerDown: _down,
+                          onPointerMove: _move,
+                          onPointerUp: _up,
+                          onPointerSignal: _wheel,
+                          onPointerPanZoomStart: _panZoomStart,
+                          onPointerPanZoomUpdate: _panZoom,
+                          onPointerHover: (e) {
+                            c.hanger.mouse = e.localPosition;
+                            // The telescope (and the dart in your hand) follows the mouse, pressed or not.
+                            if (!_lock.locked) c.places.pointer(e.localPosition, e.delta, _view);
+                          },
+                          // A few drinks in at the rooftop bar, the frame sways, blurs and warms (world/drunk.dart).
+                          child: DrunkVision(
+                            look: c.roofHub.look,
+                            child: FrameSkipSceneView(
+                              c.scene,
+                              every: () => 1,
+                              onTick: (elapsed, dt) => c.tick(dt, _view),
+                              viewsBuilder: (_) => [
+                                RenderView(
+                                  camera: c.camera,
+                                  layerMask: kRenderLayerAll & ~Hands.layer & ~Person.firstPersonHidden,
+                                ),
+                                if (c.player.view == ViewMode.first &&
+                                    c.devHands &&
+                                    !c.arcade.zoomed &&
+                                    !c.rooms.zoomed &&
+                                    !c.places.busy)
+                                  c.hands.overlayView(),
+                              ],
+                            ),
                           ),
-                        ),
-                      );
-                    },
+                        );
+                      },
+                    ),
                   ),
-                ),
-                Positioned.fill(
-                  child: LabelLayer(hub: c.labels, camera: () => c.camera, blocked: c.labelBlocked),
-                ),
-                Positioned.fill(
-                  child: CompassLayer(
-                    camera: () => c.camera,
-                    bearings: c.waitingBearings,
-                    waiting: c.waitingChip,
-                    onNext: c.goToNextWaiting,
-                    // The dock on the top bar has it (the ☰ HUD's 'waiting' action).
-                    chip: false,
+                  Positioned.fill(
+                    child: LabelLayer(hub: c.labels, camera: () => c.camera, blocked: c.labelBlocked),
                   ),
-                ),
+                  Positioned.fill(
+                    child: CompassLayer(
+                      camera: () => c.camera,
+                      bearings: c.waitingBearings,
+                      waiting: c.waitingChip,
+                      onNext: c.goToNextWaiting,
+                      // The dock on the top bar has it (the ☰ HUD's 'waiting' action).
+                      chip: false,
+                    ),
+                  ),
+                ],
                 Positioned.fill(
                   child: IgnorePointer(
                     child: ValueListenableBuilder<bool>(

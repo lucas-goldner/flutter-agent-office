@@ -13,13 +13,16 @@ void main() {
     expect(d.hud, kHudDefaults);
     expect(d.hud[HudPanel.chat], isTrue);
     expect(d.pins, isEmpty);
+    expect(d.twoD, isFalse, reason: 'the 3D office by default');
 
     final s = Settings.fromJson({
       'view': 'third',
       'pushToTalk': true,
       'hud': {'workers': true, 'chat': false, 'bogus': true, 'people': 'yes'},
       'pins': ['issues', 3, 'queue'],
+      'twoD': true,
     });
+    expect(s.twoD, isTrue);
     expect(s.view, ViewMode.third);
     expect(s.pushToTalk, isTrue);
     expect(s.hud[HudPanel.workers], isTrue);

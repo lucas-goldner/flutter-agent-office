@@ -16,9 +16,9 @@ enum LiteWhy { touch, slow }
 
 /// What the offer says.
 String liteOfferText(LiteWhy why) => switch (why) {
-  LiteWhy.touch =>
-    '📱 On a phone? The 2D view is made for it: every worker and how it’s doing, its terminal, and the boards.',
-  LiteWhy.slow => '🐢 The 3D office is running slowly on this computer. The 2D view has the workers, their terminals and the boards, without the 3D.',
+  LiteWhy.touch => '📱 On a phone? The 👾 2D office is made for it: tap to walk, pinch to zoom, everything a tap away.',
+  LiteWhy.slow =>
+    '🐢 The 3D office is running slowly on this computer. The 👾 2D office is the same office, without the 3D.',
 };
 
 /// The offer on the office page: up at most once a page, unless this browser said to stay in 3D before.
@@ -27,6 +27,9 @@ class LiteOffer {
 
   final bool Function() declined;
   final void Function() decline;
+
+  /// Switches to the 👾 2D map (the office controller sets it); without it, the page at /lite.
+  VoidCallback? open;
 
   /// What's up now, if anything.
   final ValueNotifier<LiteWhy?> showing = ValueNotifier(null);
@@ -99,7 +102,10 @@ class LiteOfferView extends StatelessWidget {
                               key: const ValueKey('lite-open'),
                               label: 'Open the 2D view',
                               kind: BtnKind.primary,
-                              onPressed: () => goTo('/lite'),
+                              onPressed: () {
+                                offer.showing.value = null;
+                                (offer.open ?? () => goTo('/lite'))();
+                              },
                             ),
                             OfficeButton(key: const ValueKey('lite-stay'), label: 'Stay in 3D', onPressed: offer.stay),
                           ],

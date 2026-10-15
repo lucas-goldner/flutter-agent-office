@@ -133,6 +133,9 @@ enum NeedsYouSound { off, once, remind }
 class Settings {
   ViewMode view = ViewMode.first;
 
+  /// The 👾 2D office: a pixel map from above, click to walk, no 3D drawn (easy on the GPU).
+  bool twoD = false;
+
   /// Office sounds, 0-1.
   double volume = 0.7;
   bool muted = false;
@@ -163,6 +166,7 @@ class Settings {
   /// A copy to change, like the TS `{ ...settings }`.
   Settings copy() => Settings()
     ..view = view
+    ..twoD = twoD
     ..volume = volume
     ..muted = muted
     ..music = music
@@ -189,6 +193,7 @@ class Settings {
     try {
       if (saved is Map) {
         if (saved['view'] == 'third') s.view = ViewMode.third;
+        if (saved['twoD'] is bool) s.twoD = saved['twoD'] as bool;
         double? unit(Object? v) => v is num && v.isFinite ? v.toDouble().clamp(0, 1) : null;
         s.volume = unit(saved['volume']) ?? s.volume;
         s.music = unit(saved['music']) ?? s.music;
@@ -216,6 +221,7 @@ class Settings {
 
   Map<String, Object?> toJson() => {
     'view': view.name,
+    'twoD': twoD,
     'volume': volume,
     'muted': muted,
     'music': music,

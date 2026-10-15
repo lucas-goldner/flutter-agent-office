@@ -161,6 +161,14 @@ const Map<InteractKind, double> _reach = {
   InteractKind.expand: 8,
 };
 
+/// The keys a hint offers (`E Open terminal`, `X Send home`…) that do something at what you aim at.
+List<({String key, String label, DeskKey desk})> hintKeys(List<HintPart> parts) => [
+  for (final part in parts)
+    if (part is HintKey)
+      if (DeskKey.values.where((k) => k.name == part.keyName.toLowerCase()).firstOrNull case final k?)
+        (key: part.keyName, label: part.label, desk: k),
+];
+
 final Map<PhysicalKeyboardKey, DeskKey> _deskKeys = {
   PhysicalKeyboardKey.keyE: DeskKey.e,
   PhysicalKeyboardKey.keyP: DeskKey.p,
@@ -238,6 +246,35 @@ class OfficeController implements OfficeActions {
   final ValueNotifier<bool> hanging = ValueNotifier(false);
   final ValueNotifier<Color> sky = ValueNotifier(const Color(0xFFBFE3FF));
   final ValueNotifier<bool> fade = ValueNotifier(false);
+
+  /// What the 2D map walks you over to before using, rather than opening from where you are.
+  static const kWalkToUse = {
+    InteractKind.coffee,
+    InteractKind.smoke,
+    InteractKind.gong,
+    InteractKind.golf,
+    InteractKind.ball,
+    InteractKind.ladder,
+    InteractKind.pole,
+    InteractKind.dog,
+    InteractKind.seat,
+  };
+
+  /// The 👾 2D office instead of the 3D one (⚙️ Settings, F2, ☰ 2D view).
+  late final ValueNotifier<bool> twoD = ValueNotifier(settings.twoD);
+
+  /// The 2D map is up: it's on, and you're on a floor it has a plan of (not the rooftop bar or the garage).
+  late final ValueNotifier<bool> show2d = ValueNotifier(settings.twoD);
+
+  /// Switches between the 3D office and the 👾 2D map.
+  void toggle2d() {
+    settings
+      ..twoD = !settings.twoD
+      ..save();
+    twoD.value = settings.twoD;
+    show2d.value = settings.twoD && _mapHere();
+    toast(settings.twoD ? '👾 2D office: click to walk' : '🧊 3D office');
+  }
 
   /// The white flash of a floor being blown up under you, 0-1 (see [Blast]).
   final ValueNotifier<double> flash = ValueNotifier(0);
@@ -424,6 +461,14 @@ class OfficeController implements OfficeActions {
     // Came here from the 2D view's 🏢 3D button: it isn't offered straight back.
     _chose3d = pageQuery.containsKey('3d');
     if (_chose3d && !desktopApp) replaceUrl(locationPath);
+    // /lite (a bookmark, or the sign-in's ?next=/lite): the office on the 👾 2D map.
+    if (locationPath.replaceAll(RegExp(r'\.html$'), '') == '/lite') {
+      if (!settings.twoD) toggle2d();
+      if (!desktopApp) replaceUrl('/');
+    }
+    liteOffer.open = () {
+      if (!settings.twoD) toggle2d();
+    };
     // A phone can't walk around the office: the 2D view is made for it.
     if (touchOnly) _offer2d(LiteWhy.touch);
     try {
@@ -1155,11 +1200,14 @@ class OfficeController implements OfficeActions {
       HudAction(id: 'help', icon: '❓', label: 'Controls', section: HudSection.office, key: 'H', run: openHelp),
       HudAction(
         id: 'lite',
-        icon: '📱',
+        icon: '👾',
         label: '2D view',
+        labelOf: () => settings.twoD ? '3D view' : '2D view',
         section: HudSection.office,
-        title: () => 'The workers, their terminals and the boards without the 3D: for a phone or a slow computer',
-        run: () => goTo('/lite'),
+        title: () => settings.twoD
+            ? 'Back to the 3D office'
+            : 'The 👾 2D office: the same office as a pixel map, for a phone or a slow computer',
+        run: toggle2d,
       ),
       HudAction(
         id: 'upgrade',
@@ -1309,6 +1357,10 @@ class OfficeController implements OfficeActions {
       player.enabled = !ModalStack.instance.open;
     });
   }
+
+  /// Whether the 👾 2D map can show where you are: it's the floor's plan, so not up on the roof, nor down
+  /// in the garage under the floor (there the 3D scene comes back, as on the roof).
+  bool _mapHere() => !roofHub.upTop && !downstairs();
 
   /// Down in the garage (or out on the street) under the floor you're on.
   bool downstairs() => !roofHub.upTop && inOffice && player.pos.y < -slab - 1;
@@ -2027,8 +2079,85 @@ class OfficeController implements OfficeActions {
 
   void _stopWalking() {
     _walkingTo = null;
+    _going2d = null;
     _errand = null;
     player.stopWalking();
+  }
+
+  // ---- 👾 The 2D view: click somewhere to walk there, click something to walk over and use it ----
+
+  /// What you clicked on the 2D map, to use once you get there.
+  Interactable? _going2d;
+
+  /// Where you're headed on the 2D map (for its marker), while you walk.
+  ({double x, double z})? get heading2d => player.walkingPath ? _heading2d : null;
+  ({double x, double z})? _heading2d;
+
+  /// Everything you can use on this floor, for the 2D map.
+  List<Interactable> get interactables => world.interactables;
+
+  /// What [it] is called, as its hint says (the 2D map's tooltip).
+  String titleFor(Interactable it) {
+    final (_, parts) = _hintFor(it);
+    return parts.whereType<HintTitle>().firstOrNull?.text ?? '';
+  }
+
+  /// Everything [it]'s hint says (the 2D map's label, opened up under the mouse).
+  List<HintPart> hintFor2d(Interactable it) => _hintFor(it).$2;
+
+  /// What [it]'s hint offers (E Open terminal, X Send home…), for the 2D map's right-click menu: each
+  /// does what its key does in 3D (E as a click would: walking over first where you'd have to).
+  List<({String key, String label, VoidCallback run})> actions2d(Interactable it) => [
+    for (final (:key, :label, :desk) in hintKeys(_hintFor(it).$2))
+      (
+        key: key,
+        label: label,
+        run: () {
+          if (desk == DeskKey.e) return use2d(it);
+          _stopWalking();
+          _interact(it, desk);
+        },
+      ),
+  ];
+
+  /// Clicked on the 2D map: what opens a window opens it there and then; what you do with your hands
+  /// or feet (a cup of coffee, the gong, a seat, the ladder) you walk over to first.
+  void use2d(Interactable it) {
+    if (kWalkToUse.contains(it.kind)) return walk2d(it.x, it.z, then: it);
+    _stopWalking();
+    _interact(it, DeskKey.e);
+  }
+
+  /// Walks you to (x, z) on this floor (round the furniture); with [then], uses it when you get there,
+  /// as E would in 3D.
+  void walk2d(double x, double z, {Interactable? then}) {
+    _stopWalking();
+    if (player.seat != null) standUp();
+    final from = (x: player.pos.x, y: player.pos.y, z: player.pos.z);
+    final path = _wayTo(from, (x: x, y: 0.0, z: z));
+    _heading2d = (x: x, z: z);
+    _going2d = then;
+    if (path.isEmpty || math.sqrt(math.pow(x - from.x, 2) + math.pow(z - from.z, 2)) < 0.3) {
+      _arrived2d(PathEnd.arrived);
+      return;
+    }
+    player.walkPath(path);
+  }
+
+  void _arrived2d(PathEnd why) {
+    final it = _going2d;
+    _going2d = null;
+    if (it == null || why == PathEnd.cancelled) return;
+    final d = math.sqrt(math.pow(it.x - player.pos.x, 2) + math.pow(it.z - player.pos.z, 2));
+    if (d > it.radius + 1.6) {
+      toast("🚧 Couldn't get over there", ToastKind.warn);
+      return;
+    }
+    // Face it, as you would to press E in 3D.
+    final yaw = math.atan2(it.x - player.pos.x, it.z - player.pos.z);
+    player.facing = yaw;
+    player.camYaw = yaw - math.pi;
+    _interact(it, DeskKey.e);
   }
 
   /// What you're on your way to (see [walkThen]): where to stand, what it's called, what to turn to and what
@@ -2174,6 +2303,7 @@ class OfficeController implements OfficeActions {
   }
 
   void _pathEnded(PathEnd why) {
+    if (_going2d != null) return _arrived2d(why);
     if (_errand != null) return _errandEnd(why);
     final w = _walkingTo;
     if (w == null) return;
@@ -2952,6 +3082,7 @@ class OfficeController implements OfficeActions {
       settings
         ..pushToTalk = s.pushToTalk
         ..view = s.view
+        ..twoD = s.twoD
         ..volume = s.volume
         ..muted = s.muted
         ..music = s.music
@@ -2960,6 +3091,7 @@ class OfficeController implements OfficeActions {
         ..pageTurns = s.pageTurns
         ..needsYouSound = s.needsYouSound
         ..save();
+      twoD.value = settings.twoD;
       if (talkChanged) {
         voiceRoom.setMuted(settings.pushToTalk);
         hud.prefs.refresh();
@@ -3873,6 +4005,7 @@ class OfficeController implements OfficeActions {
       ..reset()
       ..start();
     _tick(dt, view);
+    show2d.value = twoD.value && _mapHere();
     _perfTick += _perf.elapsedMicroseconds / 1000;
     _perfDt += dt;
     if (devPerf && ++_perfN == 20) {
@@ -4135,7 +4268,7 @@ class OfficeController implements OfficeActions {
     }
     _cork.lifted = _aimedNote?.number;
     _renderHint();
-    final show = firstPerson && !ModalStack.instance.open;
+    final show = firstPerson && !ModalStack.instance.open && !show2d.value;
     final free = show && lockAvailable && !pointerLocked;
     final next = CrosshairState(show: show, on: _target != null, free: free, relookOnKey: free && relookOnKey);
     if (next != crosshair.value) crosshair.value = next;

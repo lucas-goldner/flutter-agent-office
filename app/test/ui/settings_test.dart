@@ -204,7 +204,7 @@ void main() {
     await openIt(tester, changes: changes);
     expect(find.text('🧍 You'), findsOneWidget);
     expect(find.text('Camera view'), findsOneWidget);
-    expect(find.text('Just you'), findsOneWidget);
+    expect(find.text('Just you'), findsNWidgets(2), reason: 'the 3D/2D office and the camera view');
     await pane(tester, SettingsPane.you);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pump();
@@ -220,6 +220,16 @@ void main() {
     expect(find.text('🤖 Workers'), findsWidgets, reason: 'up from the top goes round to the bottom');
     expect(lastSettingsPane, SettingsPane.workers);
     expect(find.text('Everyone'), findsWidgets);
+  });
+
+  testWidgets('👾 2D under You: the camera view goes', (tester) async {
+    lastSettingsPane = SettingsPane.you;
+    final changes = <Settings>[];
+    await openIt(tester, changes: changes);
+    await tap(tester, find.text('👾 2D'));
+    await tester.pump();
+    expect(changes.last.twoD, isTrue);
+    expect(find.text('Camera view'), findsNothing, reason: 'the 2D map has no camera to pick');
   });
 
   test('a card of your own goes in among the office’s', () {

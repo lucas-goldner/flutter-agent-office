@@ -48,4 +48,23 @@ void main() {
     expect(find.text(liteOfferText(LiteWhy.slow)), findsNothing);
     expect(declined, isTrue);
   });
+
+  testWidgets('Open the 2D view switches the office to the 👾 pixel map, and takes the offer down', (tester) async {
+    var opened = 0;
+    final offer = LiteOffer(declined: () => false, decline: () {})
+      ..open = (() => opened++)
+      ..offer(LiteWhy.touch);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: officeTheme(),
+        home: Stack(
+          children: [Positioned.fill(child: LiteOfferView(offer: offer))],
+        ),
+      ),
+    );
+    await tester.tap(find.byKey(const ValueKey('lite-open')));
+    await tester.pump();
+    expect(opened, 1);
+    expect(find.text(liteOfferText(LiteWhy.touch)), findsNothing);
+  });
 }

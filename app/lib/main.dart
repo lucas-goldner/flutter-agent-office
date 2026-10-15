@@ -51,8 +51,9 @@ Widget _page() {
     '/login' => const LoginPage(),
     '/join' => const JoinPage(),
     '/claim' => const ClaimPage(),
-    // The 2D view: the workers, their terminals and the boards, without the 3D office (it checks the session itself).
-    '/lite' => const LitePage(),
+    // The 2D view is the 👾 pixel map in the office (the controller turns it on). The list of workers is only
+    // for a browser with no 3D at all (?why=webgl), as the pixel map is drawn from the office's world.
+    '/lite' when pageQuery['why'] == 'webgl' => const LitePage(),
     _ => const _SignedIn(child: OfficePage()),
   };
 }

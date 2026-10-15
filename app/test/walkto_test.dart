@@ -24,4 +24,11 @@ void main() {
     expect(wayTo((x: -8, y: 0, z: 14.5), (x: -5, y: 0, z: 14.5)), [(x: -5.0, z: 14.5)]);
     expect(wayTo((x: 0, y: -3.6, z: 20), (x: 0, y: 0, z: 0)), [(x: 0.0, z: 0.0)]);
   });
+
+  test('out of the elevator through its doors before anything else', () {
+    final way = wayTo((x: Elevator.x - 0.4, y: 0, z: Floor.minZ + 1), (x: -2, y: 0, z: 2));
+    expect(way.take(2).toList(), [(x: Elevator.x, z: elevatorFront - 0.4), (x: Elevator.x, z: elevatorFront + 0.6)]);
+    expect(way.last.x, closeTo(-2, 1));
+    expect(way.last.z, closeTo(2, 1));
+  });
 }

@@ -376,7 +376,30 @@ void _builtInCards() {
       ],
     );
   });
+  // 🧊 3D or 👾 2D: the office as a scene, or a pixel map from above.
+  cards.add(SettingsPane.you, id: 'office-view', order: 15, (c) {
+    final twoD = c.settings.twoD;
+    return SettingCard(
+      title: 'Office',
+      scope: SettingScope.you,
+      children: [
+        ChoiceRow<bool>(
+          options: const [(false, '🧊 3D'), (true, '👾 2D')],
+          value: twoD,
+          onPick: (v) {
+            if (c.settings.twoD != v) c.change((s) => s.twoD = v);
+          },
+        ),
+        Note(
+          twoD
+              ? 'A pixel map of the floor from above: click somewhere to walk there, click something to walk over and use it. No 3D is drawn, so the GPU can rest. Press F2 to switch.'
+              : 'The office in 3D. 👾 2D is a pixel map from above that\'s easy on the GPU (F2 switches).',
+        ),
+      ],
+    );
+  });
   cards.add(SettingsPane.you, id: 'view', order: 20, (c) {
+    if (c.settings.twoD) return null; // the 2D map has no camera to pick
     final view = c.settings.view;
     return SettingCard(
       title: 'Camera view',

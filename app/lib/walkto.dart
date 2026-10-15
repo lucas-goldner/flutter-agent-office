@@ -40,6 +40,11 @@ _Zone _zoneOf(WalkSpot p, int wing) {
 /// The corners of a walk from [from] to [to], [to] included when it's somewhere you can stand, on a
 /// floor built out [wing] rows into the back office.
 List<Corner> wayTo(WalkSpot from, WalkSpot to, [int wing = 0]) {
+  // Out of the elevator first, straight through its doors: the floor's map has the shaft as a wall.
+  if (inElevator(from.x, from.z) && !inElevator(to.x, to.z) && from.y > -1 && from.y < 1) {
+    const doors = (x: Elevator.x, y: 0.0, z: elevatorFront + 0.6);
+    return [(x: Elevator.x, z: elevatorFront - 0.4), (x: doors.x, z: doors.z), ...wayTo(doors, to, wing)];
+  }
   final a = _zoneOf(from, wing), b = _zoneOf(to, wing);
   final end0 = (x: to.x, z: to.z);
   // Across the same room upstairs or on the balcony, or somewhere the office has no map of: straight there.
