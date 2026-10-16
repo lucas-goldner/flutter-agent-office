@@ -4,13 +4,22 @@
 
 import 'dart:math' as math;
 
-/// A web page pinned open beside a worker's terminal.
+/// A web page pinned open beside a worker's terminal, or one of its files ([file]: its path in the worker's folder).
 class WebTab {
-  const WebTab({required this.id, required this.title, required this.url});
+  const WebTab({required this.id, required this.title, required this.url, this.file});
   final String id;
   final String title;
   final String url;
+  final String? file;
 }
+
+/// The tab for the worker's file at [path].
+WebTab newFileTab(String path) => WebTab(
+  id: 'file-${DateTime.now().millisecondsSinceEpoch}-${_rng.nextInt(1 << 30).toRadixString(36)}',
+  title: path.split('/').last,
+  url: '',
+  file: path,
+);
 
 /// Web tabs survive closing and reopening a worker's terminal, until the page reloads.
 final Map<String, List<WebTab>> tabsByWorker = {};

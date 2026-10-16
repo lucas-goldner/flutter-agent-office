@@ -451,6 +451,12 @@ class WorkerManager implements QueueWorkers {
 
   WorkerInfo? get(String id) => _workers[id]?.info.view;
 
+  /// The folder [id] works in: its worktree (or workspace), else the floor's checkout.
+  String? cwdOf(String id) {
+    final w = _workers[id];
+    return w == null ? null : _cwd(w.info);
+  }
+
   /// The account a worker runs as (see [RunAs]), if not the office.
   String? ownerOf(String id) => _workers[id]?.owner;
 

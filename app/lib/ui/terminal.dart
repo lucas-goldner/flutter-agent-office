@@ -621,6 +621,7 @@ class _TerminalWindowState extends State<_TerminalWindow> {
       headerExtras: w == null ? const [] : _headerExtras(w),
       body: TermTabs(
         workerId: widget.workerId,
+        floor: store.floor,
         focusTerm: _focus.requestFocus,
         terminal: _withKeypad(
           LayoutBuilder(

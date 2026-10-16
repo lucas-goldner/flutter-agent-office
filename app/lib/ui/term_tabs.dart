@@ -1,10 +1,12 @@
-// The tab bar over a worker's terminal (ui/termtabs.ts): 💻 Terminal, any web pages pinned beside it, and
-// "+ Web page" to pin another. The terminal keeps running while a page shows.
+// The tab bar over a worker's terminal (ui/termtabs.ts): 💻 Terminal, any web pages and files pinned beside
+// it, "+ Web page" to pin another and "+ File" to open one of the worker's .md or .txt files (file_tab.dart).
+// The terminal keeps running while a page shows.
 
 import 'package:flutter/material.dart';
 
 import '../interop/browser.dart' show serverOrigin;
 import '../interop/open_link.dart';
+import 'file_tab.dart';
 import 'modal.dart' show clip, toast, ToastKind;
 import 'term_tabs_logic.dart';
 import 'theme.dart';
@@ -16,8 +18,11 @@ import 'window_parts.dart' show BoxInput;
 Widget Function(WebTab tab)? debugWebPage;
 
 class TermTabs extends StatefulWidget {
-  const TermTabs({super.key, required this.workerId, required this.terminal, required this.focusTerm});
+  const TermTabs({super.key, required this.workerId, required this.terminal, required this.focusTerm, this.floor});
   final String workerId;
+
+  /// The floor the worker is on, for its files (no "+ File" without it).
+  final String? floor;
   final Widget terminal;
 
   /// Back on the terminal's tab.
@@ -31,6 +36,7 @@ class _TermTabsState extends State<TermTabs> {
   late final List<WebTab> _tabs = tabsByWorker.putIfAbsent(widget.workerId, () => []);
   String _active = 'main';
   bool _adding = false;
+  bool _picking = false;
   final _name = TextEditingController();
   final _url = TextEditingController();
 
@@ -59,6 +65,14 @@ class _TermTabsState extends State<TermTabs> {
     _name.clear();
     _url.clear();
   });
+
+  void _openFile(String path) {
+    final open = _tabs.where((t) => t.file == path).firstOrNull;
+    final tab = open ?? newFileTab(path);
+    if (open == null) _tabs.add(tab);
+    setState(() => _picking = false);
+    _show(tab.id);
+  }
 
   void _add() {
     final r = newWebTab(_name.text, _url.text, officeOrigin: serverOrigin);
@@ -125,14 +139,14 @@ class _TermTabsState extends State<TermTabs> {
           for (final t in _tabs)
             _tab(
               t.id,
-              '🌐 ${clip(t.title, 18)}',
-              tooltip: t.url,
+              '${t.file != null ? '📄' : '🌐'} ${clip(t.title, 18)}',
+              tooltip: t.file ?? t.url,
               onClose: () => _close(t),
               closeLabel: 'Close ${t.title} tab',
             ),
           // Plenty of sites won't show inside another page (chatgpt.com doesn't): this opens the one
           // showing in a tab of its own.
-          if (shown != null)
+          if (shown != null && shown.file == null)
             Tooltip(
               message: "Open this page in a browser tab of its own (for a site that won't show here)",
               child: InkWell(
@@ -155,8 +169,20 @@ class _TermTabsState extends State<TermTabs> {
                   child: Text('+ Web page', style: dim),
                 ),
               ),
-            )
-          else ...[
+            ),
+          if (!_adding && widget.floor != null)
+            Tooltip(
+              message: "Open one of the worker's .md or .txt files beside this terminal",
+              child: InkWell(
+                key: const ValueKey('term-tab-file'),
+                onTap: () => setState(() => _picking = !_picking),
+                child: Padding(
+                  padding: const EdgeInsets.all(4),
+                  child: Text('+ File', style: dim),
+                ),
+              ),
+            ),
+          if (_adding) ...[
             SizedBox(
               width: 180,
               child: Semantics(
@@ -200,14 +226,34 @@ class _TermTabsState extends State<TermTabs> {
       children: [
         _bar(),
         Expanded(
-          // Every page stays loaded while another shows, and the terminal keeps running.
-          child: IndexedStack(
-            index: at,
-            sizing: StackFit.expand,
+          child: Stack(
+            fit: StackFit.expand,
             children: [
-              widget.terminal,
-              for (final t in _tabs)
-                KeyedSubtree(key: ValueKey(t.id), child: debugWebPage?.call(t) ?? page.webPageView(t.url, t.title)),
+              // Every page stays loaded while another shows, and the terminal keeps running.
+              IndexedStack(
+                index: at,
+                sizing: StackFit.expand,
+                children: [
+                  widget.terminal,
+                  for (final t in _tabs)
+                    KeyedSubtree(
+                      key: ValueKey(t.id),
+                      child: t.file != null && widget.floor != null
+                          ? WorkerFileView(floor: widget.floor!, worker: widget.workerId, path: t.file!)
+                          : debugWebPage?.call(t) ?? page.webPageView(t.url, t.title),
+                    ),
+                ],
+              ),
+              if (_picking && widget.floor != null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(0, 0, 6, 6),
+                  child: WorkerFilePicker(
+                    floor: widget.floor!,
+                    worker: widget.workerId,
+                    onPick: _openFile,
+                    onClose: () => setState(() => _picking = false),
+                  ),
+                ),
             ],
           ),
         ),

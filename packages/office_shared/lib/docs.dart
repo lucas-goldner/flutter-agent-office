@@ -63,6 +63,11 @@ final RegExp _dotPart = RegExp(r'(^|/)\.\.?(/|$)');
 /// A file the bookshelf shows: Markdown, by its extension.
 bool isDocPath(String p) => _docExt.hasMatch(p) && !_dotPart.hasMatch(p);
 
+final RegExp _textExt = RegExp(r'\.(md|markdown|txt)$', caseSensitive: false);
+
+/// A file a worker's 📄 File tab opens: Markdown or plain text, by its extension.
+bool isTextFilePath(String p) => _textExt.hasMatch(p) && !_dotPart.hasMatch(p);
+
 final RegExp _scheme = RegExp(r'^[a-z][a-z0-9+.-]*:', caseSensitive: false);
 final RegExp _query = RegExp(r'\?.*$');
 

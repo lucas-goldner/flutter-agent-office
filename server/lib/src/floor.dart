@@ -342,6 +342,13 @@ class Floor {
   /// The bookshelf: the project's Markdown files.
   late final Docs docs = Docs(dir);
 
+  /// The Markdown and text files in each worker's folder, for its terminal's 📄 File tab.
+  final Map<String, Docs> _workerFiles = {};
+  Docs? workerFiles(String id) {
+    final cwd = workers.cwdOf(id);
+    return cwd == null ? null : _workerFiles.putIfAbsent(cwd, () => Docs(cwd, text: true));
+  }
+
   /// The whiteboard everyone on the floor draws on together.
   late final Whiteboard whiteboard;
 

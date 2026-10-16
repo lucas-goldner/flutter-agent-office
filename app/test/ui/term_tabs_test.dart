@@ -1,6 +1,8 @@
 // Terminal tabs (#212): a web page pinned open beside a worker's terminal, kept per worker until the page
 // reloads.
 
+import 'package:agent_office/net/api.dart';
+import 'package:agent_office/ui/file_tab.dart';
 import 'package:agent_office/ui/modal.dart';
 import 'package:agent_office/ui/term_tabs.dart';
 import 'package:agent_office/ui/term_tabs_logic.dart';
@@ -60,5 +62,62 @@ void main() {
     expect(find.text('🌐 Docs'), findsNothing);
     expect(tabsByWorker['w1'], isEmpty);
     await tester.pump(const Duration(seconds: 4));
+  });
+
+  testWidgets("+ File: the worker's .md and .txt files, newest first; one opens in a 📄 tab", (tester) async {
+    tabsByWorker.clear();
+    final asked = <String>[];
+    workerFilesGet = (path) async {
+      asked.add(path);
+      if (path.startsWith('/api/worker/files')) {
+        return ApiResult(200, {
+          'files': [
+            {'path': 'docs/old.md', 'size': 3, 'mtime': 1},
+            {'path': 'notes/profile.md', 'title': 'Profile ideas', 'size': 3, 'mtime': 9},
+            {'path': 'out.txt', 'size': 3, 'mtime': 5},
+          ],
+        });
+      }
+      final file = Uri.parse(path).queryParameters['path'];
+      return ApiResult(200, {'path': file, 'text': file == 'out.txt' ? 'plain words' : '# Profile ideas\n\nTier 1'});
+    };
+    addTearDown(() => workerFilesGet = Api.getJson);
+    final office = Office()..welcome();
+    office.store.apply(ServerMsg.parse({'t': 'worker.update', 'worker': workerJson('w1')}));
+    await office.pump(tester, const SizedBox());
+    openTerminal(office.scope(), 'w1');
+    await tester.pump();
+
+    await tester.tap(find.byKey(const ValueKey('term-tab-file')));
+    await tester.pumpAndSettle();
+    expect(asked.single, contains('worker=w1'));
+    final names = [
+      for (final w in tester.widgetList<InkWell>(
+        find.byWidgetPredicate(
+          (w) =>
+              w.key is ValueKey<String> &&
+              (w.key as ValueKey<String>).value.startsWith('file-pick-') &&
+              w is InkWell,
+        ),
+      ))
+        (w.key as ValueKey<String>).value,
+    ];
+    expect(names, ['file-pick-notes/profile.md', 'file-pick-out.txt', 'file-pick-docs/old.md']);
+
+    await tester.tap(find.byKey(const ValueKey('file-pick-notes/profile.md')));
+    await tester.pumpAndSettle();
+    expect(find.text('📄 profile.md'), findsOneWidget);
+    expect(find.text('Profile ideas'), findsOneWidget, reason: 'the Markdown drawn');
+    expect(find.byKey(const ValueKey('file-pick-filter')), findsNothing, reason: 'the picker closes');
+
+    await tester.tap(find.byKey(const ValueKey('term-tab-file')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('file-pick-out.txt')));
+    await tester.pumpAndSettle();
+    expect(find.text('plain words'), findsOneWidget);
+    expect(tabsByWorker['w1']!.map((t) => t.file), ['notes/profile.md', 'out.txt']);
+
+    ModalStack.instance.closeAll();
+    await tester.pump(const Duration(seconds: 5));
   });
 }

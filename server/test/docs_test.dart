@@ -81,6 +81,18 @@ void main() {
     expect(await docs.picture('up/outside.md'), isA<ImageError>());
   });
 
+  test("a worker's 📄 File tab: Markdown and text files, and only those", () async {
+    final (:root, :dir, docs: _) = fixture(git: true);
+    File(p.join(dir, 'out.txt')).writeAsStringSync('plain words\n');
+    final files = Docs(dir, text: true);
+    expect((await files.list()).files.map((f) => f.path), containsAll(['out.txt', 'README.md']));
+    final r = await files.read('out.txt');
+    expect((r as DocFound).doc.text, 'plain words\n');
+    expect(await files.read('src/index.ts'), isA<DocFailed>());
+    expect(await files.read('../outside.md'), isA<DocFailed>());
+    expect(await Docs(dir).read('out.txt'), isA<DocFailed>(), reason: 'the bookshelf is Markdown only');
+  });
+
   test('a doc is titled by its front matter, else its first heading, whatever the style', () {
     expect(docTitle('# Hello *world*\n'), 'Hello world');
     expect(docTitle('<p align="center"><img src="x.png"></p>\n<h1 align="center">Office</h1>\n'), 'Office');

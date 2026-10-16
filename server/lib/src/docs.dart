@@ -45,9 +45,9 @@ class DocFailed extends DocResult {
   final String error;
 }
 
-/// The paths git lists, or null when the folder isn't in a git checkout (or there's no git).
-Future<List<String>?> _gitDocs(String dir) async {
-  const args = [
+/// The paths git lists, or null when the folder isn't in a git checkout (or there's no git). [text]: .txt too.
+Future<List<String>?> _gitDocs(String dir, {bool text = false}) async {
+  final args = [
     'ls-files',
     '-z',
     '--cached',
@@ -56,6 +56,7 @@ Future<List<String>?> _gitDocs(String dir) async {
     '--',
     ':(icase)*.md',
     ':(icase)*.markdown',
+    if (text) ':(icase)*.txt',
   ];
   try {
     final r = await Process.run(
@@ -73,7 +74,7 @@ Future<List<String>?> _gitDocs(String dir) async {
 }
 
 /// Without git: the Markdown under [dir], not following links or going into hidden or build folders.
-Future<List<String>> _walkDocs(String dir) async {
+Future<List<String>> _walkDocs(String dir, bool Function(String) wanted) async {
   final out = <String>[];
   final queue = <(String, int)>[('', 0)];
   while (queue.isNotEmpty && out.length <= _maxDocs) {
@@ -89,7 +90,7 @@ Future<List<String>> _walkDocs(String dir) async {
       final path = rel.isEmpty ? name : '$rel/$name';
       if (e is Directory) {
         if (depth < _maxDepth && !name.startsWith('.') && !_skipDirs.contains(name)) queue.add((path, depth + 1));
-      } else if (e is File && isDocPath(path)) {
+      } else if (e is File && wanted(path)) {
         out.add(path);
       }
     }
@@ -162,9 +163,13 @@ int _localeCompare(String a, String b) {
 
 /// A floor's bookshelf: its project's Markdown files, and what's in them.
 class Docs {
-  Docs(this._dir);
+  Docs(this._dir, {this.text = false});
 
   final String _dir;
+
+  /// Plain text files (.txt) as well as Markdown: a worker's 📄 File tab, rather than the bookshelf.
+  final bool text;
+  bool _wanted(String path) => text ? isTextFilePath(path) : isDocPath(path);
   ({int at, DocList list})? _last;
   Future<DocList>? _listing;
 
@@ -180,8 +185,8 @@ class Docs {
 
   Future<DocList> _scan() async {
     final found =
-        ((await _gitDocs(_dir)) ?? (await _walkDocs(_dir)))
-            .where(isDocPath)
+        ((await _gitDocs(_dir, text: text)) ?? (await _walkDocs(_dir, _wanted)))
+            .where(_wanted)
             .map((f) => f.split(p.separator).join('/'))
             .toList()
           ..sort(_localeCompare);
@@ -219,7 +224,12 @@ class Docs {
 
   /// One doc's Markdown. Only Markdown, and only inside the project (not through a link out of it).
   Future<DocResult> read(String file) async {
-    if (!isDocPath(file)) return const DocFailed(415, 'Only Markdown files are on the bookshelf');
+    if (!_wanted(file)) {
+      return DocFailed(
+        415,
+        text ? 'Only Markdown and text files open here' : 'Only Markdown files are on the bookshelf',
+      );
+    }
     final abs = await insideCheckout(_dir, file);
     if (abs == null) return const DocFailed(404, 'That file is not in the project');
     try {

@@ -1425,6 +1425,19 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         await floor.changes.file(workerId, file, old: side == 'old', repo: _repoOf(_query(url, 'repo'))),
       );
     }
+    if ((path == '/api/worker/files' || path == '/api/worker/file') && method == Method.get) {
+      // A worker's Markdown and text files, for the 📄 File tab on its terminal: the list, or one to read.
+      if (floor == null) return _send(404, {'error': 'No such floor'});
+      final files = floor.workerFiles(_str(_query(url, 'worker'), 32));
+      if (files == null) return _send(404, {'error': 'No such worker'});
+      if (path == '/api/worker/files') return _send(200, (await files.list()).toJson(), {'cache-control': 'no-store'});
+      final file = _str(_query(url, 'path'), 4096);
+      if (file.isEmpty) return _send(400, {'error': 'Bad request'});
+      return switch (await files.read(file)) {
+        DocFound(:final doc) => _send(200, doc.toJson(), {'cache-control': 'no-store'}),
+        DocFailed(:final status, :final error) => _send(status, {'error': error}),
+      };
+    }
     if (path.startsWith('/api/docs') && method == Method.get) {
       // The bookshelf: the project's Markdown files, one to read, and the pictures in it (see docs.dart).
       if (floor == null) return _send(404, {'error': 'No such floor'});
