@@ -182,10 +182,51 @@ class PromptsAgent extends AgentChoice {
   Map<String, dynamic> toJson() => {...super.toJson(), 'by': by, 'at': at};
 }
 
+/// A worker kept to hire again from the Hire dialog: a name, what it's asked first (a skill, say) and
+/// what it runs on. Anyone in the office can add, change and remove them.
+class WorkerTemplate implements JsonObject {
+  const WorkerTemplate({required this.id, required this.name, this.prompt = '', this.agent, this.worktree = false});
+
+  factory WorkerTemplate.fromJson(Map<String, dynamic> j) => WorkerTemplate(
+    id: asString(j['id']),
+    name: asString(j['name']),
+    prompt: asString(j['prompt']),
+    agent: _obj(j['agent'], AgentChoice.fromJson),
+    worktree: asBool(j['worktree']),
+  );
+
+  final String id;
+
+  /// The worker's name when it's hired (another's taken: a number after it).
+  final String name;
+
+  /// Its first task, e.g. "/write-log-design"; empty: it starts idle.
+  final String prompt;
+
+  /// What it runs on; unset: the office's default worker.
+  final AgentChoice? agent;
+
+  /// In a git worktree and branch of its own.
+  final bool worktree;
+
+  @override
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'name': name,
+    if (prompt.isNotEmpty) 'prompt': prompt,
+    'agent': ?agent?.toJson(),
+    if (worktree) 'worktree': true,
+  };
+}
+
+/// How many worker templates the office keeps, and how long a name is.
+const workerTemplatesMax = 40;
+const workerTemplateNameMax = 24;
+
 /// The prompts the office writes for workers by itself (prompts.dart) and the worker everyone
-/// starts on, as set in ⚙️ Settings: the same on every floor.
+/// starts on, as set in ⚙️ Settings: the same on every floor. And the worker templates.
 class PromptsState implements JsonObject {
-  const PromptsState({this.custom = const {}, this.agent});
+  const PromptsState({this.custom = const {}, this.agent, this.templates = const []});
 
   factory PromptsState.fromJson(Map<String, dynamic> j) => PromptsState(
     custom: {
@@ -193,7 +234,11 @@ class PromptsState implements JsonObject {
         if (e.value is Map) e.key: PromptCustom.fromJson(asMap(e.value)),
     },
     agent: _obj(j['agent'], PromptsAgent.fromJson),
+    templates: asList(j['templates'], WorkerTemplate.fromJson),
   );
+
+  /// Workers to hire again from the Hire dialog (see [WorkerTemplate]).
+  final List<WorkerTemplate> templates;
 
   /// Prompts someone rewrote, by id (a PromptId, see prompts.dart); the rest are the defaults.
   final Map<String, PromptCustom> custom;
@@ -206,6 +251,7 @@ class PromptsState implements JsonObject {
   Map<String, dynamic> toJson() => {
     'custom': {for (final e in custom.entries) e.key: e.value.toJson()},
     'agent': ?agent?.toJson(),
+    if (templates.isNotEmpty) 'templates': [for (final t in templates) t.toJson()],
   };
 }
 
@@ -3802,6 +3848,7 @@ ClientMsg _parseClient(Map<String, dynamic> j) {
       issue: asIntOrNull(j['issue']),
       repos: asStringListOrNull(j['repos']),
       via: so('via'),
+      name: so('name'),
     ),
     'worker.resume' => WorkerResumeCmd(workerId),
     'worker.kill' => WorkerKillCmd(
@@ -3929,6 +3976,7 @@ ClientMsg _parseClient(Map<String, dynamic> j) {
     'floor.projectsDir' => FloorProjectsDirCmd(s('dir')),
     'prompts.set' => PromptsSetCmd(s('id'), so('text')),
     'prompts.agent' => PromptsAgentCmd(_obj(j['choice'], AgentChoice.fromJson)),
+    'prompts.templates' => PromptsTemplatesCmd(asList(j['templates'], WorkerTemplate.fromJson)),
     'ball.take' => const BallTakeCmd(),
     'ball.throw' => BallThrowCmd(
       x: asDouble(j['x']),
@@ -4093,6 +4141,7 @@ class WorkerSpawnCmd extends ClientMsg {
     this.issue,
     this.repos,
     this.via,
+    this.name,
   });
   final String deskId;
   final String? prompt;
@@ -4112,6 +4161,9 @@ class WorkerSpawnCmd extends ClientMsg {
 
   /// 'herald': sent out by a map's herald.
   final String? via;
+
+  /// The name to give it (a worker template's), instead of the next free one.
+  final String? name;
   @override
   String get t => 'worker.spawn';
   @override
@@ -4126,6 +4178,7 @@ class WorkerSpawnCmd extends ClientMsg {
     'issue': ?issue,
     'repos': ?repos,
     'via': ?via,
+    'name': ?name,
   };
 }
 
@@ -5016,6 +5069,18 @@ class PromptsAgentCmd extends ClientMsg {
   /// `choice` is always sent, as null to go back to --agent.
   @override
   Map<String, dynamic> get fields => {'choice': choice?.toJson()};
+}
+
+/// The office's worker templates, all of them, as edited in the Hire dialog.
+class PromptsTemplatesCmd extends ClientMsg {
+  const PromptsTemplatesCmd(this.templates);
+  final List<WorkerTemplate> templates;
+  @override
+  String get t => 'prompts.templates';
+  @override
+  Map<String, dynamic> get fields => {
+    'templates': [for (final t in templates) t.toJson()],
+  };
 }
 
 /// Pick up the floor's basketball (or catch it): yours if nobody else has it.

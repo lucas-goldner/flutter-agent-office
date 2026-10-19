@@ -37,8 +37,57 @@ class OfficePrompts implements PromptSource {
   final String _path;
   final Map<PromptId, PromptCustom> _custom = {};
   PromptsAgent? _agent;
+  List<WorkerTemplate> _templates = const [];
 
-  PromptsState state() => PromptsState(custom: Map.of(_custom), agent: _agent);
+  PromptsState state() => PromptsState(custom: Map.of(_custom), agent: _agent, templates: _templates);
+
+  /// Replaces the worker templates with [raw] (as it came off the wire). Returns why not, if not.
+  String? setTemplates(List<Object?> raw, String by) {
+    if (raw.length > workerTemplatesMax) return 'The office keeps $workerTemplatesMax worker templates at most';
+    final out = <WorkerTemplate>[];
+    final ids = <String>{};
+    for (final t in raw) {
+      if (t is! Map) return 'That isn’t a worker template';
+      final r = _template(t);
+      if (r.error != null) return r.error;
+      final tpl = r.template!;
+      if (!ids.add(tpl.id)) return 'Two worker templates have the same id';
+      out.add(tpl);
+    }
+    _templates = out;
+    _changed();
+    return null;
+  }
+
+  ({WorkerTemplate? template, String? error}) _template(Map<Object?, Object?> t) {
+    final id = t['id'] is String ? (t['id'] as String).trim() : '';
+    if (id.isEmpty || id.length > 40) return (template: null, error: 'A worker template needs an id');
+    final name = t['name'] is String ? (t['name'] as String).replaceAll(RegExp(r'\s+'), ' ').trim() : '';
+    if (name.isEmpty) return (template: null, error: 'A worker template needs a name');
+    if (name.runes.length > workerTemplateNameMax) {
+      return (template: null, error: 'A worker’s name can be $workerTemplateNameMax characters at most');
+    }
+    final prompt = t['prompt'] is String ? (t['prompt'] as String).replaceAll(RegExp(r'\r\n?'), '\n').trim() : '';
+    if (prompt.length > promptMax) {
+      return (template: null, error: 'A first task can be ${_thousands(promptMax)} characters at most');
+    }
+    AgentChoice? agent;
+    final a = t['agent'];
+    if (a is Map) {
+      final model = a['model'] is String && (a['model'] as String).isNotEmpty ? a['model'] as String : null;
+      final why = _problem(a['provider'], model, a['effort']);
+      if (why != null) return (template: null, error: '“$name”: $why');
+      agent = AgentChoice(
+        provider: AgentProvider.parse(a['provider']),
+        model: model,
+        effort: AgentEffort.tryParse(a['effort']),
+      );
+    }
+    return (
+      template: WorkerTemplate(id: id, name: name, prompt: prompt, agent: agent, worktree: t['worktree'] == true),
+      error: null,
+    );
+  }
 
   @override
   String text(PromptId id) => promptText(_custom, id);
@@ -125,6 +174,14 @@ class OfficePrompts implements PromptSource {
         );
       }
     }
+    final tpls = raw['templates'];
+    if (tpls is List) {
+      // One that no longer checks out (its provider's gone, say) is dropped, not the lot.
+      _templates = [
+        for (final t in tpls.take(workerTemplatesMax))
+          if (t is Map) ?_template(t).template,
+      ];
+    }
     final a = raw['agent'];
     if (a is Map) {
       final provider = AgentProvider.tryParse(a['provider']);
@@ -152,6 +209,7 @@ class OfficePrompts implements PromptSource {
         const JsonEncoder.withIndent('  ').convert({
           'custom': {for (final e in _custom.entries) e.key: e.value.toJson()},
           'agent': ?_agent?.toJson(),
+          if (_templates.isNotEmpty) 'templates': [for (final t in _templates) t.toJson()],
         }),
       );
       chmodSync(tmp, 0x180); // 0600

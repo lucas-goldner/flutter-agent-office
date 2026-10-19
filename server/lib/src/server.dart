@@ -2195,6 +2195,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
             repos,
             c.accountId,
             msg['via'] == 'herald' ? 'herald' : null,
+            msg['name'] is String ? _str(msg['name'], 200) : null,
           );
           final across = repos.isNotEmpty ? ' across ${[floor.def.name, ...repos.map((x) => x.name)].join(' + ')}' : '';
           final w = r.worker;
@@ -2448,6 +2449,12 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         } else if (custom) {
           toastAll('📝 $who put the default “$label” prompt back');
         }
+      case 'prompts.templates':
+        // Anyone can keep workers to hire again: they're only a name, a first task and what it runs on.
+        final raw = msg['templates'];
+        if (raw is! List) return;
+        final err = officePrompts.setTemplates(raw, who);
+        if (err != null) return warn(c, err);
       case 'prompts.agent':
         if (!meOf(c.accountId).admin) return warn(c, 'Only admins can pick the office’s default worker');
         final ch = msg['choice'];

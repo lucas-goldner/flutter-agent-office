@@ -31,6 +31,64 @@ class _Source implements PromptSource {
 List<Object?> choice(AgentChoice? c) => [c?.provider, c?.model, c?.effort];
 
 void main() {
+  test('worker templates: checked, kept across a restart, and replaced whole', () {
+    final dir = scratch();
+    final told = <PromptsState>[];
+    final book = OfficePrompts(dir, claudeOffice, told.add);
+    expect(
+      book.setTemplates([
+        {'id': 't1', 'name': '  Log   Designer ', 'prompt': '/write-log-design\r\n', 'worktree': true},
+        {
+          'id': 't2',
+          'name': 'Reviewer',
+          'agent': {'provider': 'claude', 'model': 'opus'},
+        },
+      ], 'Ada'),
+      isNull,
+    );
+    final kept = book.state().templates;
+    expect(
+      [for (final t in kept) (t.name, t.prompt, t.worktree)],
+      [('Log Designer', '/write-log-design', true), ('Reviewer', '', false)],
+    );
+    expect(kept[1].agent?.model, 'opus');
+    expect(told.last.templates, hasLength(2));
+    expect(OfficePrompts(dir, claudeOffice, (_) {}).state().templates.map((t) => t.name), ['Log Designer', 'Reviewer']);
+
+    expect(
+      book.setTemplates([
+        {'id': 't1', 'name': ' '},
+      ], 'Ada'),
+      contains('needs a name'),
+    );
+    expect(
+      book.setTemplates([
+        {'id': 't1', 'name': 'x' * 25},
+      ], 'Ada'),
+      contains('at most'),
+    );
+    expect(
+      book.setTemplates([
+        {'id': 't1', 'name': 'A'},
+        {'id': 't1', 'name': 'B'},
+      ], 'Ada'),
+      contains('same id'),
+    );
+    expect(
+      book.setTemplates([
+        {
+          'id': 't1',
+          'name': 'A',
+          'agent': {'provider': 'custom'},
+        },
+      ], 'Ada'),
+      contains('Unknown agent provider'),
+    );
+    expect(book.state().templates, hasLength(2), reason: 'a refused list changes nothing');
+    expect(book.setTemplates([], 'Ada'), isNull);
+    expect(book.state().templates, isEmpty);
+  });
+
   test('a rewritten prompt is kept, used, and put back to the default', () {
     final dir = scratch();
     final told = <PromptsState>[];

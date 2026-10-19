@@ -498,6 +498,7 @@ class WorkerManager implements QueueWorkers {
     List<RepoSource> repos = const [],
     String? owner,
     String? via,
+    String? asked,
   ]) {
     ({WorkerInfo? worker, String? error}) fail(String error) => (worker: null, error: error);
     // Nobody picked (a board agent, say): the office's default worker, model and effort included.
@@ -558,13 +559,23 @@ class WorkerManager implements QueueWorkers {
     if (full != null) return fail(full);
     final used = {for (final w in _workers.values) w.info.name.replaceFirst(RegExp(r' 🐚$'), '')};
     final agent = station != null ? stationAgent[station] : null;
-    final name =
-        agent?.name ?? _names.firstWhere((n) => !used.contains(n), orElse: () => 'Worker ${_workers.length + 1}');
+    // [asked]: a worker template's name, with a number after it while another has it.
+    final want = asked == null ? '' : workerNameOf(asked);
+    var name =
+        agent?.name ??
+        (want.isNotEmpty
+            ? want
+            : _names.firstWhere((n) => !used.contains(n), orElse: () => 'Worker ${_workers.length + 1}'));
+    if (agent == null && want.isNotEmpty) {
+      for (var n = 2; used.contains(name); n++) {
+        name = '$want $n';
+      }
+    }
     final id = _randomHex(6);
     WorkerWorktree? wt = meeting?.worktree;
     List<WorkerRepo>? others;
     if (worktree) {
-      final slug = '${name.toLowerCase()}-${id.substring(0, 4)}';
+      final slug = '${branchSlug(name)}-${id.substring(0, 4)}';
       if (repos.isNotEmpty) {
         final made = _makeWorkspace(slug, repos);
         if (made.error != null) return fail(made.error!);
@@ -1997,4 +2008,18 @@ bool _safeEq(String a, String b) {
     r |= a.codeUnitAt(i) ^ b.codeUnitAt(i);
   }
   return r == 0;
+}
+
+/// A worker's name as asked for (a worker template's): one line, no 🐚, at most workerTemplateNameMax.
+String workerNameOf(String asked) {
+  final one = asked.replaceAll(RegExp(r'\s+'), ' ').replaceAll('🐚', '').trim();
+  final runes = one.runes.toList();
+  return runes.length > workerTemplateNameMax ? String.fromCharCodes(runes.take(workerTemplateNameMax)).trim() : one;
+}
+
+/// A name as a branch and folder name: lower case letters, digits and dashes ("worker" if nothing's left,
+/// a Japanese name say).
+String branchSlug(String name) {
+  final s = name.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-').replaceAll(RegExp(r'^-+|-+$'), '');
+  return s.isEmpty ? 'worker' : (s.length > 24 ? s.substring(0, 24).replaceAll(RegExp(r'-+$'), '') : s);
 }

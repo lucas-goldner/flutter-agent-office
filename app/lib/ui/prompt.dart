@@ -18,6 +18,7 @@ import 'provider.dart';
 import 'repos.dart';
 import 'theme.dart';
 import 'window_parts.dart' show StatusBox, StatusKind;
+import 'worker_templates.dart';
 
 /// What came with the text: the worktree box and the provider picker, when they were offered.
 /// [repos]: other floors' ids it works in too, each in a worktree of its own (see WorkerInfo.repos).
@@ -27,6 +28,8 @@ typedef PromptChoice = ({
   String? model,
   AgentEffort? effort,
   List<String> repos,
+  // The worker template it was filled in from: the worker is hired under its name.
+  String? name,
 });
 
 class PromptOptions {
@@ -43,6 +46,8 @@ class PromptOptions {
     this.project,
     this.office,
     this.repoOptions = const [],
+    this.templates,
+    this.onTemplates,
     required this.onSubmit,
   });
 
@@ -70,6 +75,10 @@ class PromptOptions {
 
   /// Other floors' projects a new worker in its own worktree can work in too (see WorkerInfo.repos).
   final List<FloorChoice> repoOptions;
+
+  /// The office's worker templates, offered over the prompt (hiring only); [onTemplates] keeps them changed.
+  final List<WorkerTemplate>? templates;
+  final ValueChanged<List<WorkerTemplate>>? onTemplates;
   final void Function(String text, PromptChoice opts) onSubmit;
 }
 
@@ -97,6 +106,71 @@ class _PromptWindowState extends State<_PromptWindow> {
   late final ProviderPickerController? _provider = widget.opts.providerOption
       ? ProviderPickerController(widget.opts.project, office: widget.opts.office)
       : null;
+  late List<WorkerTemplate> _templates = widget.opts.templates ?? const [];
+  WorkerTemplate? _picked;
+
+  /// Fills the dialog in from [t] (none: leaves it, but it's no longer that template's).
+  void _pick(WorkerTemplate? t) {
+    setState(() => _picked = t);
+    if (t == null) return;
+    _text.text = t.prompt;
+    _text.selection = TextSelection.collapsed(offset: _text.text.length);
+    if (widget.opts.worktreeOption) setState(() => _worktree = t.worktree);
+    final p = _provider;
+    if (p != null) {
+      final a = t.agent;
+      if (a != null) {
+        if (!p.editing) p.toggleEdit();
+        p.set(a);
+      } else if (p.editing) {
+        p.toggleEdit();
+      }
+    }
+    _focus.requestFocus();
+  }
+
+  void _keep(List<WorkerTemplate> list) {
+    setState(() => _templates = list);
+    widget.opts.onTemplates?.call(list);
+  }
+
+  void _editTemplate(WorkerTemplate t, {bool isNew = false}) {
+    final o = widget.opts;
+    openTemplateEditor(
+      template: t,
+      project: o.project,
+      office: o.office,
+      worktreeOption: o.worktreeOption,
+      onSave: (saved) {
+        _keep(putTemplate(_templates, saved));
+        if (isNew || _picked?.id == saved.id) _pick(saved);
+      },
+      onDelete: isNew
+          ? null
+          : () {
+              _keep([
+                for (final x in _templates)
+                  if (x.id != t.id) x,
+              ]);
+              if (_picked?.id == t.id) setState(() => _picked = null);
+            },
+    );
+  }
+
+  /// ＋ Save as template: what's in the dialog now, to name.
+  void _saveAsTemplate() {
+    final p = _provider;
+    _editTemplate(
+      WorkerTemplate(
+        id: newTemplateId(),
+        name: '',
+        prompt: _text.text.trim(),
+        agent: p != null && p.editing ? p.choice() : null,
+        worktree: widget.opts.worktreeOption && _worktree,
+      ),
+      isNew: true,
+    );
+  }
 
   @override
   void initState() {
@@ -130,6 +204,7 @@ class _PromptWindowState extends State<_PromptWindow> {
       provider: p?.value(),
       model: p?.model(),
       effort: p?.effort(),
+      name: _picked?.name,
       repos: worktree
           ? [
               for (final r in o.repoOptions)
@@ -164,6 +239,14 @@ class _PromptWindowState extends State<_PromptWindow> {
                 o.subtitle!,
                 style: heavy(14, color: Swatch.muted, weight: FontWeight.w700),
               ),
+            ),
+          if (o.templates != null)
+            WorkerTemplateBar(
+              templates: _templates,
+              picked: _picked?.id,
+              onPick: _pick,
+              onEdit: _editTemplate,
+              onAdd: _saveAsTemplate,
             ),
           PromptField(
             controller: _text,

@@ -2661,6 +2661,7 @@ class OfficeController implements OfficeActions {
     AgentEffort? effort,
     int? issue,
     List<String> repos = const [],
+    String? name,
   }) {
     net.send(
       WorkerSpawnCmd(
@@ -2672,6 +2673,7 @@ class OfficeController implements OfficeActions {
         effort: effort,
         issue: issue,
         repos: repos.isEmpty ? null : repos,
+        name: name,
       ),
     );
     // The moment notifications start to matter: ask once (it has to come from a key press or click).
@@ -2698,6 +2700,8 @@ class OfficeController implements OfficeActions {
           office: store.prompts.agent,
           warning: pressureNote(store.machine),
           repoOptions: repoChoices(store),
+          templates: store.prompts.templates,
+          onTemplates: (list) => net.send(PromptsTemplatesCmd(list)),
           onSubmit: (text, o) => hire(
             deskId,
             prompt: text,
@@ -2706,6 +2710,7 @@ class OfficeController implements OfficeActions {
             model: o.model,
             effort: o.effort,
             repos: o.repos,
+            name: o.name,
           ),
         ),
       );
@@ -2751,6 +2756,8 @@ class OfficeController implements OfficeActions {
         office: store.prompts.agent,
         warning: pressureNote(store.machine),
         repoOptions: repoChoices(store),
+        templates: store.prompts.templates,
+        onTemplates: (list) => net.send(PromptsTemplatesCmd(list)),
         onSubmit: (text, o) => hire(
           deskId,
           prompt: text.isEmpty ? null : text,
@@ -2759,6 +2766,7 @@ class OfficeController implements OfficeActions {
           model: o.model,
           effort: o.effort,
           repos: o.repos,
+          name: o.name,
         ),
       ),
     );
