@@ -13,6 +13,13 @@ DroppedFile file(String name, {String type = 'image/png', int size = 3}) =>
     DroppedFile(name: name, type: type, size: size, bytes: () async => Uint8List.fromList([1, 2, 3]));
 
 void main() {
+  test('a paste is its files when it has no text, or only their names (copied in Finder)', () {
+    expect(pastedAsFiles('', ['shot.png']), isTrue);
+    expect(pastedAsFiles('shot.png', ['shot.png']), isTrue);
+    expect(pastedAsFiles('/Users/me/Desktop/a.pdf\nb.png', ['a.pdf', 'b.png']), isTrue);
+    expect(pastedAsFiles('look at this', ['shot.png']), isFalse, reason: 'text with a picture: the text');
+  });
+
   test('each file goes up with its floor, worker, name and type; the paths come back typed for a shell', () async {
     final sent = <(String, List<int>, String)>[];
     Future<ApiResult> post(String path, List<int> bytes, String type) async {

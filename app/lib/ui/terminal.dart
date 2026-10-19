@@ -538,14 +538,18 @@ class _TerminalWindowState extends State<_TerminalWindow> {
     if ((ctrl || meta) && e.logicalKey == LogicalKeyboardKey.keyV) {
       // Leave Ctrl+V / Cmd+V to the browser, whose paste event interceptPaste turns into a (bracketed) paste.
       if (kIsWeb) return KeyEventResult.skipRemainingHandlers;
-      // The desktop app has no paste event: read the clipboard ourselves.
-      Clipboard.getData(Clipboard.kTextPlain).then((d) {
-        final text = d?.text ?? '';
+      // The desktop app has no paste event: read the clipboard ourselves. Files copied in Finder or a
+      // picture go up like a dropped file; otherwise it's the text.
+      () async {
+        final files = await clipboardFiles();
+        if (!mounted) return;
+        if (files.isNotEmpty) return _insertFiles(files);
+        final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text ?? '';
         if (text.isEmpty || !mounted) return;
         _sayTyping();
         _sendSize(typing: true);
         _term.paste(text);
-      });
+      }();
       return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;

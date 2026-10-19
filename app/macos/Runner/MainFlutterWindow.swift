@@ -3,6 +3,7 @@ import FlutterMacOS
 
 class MainFlutterWindow: NSWindow {
   private var pointerLock: PointerLock?
+  private var clipboardFiles: ClipboardFiles?
 
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
@@ -18,6 +19,7 @@ class MainFlutterWindow: NSWindow {
 
     RegisterGeneratedPlugins(registry: flutterViewController)
     pointerLock = PointerLock(messenger: flutterViewController.engine.binaryMessenger, window: self)
+    clipboardFiles = ClipboardFiles(messenger: flutterViewController.engine.binaryMessenger)
 
     super.awakeFromNib()
   }
@@ -83,4 +85,48 @@ final class PointerLock: NSObject {
   }
 
   @objc private func letGo() { unlock() }
+}
+
+/// Files and pictures on the clipboard, for ⌘V in a worker's terminal (lib/interop/drops_stub.dart):
+/// files copied in Finder, else a picture (a screenshot, or "Copy Image"), as PNG. Each comes back as
+/// [name, type, bytes]; nothing when the clipboard only has text.
+final class ClipboardFiles: NSObject {
+  private let channel: FlutterMethodChannel
+  private static let maxBytes = 50 * 1024 * 1024
+
+  init(messenger: FlutterBinaryMessenger) {
+    channel = FlutterMethodChannel(name: "agent_office/clipboard", binaryMessenger: messenger)
+    super.init()
+    channel.setMethodCallHandler { call, result in
+      guard call.method == "files" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      result(ClipboardFiles.read())
+    }
+  }
+
+  private static func read() -> [[Any]] {
+    let board = NSPasteboard.general
+    var out: [[Any]] = []
+    let urls =
+      board.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+    for url in urls {
+      let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+      if size > maxBytes { continue }
+      guard let data = try? Data(contentsOf: url) else { continue }
+      out.append([url.lastPathComponent, "", FlutterStandardTypedData(bytes: data)])
+    }
+    // Finder also puts the file's icon there as a picture: never paste that instead of the file.
+    if !urls.isEmpty { return out }
+    if let png = board.data(forType: .png) {
+      return [["pasted.png", "image/png", FlutterStandardTypedData(bytes: png)]]
+    }
+    if let tiff = board.data(forType: .tiff), let rep = NSBitmapImageRep(data: tiff),
+      let png = rep.representation(using: .png, properties: [:])
+    {
+      return [["pasted.png", "image/png", FlutterStandardTypedData(bytes: png)]]
+    }
+    return []
+  }
 }

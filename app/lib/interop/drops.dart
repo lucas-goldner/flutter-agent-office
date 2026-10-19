@@ -1,6 +1,6 @@
 // Files dragged onto the page, or a picture pasted, while a worker's terminal is open (#171): the
-// browser hands them over here instead of opening them in a tab. Off the web there's nothing yet (the
-// desktop app would need a drop plugin), so it's a no-op there.
+// browser hands them over here instead of opening them in a tab. The desktop app has no drop plugin, but
+// ⌘V reads files and pictures off its clipboard through the macOS runner ([clipboardFiles]).
 
 import 'dart:typed_data';
 
@@ -24,6 +24,19 @@ void Function() watchDrops({
   required void Function(bool over) over,
   required void Function(List<DroppedFile> files) dropped,
 }) => impl.watchDrops(active: active, over: over, dropped: dropped);
+
+/// Whether a paste with [files] in it is those files rather than its [text]: a screenshot has no text, and a
+/// file copied in Finder comes with just its name.
+bool pastedAsFiles(String text, List<String> files) {
+  final t = text.trim();
+  if (t.isEmpty) return true;
+  final lines = t.split(RegExp(r'\r?\n')).map((l) => l.trim()).where((l) => l.isNotEmpty);
+  return lines.every((l) => files.contains(l) || files.contains(l.split('/').last));
+}
+
+/// Files copied in Finder, or a picture, on the desktop app's clipboard (none on the web, whose paste event
+/// brings them: see [watchPastedFiles]).
+Future<List<DroppedFile>> clipboardFiles() => impl.clipboardFiles();
 
 /// A picture on the clipboard with no text (a screenshot), pasted while [active] says so: it goes to
 /// [pasted] like a dropped file, before the terminal would paste it as nothing. Returns a remover.

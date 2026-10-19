@@ -77,7 +77,7 @@ void Function() watchPastedFiles(bool Function() active, void Function(List<Drop
     if (!active()) return;
     final data = e.clipboardData;
     final files = _files(data?.files);
-    if (files.isEmpty || (data?.getData('text/plain') ?? '').isNotEmpty) return;
+    if (files.isEmpty || !pastedAsFiles(data?.getData('text/plain') ?? '', [for (final f in files) f.name])) return;
     e.preventDefault();
     e.stopImmediatePropagation();
     pasted(files);
@@ -87,3 +87,5 @@ void Function() watchPastedFiles(bool Function() active, void Function(List<Drop
   web.document.addEventListener('paste', handler, true.toJS);
   return () => web.document.removeEventListener('paste', handler, true.toJS);
 }
+
+Future<List<DroppedFile>> clipboardFiles() async => const [];
