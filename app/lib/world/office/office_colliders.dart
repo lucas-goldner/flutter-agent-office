@@ -8,6 +8,7 @@ import 'package:office_shared/layout.dart' as lay;
 import 'package:office_shared/layout.dart' hide Elevator, Gong, Jukebox, Whiteboard;
 
 import '../collider.dart';
+import 'build_tower.dart' show buildTowerCollider;
 import 'outside.dart' show neighbourBoxes, reach;
 import 'rooms_colliders.dart';
 
@@ -488,6 +489,7 @@ List<Collider> officeColliders({List<Collider>? elevator, List<Collider>? ground
   ...loftColliders(),
   ...(elevator ?? elevatorColliders()),
   ...gongColliders(),
+  buildTowerCollider(),
   ...whiteboardColliders(),
   ...roomsColliders(),
 ];

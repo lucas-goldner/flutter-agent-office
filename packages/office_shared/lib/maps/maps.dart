@@ -388,6 +388,32 @@ MapPlan planMap(Object? input) {
       }(),
   ];
 
+  // The fixtures (the build tower): each optional, each in the way like a lectern.
+  final fixtures = <FixtureKey, FixturePlan>{};
+  if (c['fixtures'] != null) {
+    if (!isObj(c['fixtures'])) throw const MapError('fixtures should be { build }');
+    final raw = objOf(c['fixtures']);
+    for (final k in FixtureKey.values) {
+      if (raw[k.wire] == null) continue;
+      final p = place(raw[k.wire], 'fixtures.${k.wire}');
+      final corners = [
+        for (final t in const [-1, 1])
+          for (final s in const [-0.3, 0.3])
+            (
+              p.x + math.cos(p.rotY) * t * 0.4 + math.sin(p.rotY) * s,
+              p.z - math.sin(p.rotY) * t * 0.4 + math.cos(p.rotY) * s,
+            ),
+      ];
+      rects.add((
+        corners.map((q) => q.$1).reduce(math.min),
+        corners.map((q) => q.$1).reduce(math.max),
+        corners.map((q) => q.$2).reduce(math.min),
+        corners.map((q) => q.$2).reduce(math.max),
+      ));
+      fixtures[k] = p;
+    }
+  }
+
   // The meeting table: five chairs round it, the head of the table first.
   final council = place(c['council'], 'council');
   final meeting = [
@@ -613,6 +639,11 @@ MapPlan planMap(Object? input) {
     clear(lineup[i].x, lineup[i].z, 'lineup spot ${i + 1}');
   }
   if (herald != null) clear(herald.x, herald.z, 'the herald');
+  for (final MapEntry(key: k, value: f) in fixtures.entries) {
+    final (x, z) = fixtureFront(f);
+    inside(x, z, 'where you use the ${k.wire}', 0);
+    clear(x, z, 'where you use the ${k.wire}');
+  }
   clear(spawn.x, spawn.z, 'spawn');
   clear(door.x, door.z, 'door');
   if (dungeon != null) clear(dungeon.stairs.top.$1, dungeon.stairs.top.$2, 'the way onto the dungeon stairs');
@@ -663,8 +694,12 @@ MapPlan planMap(Object? input) {
     airlock: airlock,
     openings: openings,
     sendHome: sendHome,
+    fixtures: fixtures,
   );
 }
+
+/// Where you stand to use a map's fixture: a metre in front of it.
+(double, double) fixtureFront(FixturePlan f) => (f.x - math.sin(f.rotY), f.z - math.cos(f.rotY));
 
 // ---- Which maps there are -------------------------------------------------------------------------
 

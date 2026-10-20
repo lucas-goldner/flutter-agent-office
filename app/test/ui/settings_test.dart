@@ -98,9 +98,9 @@ void main() {
     return office;
   }
 
-  /// Scrolls the pane to [f] and taps it.
+  /// Scrolls the pane to [f] (to its middle, clear of the pane's edges) and taps it.
   Future<void> tap(WidgetTester tester, Finder f) async {
-    await tester.ensureVisible(f);
+    await Scrollable.ensureVisible(tester.element(f), alignment: 0.5);
     await tester.pump();
     await tester.tap(f);
   }

@@ -8,6 +8,7 @@ import 'package:path/path.dart' as p;
 import 'agents.dart';
 import 'building.dart' show FloorDef;
 import 'changes.dart';
+import 'codemagic.dart' show CodemagicApi, FloorCodemagic;
 import 'config.dart' show excludeFromGit;
 import 'court.dart';
 import 'decor.dart';
@@ -88,6 +89,9 @@ abstract interface class FloorContext {
 
   /// How to run gh as an account: its own sign-in, the office's (neither set), or why it can't.
   GhRunAs ghAs(String? owner);
+
+  /// Codemagic's API, with the office's token; null without one.
+  CodemagicApi? get codemagic;
 }
 
 /// The open pull request on a floor's board whose head is [branch].
@@ -300,6 +304,7 @@ class Floor {
     );
 
     decor = Decor(dataDir);
+    codemagic = FloorCodemagic(dataDir, _ctx.codemagic);
     jukebox = Jukebox(dataDir);
     whiteboard = Whiteboard(dataDir);
     ready = workers.start();
@@ -331,6 +336,9 @@ class Floor {
   MeetingRoom get meetings => _meetings!;
   Changes get changes => _changes!;
   late final Decor decor;
+
+  /// The floor's app on Codemagic and the builds started from the office (the 🏗️ build tower).
+  late final FloorCodemagic codemagic;
   late final Jukebox jukebox;
 
   /// The basketball by the hoop: who has it, or its last throw.

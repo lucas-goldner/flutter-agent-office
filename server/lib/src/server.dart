@@ -14,6 +14,7 @@ import 'agents.dart';
 import 'auth.dart';
 import 'building.dart';
 import 'cabinet.dart';
+import 'codemagic.dart';
 import 'config.dart';
 import 'decor.dart' show ImageData, ImageError, ImageProxy, ImageResult;
 import 'docs.dart' show DocFailed, DocFound;
@@ -580,6 +581,73 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     if (error != null && error.isNotEmpty) sendTo(c, ToastMsg(error, ToastLevel.warn));
   }
 
+  /// A build started or ended on [floor]: everyone there sees it (the 🏗️ build tower, Settings).
+  void codemagicChanged(Floor floor) => toFloor(floor, CodemagicMsg(floor.codemagic.state()));
+
+  /// `agent-office codemagic`: a worker's floor's Codemagic workflows, starting a build, a build's status.
+  /// With its own worker id and hook token, like the queue.
+  Future<Response> officeCodemagic(Request req) async {
+    final url = req.url;
+    final workerId = _query(url, 'worker') ?? '';
+    final token = (headerValue(req.headers, 'authorization') ?? '').replaceFirst(
+      RegExp(r'^Bearer\s+', caseSensitive: false),
+      '',
+    );
+    final floor = workerFloor(workerId);
+    final agent = floor?.workers.authenticate(workerId, token);
+    if (floor == null || agent == null) {
+      return _send(401, {
+        'error': 'Send your own AGENT_OFFICE_WORKER_ID as ?worker= and AGENT_OFFICE_HOOK_TOKEN as the bearer token',
+      });
+    }
+    final cm = floor.codemagic;
+    try {
+      if (req.method == Method.get) {
+        final id = _query(url, 'build');
+        if (id != null && id.isNotEmpty) {
+          if (!RegExp(r'^[A-Za-z0-9_-]{1,64}$').hasMatch(id)) return _send(400, {'error': 'Bad build id'});
+          final s = await cm.status(id);
+          codemagicChanged(floor);
+          return _send(200, {
+            'build': s.build.toJson(),
+            'downloads': [
+              for (final d in s.downloads) {...d.artifact.toJson(), 'url': d.url},
+            ],
+          });
+        }
+        final st = cm.state();
+        if (!st.token) {
+          return _send(409, {
+            'error': 'The office has no Codemagic token: start it with CODEMAGIC_TOKEN set (or --codemagic-token)',
+          });
+        }
+        if (st.appId.isEmpty) {
+          return _send(409, {'error': 'No Codemagic app for this floor: pick one in ⚙️ Settings → 🏗️ Codemagic'});
+        }
+        return _send(200, st.toJson());
+      }
+      if (req.method != Method.post) return _send(405, {'error': 'GET or POST'});
+      final raw = jsonDecode(await req.readAsString(encoding: utf8, maxLength: 64 * 1024));
+      final body = raw is Map ? Map<String, dynamic>.from(raw) : <String, dynamic>{};
+      final vars = {
+        for (final e
+            in (body['variables'] is Map
+                    ? Map<String, dynamic>.from(body['variables'] as Map)
+                    : const <String, dynamic>{})
+                .entries)
+          if (RegExp(r'^[A-Za-z_][A-Za-z0-9_]{0,60}$').hasMatch(e.key)) e.key: _str('${e.value}', 2000),
+      };
+      final b = await cm.start(_str(body['workflow'], 120), _str(body['branch'], 200), by: agent.name, variables: vars);
+      codemagicChanged(floor);
+      toastFloor(floor, '🏗️ ${agent.name} started ${b.workflow} on ${b.branch}');
+      return _send(200, {'build': b.toJson()});
+    } on CodemagicError catch (e) {
+      return _send(e.status == 401 || e.status == 403 ? 403 : 400, {'error': e.message});
+    } on FormatException {
+      return _send(400, {'error': 'Bad request'});
+    }
+  }
+
   /// The task queue, for the board agents (see stations.dart, which tells them how, and the
   /// `agent-office queue` command): GET lists it, POST adds a task, DELETE with ?task= takes a waiting
   /// one off. The agent's own hook token says who's asking.
@@ -691,6 +759,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
   Future<Response> hookHandler(Request req) async {
     final url = req.url;
     if (url.path == '/office/queue') return officeQueue(req);
+    if (url.path == '/office/codemagic') return officeCodemagic(req);
     if (url.path == '/office/workers' || url.path.startsWith('/office/workers/')) return officeWorkersRequest(req);
     // Each provider with hooks has its route, /hooks/<provider> (see providers/).
     final route = url.path.startsWith('/hooks/') ? url.path.substring('/hooks/'.length) : '';
@@ -939,7 +1008,10 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         ..onLent = ((floor) => floors.values.any((f) => f != floor && _worksIn(f, floor)))
         ..onLocksUp = (() => maps.plan().sendHome?.keeps ?? false)
         ..runAs = signins
-        ..onGhAs = ((owner) => owner != null ? signins.ghAs(owner) : (as: null, refused: null));
+        ..onGhAs = ((owner) => owner != null ? signins.ghAs(owner) : (as: null, refused: null))
+        ..codemagic = cfg.codemagicToken == null
+            ? null
+            : CodemagicApi(cfg.codemagicToken!, base: cfg.codemagicApi ?? 'https://codemagic.io');
   officeWorkersContext = _OfficeWorkersContext(
     workerFloor: workerFloor,
     floor: (id) => floors[id],
@@ -1069,6 +1141,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     meeting: floor?.meetings.state() ?? const MeetingState(),
     plan: floor?.plan.state() ?? emptyPlan,
     jail: floor?.jail.state() ?? const JailState(),
+    codemagic: floor?.codemagic.state(),
   );
 
   /// The rooftop bar: nobody works up there, so it has none of a floor's things.
@@ -1324,6 +1397,28 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
       return _send(200, ForwardList(port: cfg.port, items: items).toJson());
     }
     if (path == '/api/whoami') return _send(200, {'ok': true, 'me': meOf(session.account?.id).toJson()});
+    if (path == '/api/codemagic/apps' && method == Method.get) {
+      // Your apps on Codemagic, to pick a floor's in ⚙️ Settings (admins).
+      if (!meOf(session.account?.id).admin) return _send(403, {'error': 'Only admins can pick the Codemagic app'});
+      final api = floorContext.codemagic;
+      if (api == null) {
+        return _send(409, {
+          'error': 'The office has no Codemagic token: start it with CODEMAGIC_TOKEN set (or --codemagic-token)',
+        });
+      }
+      try {
+        final apps = await api.apps(name: _str(_query(url, 'q') ?? '', 80));
+        return _send(
+          200,
+          {
+            'apps': [for (final a in apps) a.toJson()],
+          },
+          {'cache-control': 'no-store'},
+        );
+      } on CodemagicError catch (e) {
+        return _send(502, {'error': e.message});
+      }
+    }
     if (path.startsWith('/api/agents/') && method == Method.get) {
       // GET /api/agents/<provider>/models: the models the hire dialog offers, for the providers whose CLI lists them.
       final parts = path.substring('/api/agents/'.length).split('/');
@@ -2953,6 +3048,40 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
         if (d == null) break;
         decorChanged(floor);
         toastFloor(floor, '$who took down ${d.title != null && d.title!.isNotEmpty ? '“${d.title}”' : 'a picture'}');
+      case 'codemagic.app':
+        // The floor's app on Codemagic: admins pick it, as builds use the office's token.
+        final floor = here();
+        if (floor == null) break;
+        if (!meOf(c.accountId).admin) return warn(c, 'Only admins can pick the Codemagic app');
+        final appId = msg['appId'] is String ? _str(msg['appId'], 64) : '';
+        unawaited(
+          floor.codemagic.setApp(appId).then((err) {
+            if (err != null) return warn(c, err);
+            codemagicChanged(floor);
+            final s = floor.codemagic.state();
+            toastFloor(
+              floor,
+              s.appId.isEmpty
+                  ? '🏗️ $who took Codemagic off this floor'
+                  : '🏗️ $who set this floor\'s Codemagic app: ${s.appName}',
+            );
+          }),
+        );
+      case 'codemagic.build':
+        // A build from the 🏗️ build tower: anyone on the floor.
+        final floor = here();
+        if (floor == null) break;
+        final workflow = msg['workflow'] is String ? _str(msg['workflow'], 120) : '';
+        final branch = msg['branch'] is String ? _str(msg['branch'], 200) : '';
+        unawaited(() async {
+          try {
+            final b = await floor.codemagic.start(workflow, branch, by: who);
+            codemagicChanged(floor);
+            toastFloor(floor, '🏗️ $who started ${b.workflow} on ${b.branch}');
+          } on CodemagicError catch (e) {
+            warn(c, e.message);
+          }
+        }());
       case 'wb.open' || 'wb.close':
         final floor = floorOf(c);
         final open = t == 'wb.open' && floor != null;
@@ -3261,6 +3390,27 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     if (accountsMoved) accountsChanged();
   });
 
+  // Codemagic builds started from the office, every 20 seconds while any is running: the build
+  // tower's light follows them, and the floor hears when one ends.
+  final codemagicTimer = Timer.periodic(const Duration(seconds: 20), (_) {
+    for (final floor in floors.values.toList()) {
+      if (floor.codemagic.state().running.isEmpty) continue;
+      unawaited(
+        floor.codemagic.poll().then((r) {
+          if (!r.changed) return;
+          codemagicChanged(floor);
+          for (final b in r.ended) {
+            toastFloor(
+              floor,
+              '🏗️ ${b.workflow} on ${b.branch}: ${b.status.label}${b.index > 0 ? ' (#${b.index})' : ''}',
+              b.status.bad ? ToastLevel.warn : ToastLevel.info,
+            );
+          }
+        }),
+      );
+    }
+  });
+
   final address = InternetAddress.tryParse(cfg.host) ?? (await InternetAddress.lookup(cfg.host)).first;
   IOAdapter adapter;
   try {
@@ -3269,6 +3419,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     await hookServer.close(force: true);
     resync.cancel();
     heartbeat.cancel();
+    codemagicTimer.cancel();
     upgrader.stop();
     webhook.stop();
     machine.stop();
@@ -3303,6 +3454,7 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
     arcade.flush();
     heartbeat.cancel();
     resync.cancel();
+    codemagicTimer.cancel();
     floorsTimer?.cancel();
     upgrader.stop();
     services.stop();
@@ -3424,6 +3576,8 @@ class _FloorContext implements FloorContext {
   GhRunAs Function(String? owner)? onGhAs;
   @override
   GhRunAs ghAs(String? owner) => onGhAs?.call(owner) ?? (as: null, refused: null);
+  @override
+  CodemagicApi? codemagic;
 }
 
 /// Which of a worker's repositories a Changes message is about: another floor's (see WorkerInfo.repos),

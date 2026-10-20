@@ -1235,8 +1235,8 @@ class WorkerManager implements QueueWorkers {
         if (env['GIT_CEILING_DIRECTORIES']?.isNotEmpty ?? false) env['GIT_CEILING_DIRECTORIES']!,
       ].join(':');
     }
-    // Whichever agent it runs, a worker reaches the office's workers with `office-workers`, and a
-    // board agent the queue with `agent-office queue`.
+    // Whichever agent it runs, a worker reaches the office's workers with `office-workers` and the
+    // floor's Codemagic builds with `agent-office codemagic`, and a board agent the queue with `agent-office queue`.
     final officeBin = _officeBin;
     if (officeBin != null) {
       final path = env['PATH'];
@@ -1695,7 +1695,8 @@ class WorkerManager implements QueueWorkers {
   /// Writes the `agent-office` and `office-workers` commands into the data dir's bin/, each running
   /// the office's own executable, and returns that directory: on a board agent's PATH,
   /// `agent-office queue …` reaches the queue, and on every worker's, `office-workers …` the office's
-  /// workers (see workers_cmd.dart). Rewritten on every start, so after an upgrade they run the new install.
+  /// workers (see workers_cmd.dart) and `agent-office codemagic …` the floor's app builds
+  /// (codemagic_cmd.dart). Rewritten on every start, so after an upgrade they run the new install.
   String? _writeOfficeCommands() {
     if (Platform.isWindows) return null;
     try {
@@ -1704,7 +1705,11 @@ class WorkerManager implements QueueWorkers {
       chmodSync(dir, 0x1c0); // 0700
       final office = _office.map(shellQuote).join(' ');
       for (final (name, what, exec) in [
-        ('agent-office', 'Agent Office, for the board agents: agent-office queue list|add|remove.', office),
+        (
+          'agent-office',
+          'Agent Office: agent-office queue list|add|remove (board agents), agent-office codemagic --help (builds).',
+          office,
+        ),
         ('office-workers', "Agent Office's workers, for every worker: office-workers --help.", '$office workers'),
       ]) {
         final file = p.join(dir, name);

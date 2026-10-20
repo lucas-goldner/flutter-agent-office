@@ -10,6 +10,7 @@ import '../notify.dart';
 import '../office_scope.dart';
 
 import 'package:office_shared/protocol.dart';
+import 'package:office_shared/rooftop.dart' show roof;
 import 'package:office_shared/theme.dart' show themePicks;
 
 import '../state/store.dart';
@@ -20,6 +21,7 @@ import 'settings_rows.dart';
 import 'worker_limit.dart';
 import '../world/player.dart' show ViewMode;
 import '../world/sky_model.dart' show describeSky, outsideNote;
+import 'codemagic_window.dart' show CodemagicSettings;
 import 'modal.dart';
 import 'theme.dart';
 import 'window_parts.dart';
@@ -641,6 +643,19 @@ void _builtInCards() {
       ],
     );
   });
+  // The floor's app on Codemagic, which workers and the 🏗️ build tower build.
+  cards.add(
+    SettingsPane.workers,
+    id: 'codemagic',
+    order: 50,
+    (c) => c.store.floor != null && c.store.floor != roof
+        ? SettingCard(
+            title: '🏗️ Codemagic',
+            scope: SettingScope.floor,
+            children: [CodemagicSettings(scope: c.scope)],
+          )
+        : null,
+  );
 }
 
 /// Desktop notifications: this browser's permission, then your own on/off.

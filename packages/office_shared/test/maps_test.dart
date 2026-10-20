@@ -67,6 +67,34 @@ void main() {
     expect(seatHereOn(officePlan, 'couch:0', false), isNotNull);
   });
 
+  test('every built-in map has the build tower, a walk away', () {
+    for (final config in builtinMaps) {
+      final plan = planMap(config);
+      final nav = NavGrid(plan.bounds, plan.obstacles!);
+      expect(plan.fixtures.keys.toSet(), FixtureKey.values.toSet(), reason: "${config['id']} has them all");
+      for (final MapEntry(key: k, value: f) in plan.fixtures.entries) {
+        expect(nav.walkable(f.x, f.z), isFalse, reason: "${config['id']}'s ${k.wire} is in the way");
+        final (x, z) = fixtureFront(f);
+        expect(nav.walkable(x, z), isTrue, reason: "${config['id']}'s ${k.wire} has room in front");
+        final way = nav.route((plan.door.x, plan.door.z), (x, z));
+        expect(way, isNotEmpty, reason: "${config['id']}'s ${k.wire} is a walk from the door");
+      }
+    }
+    // The office has its own; a map can leave it out, and one in a wall says so.
+    expect(officePlan.fixtures, isEmpty);
+    final none = planMap({...castleMap, 'fixtures': null});
+    expect(none.fixtures, isEmpty);
+    expect(
+      () => planMap({
+        ...castleMap,
+        'fixtures': {
+          'build': {'x': -6.8, 'z': -8},
+        },
+      }),
+      throwsA(isA<MapError>().having((e) => e.message, 'message', contains('where you use the build'))),
+    );
+  });
+
   test('a custom map extends a built-in one, changing only what it gives', () {
     final [mine] = check([
       (

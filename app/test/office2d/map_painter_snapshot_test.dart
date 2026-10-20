@@ -19,6 +19,7 @@ void main() {
     final statuses = MapStatus.values;
     final scene = MapScene(
       t: 0.2,
+      towerLight: Pal.yellow,
       dog: (x: 4.0, z: 3.0),
       heading: (x: 2.0, z: 1.0),
       hover: const MapHover(x: Whiteboard.x, z: Whiteboard.z, radius: 1.5, title: '📝 Whiteboard'),
@@ -38,6 +39,7 @@ void main() {
         const MapLabel(x: Elevator.x, z: Floor.minZ, text: '🛗 Elevator'),
         const MapLabel(x: Cabinet.x, z: Cabinet.z - 0.4, text: '🕹️ Arcade'),
         const MapLabel(x: Jukebox.x, z: Jukebox.z - 0.5, text: '🎵 Jukebox'),
+        const MapLabel(x: BuildTower.x, z: BuildTower.z - 0.24, text: '🏗️ Builds'),
         const MapLabel(
           x: Whiteboard.x,
           z: Whiteboard.z - 0.4,

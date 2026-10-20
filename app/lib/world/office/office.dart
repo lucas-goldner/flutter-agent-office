@@ -16,6 +16,7 @@ import '../collider.dart';
 import '../labels.dart';
 import '../text.dart';
 import '../toon.dart';
+import 'build_tower.dart';
 import 'cars.dart';
 import 'elevator.dart';
 import '../scenic/scenic.dart';
@@ -97,6 +98,7 @@ class Office {
     required this.signs,
     required this.plantsByWing,
     required this.gong,
+    required this.buildTower,
     required this.jukebox,
     required this.whiteboard,
     required this.night,
@@ -178,6 +180,9 @@ class Office {
 
   /// The merge gong by the PR board.
   final Gong gong;
+
+  /// The floor's Codemagic builds: a rack with a stack light against the south wall.
+  final BuildTowerView buildTower;
   final JukeboxView jukebox;
 
   /// The rolling whiteboard everyone draws on together.
@@ -257,6 +262,7 @@ class Office {
     elevator.update(dt);
     garageLift.update(dt);
     gong.update(dt);
+    buildTower.update(dt);
     scenic.update(t);
   }
 }
@@ -659,6 +665,12 @@ Office buildOffice({required LabelHub labels}) {
   interactables.add(gong.interactable);
   fixture(Side.north, lay.Gong.x, (lay.Gong.height + 0.3) / 2, lay.Gong.width + 1.2, lay.Gong.height + 0.3);
 
+  // The build tower, against the south wall between the balcony doors and the stairs.
+  final builds = buildBuildTower();
+  group.add(builds.group);
+  interactables.add(builds.interactable);
+  fixture(Side.south, BuildTower.x, (BuildTower.top + 0.6) / 2, BuildTower.width + 0.2, BuildTower.top + 0.6);
+
   // The whiteboard, out on the floor between the desks and the lounge.
   final whiteboard = buildWhiteboard();
   group.add(whiteboard.group);
@@ -715,6 +727,7 @@ Office buildOffice({required LabelHub labels}) {
       signs: signs,
       plantsByWing: byWing,
       gong: gong,
+      buildTower: builds,
       jukebox: jukebox,
       whiteboard: whiteboard,
       night: night,

@@ -58,6 +58,8 @@ class Config {
     this.city,
     this.weather,
     this.realTimeSky = false,
+    this.codemagicToken,
+    this.codemagicApi,
   }) : _markClaimed = markClaimed;
 
   /// The office's own folder: the building's data lives in its .agent-office.
@@ -134,6 +136,13 @@ class Config {
 
   /// The sky keeps real time (a day a day), instead of a whole day and night every hour.
   final bool realTimeSky;
+
+  /// A Codemagic API token (--codemagic-token / CODEMAGIC_TOKEN), for starting and following a
+  /// floor's builds. Never sent to browsers, never logged.
+  final String? codemagicToken;
+
+  /// Where Codemagic is, when not https://codemagic.io (--codemagic-api / AGENT_OFFICE_CODEMAGIC_API; tests).
+  final String? codemagicApi;
 }
 
 const help =
@@ -147,6 +156,7 @@ Usage:
   agent-office accounts [list|invite|revoke|role|password] ...
   agent-office queue [list|add|remove] ...
   agent-office workers [list|hire|home|tell|pr|mcp] ...   (office-workers, in a worker's terminal)
+  agent-office codemagic [workflows|build|status] ...     (in a worker's terminal)
   agent-office tunnel [office@address | url]
 
 Runs the office. Every project is a floor of the building: ride the elevator,
@@ -234,6 +244,8 @@ Options:
                           it's night there, instead of a day and night every hour
                           (⚙️ Settings can switch it)
                           (env AGENT_OFFICE_SKY_CLOCK=real)
+      --codemagic-token <t>  A Codemagic API token (env CODEMAGIC_TOKEN): a floor
+                          can then start and follow its app's builds (README, Codemagic)
       --version           Print the office's version
   -h, --help              Show this help
 
@@ -354,6 +366,8 @@ Config loadConfig(List<String> argv) {
   var city = _env('AGENT_OFFICE_CITY') ?? '';
   var weather = _env('AGENT_OFFICE_WEATHER') ?? '';
   var realTimeSky = Platform.environment['AGENT_OFFICE_SKY_CLOCK'] == 'real';
+  var codemagicToken = _env('CODEMAGIC_TOKEN') ?? '';
+  var codemagicApi = _env('AGENT_OFFICE_CODEMAGIC_API') ?? '';
   final iceServers = <IceServer>[
     const IceServer(urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302']),
     // A container can't take --turn (deploy/container), so the TURN servers come from the environment too.
@@ -418,6 +432,10 @@ Config loadConfig(List<String> argv) {
         weather = _takeValue(argv, i++, a);
       case '--real-time-sky':
         realTimeSky = true;
+      case '--codemagic-token':
+        codemagicToken = _takeValue(argv, i++, a);
+      case '--codemagic-api':
+        codemagicApi = _takeValue(argv, i++, a);
       default:
         if (a.startsWith('-')) {
           stderr.writeln('agent-office: unknown option $a\n');
@@ -558,6 +576,8 @@ Config loadConfig(List<String> argv) {
     city: city.trim().isEmpty ? null : city.trim(),
     weather: weather.isEmpty ? null : Weather.parse(weather),
     realTimeSky: realTimeSky,
+    codemagicToken: codemagicToken.trim().isEmpty ? null : codemagicToken.trim(),
+    codemagicApi: codemagicApi.trim().isEmpty ? null : codemagicApi.trim(),
   );
 }
 

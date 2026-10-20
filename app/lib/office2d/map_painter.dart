@@ -1,6 +1,6 @@
 // The 2D office's live layer (👾 2D view): the floor plan (pixel_map.dart) scaled up crisply, and on
 // it the people as 16-bit sprites (sprites.dart) — you, everyone else on the floor, each worker at its desk
-// with how it's doing over its head — the dog, where you're walking to, and what's under the mouse. It paints a [MapScene], a snapshot of the office
+// with how it's doing over its head — the dog, the build tower's light, where you're walking to, and what's under the mouse. It paints a [MapScene], a snapshot of the office
 // taken each frame, so it can be drawn (and tested) without the 3D office.
 
 import 'dart:math' as math;
@@ -8,6 +8,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:office_shared/avatar.dart';
+import 'package:office_shared/layout.dart';
 
 import 'pixel_map.dart';
 import 'sprites.dart';
@@ -92,6 +93,7 @@ class MapScene {
     this.hover,
     this.labels = const [],
     this.signs = const [],
+    this.towerLight,
     this.t = 0,
   });
 
@@ -108,6 +110,9 @@ class MapScene {
   final ({double x, double z})? heading;
   final ({double x, double z})? dog;
   final MapHover? hover;
+
+  /// The build tower's stack light, or null when it's off.
+  final Color? towerLight;
 
   /// Seconds, for blinking and bobbing.
   final double t;
@@ -189,6 +194,10 @@ class OfficeMapPainter extends CustomPainter {
     for (final g in s.signs) {
       px.blockAt(g.x, g.z, 1.3, 0.22, g.color, shadow: false);
     }
+
+    // The build tower's stack light (red flashes).
+    final light = s.towerLight;
+    if (light != null && (light != Pal.red || (s.t % 1.0) < 0.6)) px.disc(BuildTower.x, BuildTower.z, 0.16, light);
 
     // What's under the mouse: a ring round where you'd stand to use it.
     final h = s.hover;

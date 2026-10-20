@@ -128,6 +128,7 @@ A map that won't load (bad JSON, something outside the hall, too few seats, a pr
 | `lineup` | `{ x, z, rotY, step: [dx, dz], count }`: the first spot in line, and each next one `step` further on, all facing `rotY`. Optional. |
 | `tables` | `[{ x, z, length, seats, width?, rotY?, sides?, name? }]`: where the workers sit. `seats` is per side (1 to 12); `width` is 1.4 m unless you say; `sides` is `"both"` (the default), `"inner"` or `"outer"`; `rotY` 0 runs the table along z. **Required.** |
 | `stations` | `{ issues, queue, pulls }`, each `{ x, z, rotY }`: the board agents' lecterns. The agent stands 0.55 m from its lectern the way `rotY` points (toward the wall, usually) and faces back across it into the hall. **Required.** |
+| `fixtures` | `{ build }`, each `{ x, z, rotY }` and optional: the 🏗️ build tower (the floor's Codemagic builds), turned like a lectern (`rotY` the way its back is), used from 1 m in front, which has to be clear. The castle and the station have it. |
 | `council` | `{ x, z, rotY }`: the meeting table. Five chairs go round it, the head of the table at `rotY`'s side, and its easel 3.1 m behind the other way. The table is 2.6 m across and the chairs are 1.7 m out from its middle, so leave about 2.3 m clear round it (3.5 m on the easel's side). **Required.** |
 | `boards` | `{ issues, queue, pulls, services }`, each `{ x, y, z, rotY, width, height, label? }`: the boards on the walls, `rotY` the way each faces. **Required.** |
 | `props` | `[{ kind, x, z, … }]`: everything else, from the list below. |

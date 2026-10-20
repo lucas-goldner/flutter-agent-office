@@ -43,6 +43,20 @@ enum BoardKey implements WireEnum {
 
 const List<BoardKey> boardKeys = BoardKey.values;
 
+/// The things in the hall the office has its own of (a map's `fixtures`): the 🏗️ build tower
+/// (Codemagic). A map may leave any of them out; then it has none.
+enum FixtureKey implements WireEnum {
+  build('build');
+
+  const FixtureKey(this.wire);
+  @override
+  final String wire;
+}
+
+/// Where a fixture stands, turned like a board agent's lectern: its back to (sin rotY, cos rotY), and
+/// you use it from a metre in front.
+typedef FixturePlan = ({double x, double z, double rotY});
+
 /// A piece of the map that isn't a seat: a pillar, a banner, a brazier… [kind] is one the map's style
 /// knows (see [propKinds]); what the rest means depends on it.
 class PropConfig {
@@ -435,6 +449,7 @@ class MapPlan {
     this.airlock,
     this.openings,
     this.sendHome,
+    this.fixtures = const {},
   });
 
   final String id;
@@ -499,6 +514,9 @@ class MapPlan {
 
   /// What happens to a worker sent home, checked: none, and it walks out of the door.
   final SendHomePlan? sendHome;
+
+  /// The build tower in the hall (the office has its own).
+  final Map<FixtureKey, FixturePlan> fixtures;
 }
 
 /// What Settings lists: every map there is to pick, and the custom ones that didn't load.

@@ -121,6 +121,10 @@ final MapConfig stationMap = {
     'queue': {'x': -13.2, 'z': _boardsZ[1], 'rotY': -math.pi / 2},
     'pulls': {'x': 13.2, 'z': _boardsZ[0], 'rotY': math.pi / 2},
   },
+  // The build tower on the starboard side, under its window.
+  'fixtures': {
+    'build': {'x': 14.3, 'z': 5, 'rotY': math.pi / 2},
+  },
   // The briefing table, aft on the starboard side.
   'council': {'x': 10, 'z': 24.8, 'rotY': math.pi},
   'boards': {

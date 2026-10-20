@@ -428,6 +428,20 @@ abstract final class Bookshelf {
   static const double height = 2.3;
 }
 
+/// The build tower: a small rack against the south wall between the balcony doors and the stairs,
+/// with a stack light on top for the floor's Codemagic builds (yellow while one runs, green when the
+/// last one finished, red when it failed) and a screen of recent builds.
+abstract final class BuildTower {
+  static const double x = 0.45;
+  static const double z = Floor.maxZ - 0.28;
+  static const double width = 0.6;
+  static const double depth = 0.48;
+  static const double height = 1.25;
+
+  /// The stack light's top, above the floor.
+  static const double top = 1.95;
+}
+
 /// The upstairs office: a glass-walled loft on posts in the south-east corner, looking down on the desks.
 abstract final class Loft {
   static const double minX = 9;

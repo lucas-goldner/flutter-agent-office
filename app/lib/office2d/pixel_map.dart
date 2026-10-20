@@ -419,6 +419,12 @@ void paintFloorPlan(Canvas c, {int wing = 0}) {
     );
   }
 
+  // The build tower: a dark rack, the lights of its four slots along its front.
+  px.blockAt(BuildTower.x, BuildTower.z, BuildTower.width, BuildTower.depth, const Color(0xFF3D405B));
+  for (var i = 0; i < 4; i++) {
+    px.dot(Pixels._x(BuildTower.x - 0.18 + i * 0.12), Pixels._z(BuildTower.z - 0.1), const Color(0xFF06D6A0));
+  }
+
   // The fire pole's railing, and the ladder on the west wall.
   for (final p in poles) {
     px.disc(p.x, p.z, Pole.radius + 0.3, const Color(0xFF1D1D2E)); // the hole down
@@ -687,8 +693,8 @@ Color _paletteColor(MapPlan plan, String key, Color fallback) {
 
 /// A map of its own (the castle, the space station, a custom one) drawn from its [MapPlan] in the same
 /// 16-bit style as the office, once, into [c] (after MapBounds.plan(plan.bounds)): what's outside, the
-/// floor, what's in the way on it (its props), the tables and benches, the board agents' lecterns
-/// the boards on the walls, the throne, and the walls with their doors and
+/// floor, what's in the way on it (its props), the tables and benches, the board agents' lecterns,
+/// the build tower's stand, the boards on the walls, the throne, and the walls with their doors and
 /// windows. The live layer (people, workers, labels) is drawn over it as on the office's.
 void paintMapPlan(Canvas c, MapPlan plan) {
   final px = Pixels(c);
@@ -834,6 +840,14 @@ void paintMapPlan(Canvas c, MapPlan plan) {
       castle ? const Color(0xFFEFE3C2) : Pal.screen,
       shadow: false,
     );
+  }
+
+  // The build tower's stand, where the map has one: its little rack, and the stack light on top.
+  for (final f in plan.fixtures.values) {
+    final cos = math.cos(f.rotY).abs(), sin = math.sin(f.rotY).abs();
+    px.blockAt(f.x, f.z, cos * 0.8 + sin * 0.6, sin * 0.8 + cos * 0.6, castle ? wood : Pal.steel);
+    px.blockAt(f.x, f.z, 0.4, 0.4, const Color(0xFF2B2D42), shadow: false);
+    px.ball(f.x, f.z, 0.1, Pal.green, shadow: false);
   }
 
   // The meeting table (the castle's council), if it has one.

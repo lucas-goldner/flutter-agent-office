@@ -10,6 +10,7 @@ import 'package:office_shared/protocol.dart' show WorkerStatus, WorkerTask;
 
 import '../world/character.dart';
 import '../world/court.dart';
+import '../world/fixtures.dart' show addFixtures;
 import '../world/labels.dart';
 import '../world/player.dart' show groundAt;
 import '../world/styles.dart';
@@ -76,6 +77,8 @@ class Worlds {
       final build = worldBuilders[p.style];
       if (build == null) return (world: theOffice, court: null, idle: const []);
       final w = build(p, labels);
+      // The build tower, where the map has one.
+      addFixtures(w);
       w.group.visible = false;
       parent.add(w.group);
       double ground(double x, double z, double y) {

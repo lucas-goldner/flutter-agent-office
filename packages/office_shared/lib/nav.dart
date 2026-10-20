@@ -121,6 +121,13 @@ Obstacles _officeObstacles(int wing) {
     Bookshelf.z - Bookshelf.depth / 2 - 0.03,
     Floor.maxZ,
   ));
+  // The build tower against the south wall.
+  rects.add((
+    BuildTower.x - BuildTower.width / 2 - 0.04,
+    BuildTower.x + BuildTower.width / 2 + 0.04,
+    BuildTower.z - BuildTower.depth / 2 - 0.03,
+    Floor.maxZ,
+  ));
   // The ladder up the west wall, and the fire poles: a hole with a railing round it, or a landing mat.
   // Which spot has which changes floor by floor, so the dog keeps off both.
   rects.add((Floor.minX, Floor.minX + 0.3, Ladder.z - Ladder.width / 2 - 0.05, Ladder.z + Ladder.width / 2 + 0.05));

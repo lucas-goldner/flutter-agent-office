@@ -47,7 +47,7 @@ const Map<SettingsPane, ({String icon, String label, String blurb})> settingsPan
   SettingsPane.workers: (
     icon: '🤖',
     label: 'Workers',
-    blurb: 'What workers start on, how many run at once, when they go home and what the office tells them.',
+    blurb: 'What workers start on, how many run at once, when they go home, what the office tells them, and Codemagic.',
   ),
 };
 

@@ -42,6 +42,7 @@ import '../ui/lite_suggest.dart';
 import '../ui/ask.dart';
 import '../ui/boards.dart';
 import '../ui/changes.dart';
+import '../ui/codemagic_window.dart' show openCodemagic;
 import '../ui/compass.dart';
 import '../ui/dictate.dart' show dictating;
 import '../ui/character.dart';
@@ -159,6 +160,7 @@ const Map<InteractKind, double> _reach = {
   InteractKind.axe: 5.5,
   InteractKind.car: 4,
   InteractKind.expand: 8,
+  InteractKind.build: 3.5,
 };
 
 /// The keys a hint offers (`E Open terminal`, `X Send home`…) that do something at what you aim at.
@@ -3221,6 +3223,8 @@ class OfficeController implements OfficeActions {
         whiteboard.open();
       case InteractKind.expand:
         openExpand(scope);
+      case InteractKind.build:
+        openCodemagic(scope);
       case InteractKind.ladder:
         _grabLadder();
       case InteractKind.pole when target.pole != null:
@@ -3774,6 +3778,25 @@ class OfficeController implements OfficeActions {
           InteractKind.axe ||
           InteractKind.car:
         return ('', []);
+      case InteractKind.build:
+        final s = store.codemagic;
+        final running = s.running.length;
+        return (
+          '${s.ready}$running${s.builds.firstOrNull?.status}',
+          [
+            const HintTitle('🏗️ Build tower'),
+            HintAside(
+              !s.ready
+                  ? 'Codemagic builds'
+                  : running > 0
+                  ? '🟡 $running building'
+                  : s.builds.isEmpty
+                  ? s.appName
+                  : '${s.builds.first.status.label} · ${s.builds.first.workflow}',
+            ),
+            const HintKey('E', 'Builds'),
+          ],
+        );
       case InteractKind.expand:
         final level = store.floorPlan.wing;
         if (level >= Wing.rows) {
@@ -4296,6 +4319,7 @@ class OfficeController implements OfficeActions {
 
   /// Each frame, while the building's the office: its jukebox, and the ladder and poles between floors.
   void _officeTick(double t, double dt) {
+    office.buildTower.show(store.codemagic);
     office.jukebox.update(t, dt, sound.beat());
     office.stack.update(dt, [
       (x: player.pos.x, y: player.pos.y, z: player.pos.z, onLadder: climber.grip == Grip.ladder),

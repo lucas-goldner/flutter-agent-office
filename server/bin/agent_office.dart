@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import 'package:agent_office_server/src/accounts.dart' show accountsCommand;
 import 'package:agent_office_server/src/browser.dart' show openBrowser;
 import 'package:agent_office_server/src/building.dart' show tildify;
+import 'package:agent_office_server/src/codemagic_cmd.dart' show runCodemagicCommand;
 import 'package:agent_office_server/src/config.dart';
 import 'package:agent_office_server/src/hook.dart' show runHook;
 import 'package:agent_office_server/src/prune.dart' show prune;
@@ -29,6 +30,8 @@ Future<void> main(List<String> argv) async {
   if (cmd == 'queue') return _exit(await runQueueCommand(argv.sublist(1)));
   // `office-workers` on a worker's PATH runs this (see WorkerManager._writeOfficeCommands).
   if (cmd == 'workers') return _exit(await runWorkersCommand(argv.sublist(1)));
+  // `agent-office codemagic …` from a worker's terminal: the floor's app builds (see codemagic_cmd.dart).
+  if (cmd == 'codemagic') return _exit(await runCodemagicCommand(argv.sublist(1)));
   if (cmd == 'setup') return _exit(await setupCommand(argv.sublist(1)));
   if (cmd == 'tunnel') return _exit(await tunnelCommand(argv.sublist(1)));
   if (cmd == '--version') {

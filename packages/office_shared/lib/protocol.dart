@@ -8,6 +8,7 @@
 import 'avatar.dart';
 import 'bargames.dart';
 import 'cabinet.dart';
+import 'codemagic.dart';
 import 'decor.dart';
 import 'dog.dart';
 import 'emotes.dart';
@@ -2706,6 +2707,7 @@ class FloorView implements JsonObject {
     this.ball = const BallState(),
     this.cars = const [],
     this.jail = const JailState(),
+    this.codemagic,
   });
 
   factory FloorView.fromJson(Map<String, dynamic> j) => FloorView(
@@ -2726,6 +2728,7 @@ class FloorView implements JsonObject {
     ball: BallState.fromJson(asMap(j['ball'])),
     cars: asList(j['cars'], CarState.fromJson),
     jail: JailState.fromJson(asMap(j['jail'])),
+    codemagic: _obj(j['codemagic'], CodemagicState.fromJson),
   );
 
   /// The floor you're on; null while the building has none.
@@ -2767,6 +2770,9 @@ class FloorView implements JsonObject {
   /// Workers sent home and locked up in the dungeon, on a map that has one.
   final JailState jail;
 
+  /// The floor's app on Codemagic and its builds (the 🏗️ build tower).
+  final CodemagicState? codemagic;
+
   /// `floor`, `project` and `dog` are always sent, as null when there's none.
   @override
   Map<String, dynamic> toJson() => {
@@ -2787,6 +2793,7 @@ class FloorView implements JsonObject {
     'ball': ball.toJson(),
     'cars': [for (final c in cars) c.toJson()],
     'jail': jail.toJson(),
+    'codemagic': ?codemagic?.toJson(),
   };
 }
 
@@ -3939,6 +3946,8 @@ ClientMsg _parseClient(Map<String, dynamic> j) {
     'decor.add' => DecorAddCmd(DecorPlacement.fromJson(asMap(j['decor']))),
     'decor.update' => DecorUpdateCmd(s('id'), DecorPatch.fromJson(asMap(j['decor']))),
     'decor.remove' => DecorRemoveCmd(s('id')),
+    'codemagic.app' => CodemagicAppCmd(asString(j['appId'])),
+    'codemagic.build' => CodemagicBuildCmd(asString(j['workflow']), branch: asString(j['branch'])),
     'desk.label' => DeskLabelCmd(s('deskId'), s('text'), color: so('color')),
     'floor.expand' => const FloorExpandCmd(),
     'floor.shrink' => const FloorShrinkCmd(),
@@ -4771,6 +4780,27 @@ class LimitsRefreshCmd extends ClientMsg {
   String get t => 'limits.refresh';
 }
 
+/// Admins: the floor's app on Codemagic (empty: none).
+class CodemagicAppCmd extends ClientMsg {
+  const CodemagicAppCmd(this.appId);
+  final String appId;
+  @override
+  String get t => 'codemagic.app';
+  @override
+  Map<String, dynamic> get fields => {'appId': appId};
+}
+
+/// Start a build of the floor's app: [workflow] (its id or name) on [branch].
+class CodemagicBuildCmd extends ClientMsg {
+  const CodemagicBuildCmd(this.workflow, {required this.branch});
+  final String workflow;
+  final String branch;
+  @override
+  String get t => 'codemagic.build';
+  @override
+  Map<String, dynamic> get fields => {'workflow': workflow, 'branch': branch};
+}
+
 /// Hang a picture on a wall.
 class DecorAddCmd extends ClientMsg {
   const DecorAddCmd(this.decor);
@@ -5306,6 +5336,7 @@ sealed class ServerMsg {
       'upgrade' => UpgradeMsg(UpgradeState.fromJson(asMap(j['state']))),
       'services' => ServicesMsg(ServicesState.fromJson(asMap(j['state']))),
       'decor' => DecorMsg(asList(j['items'], Decoration.fromJson)),
+      'codemagic' => CodemagicMsg(CodemagicState.fromJson(asMap(j['state']))),
       'plan' => PlanMsg(FloorPlan.fromJson(asMap(j['plan']))),
       'dog' => DogMsg(DogState.fromJson(asMap(j['dog']))),
       'ball' => BallMsg(BallState.fromJson(asMap(j['ball']))),
@@ -6032,6 +6063,16 @@ class ServicesMsg extends ServerMsg {
   final ServicesState state;
   @override
   String get t => 'services';
+  @override
+  Map<String, dynamic> get fields => {'state': state.toJson()};
+}
+
+/// The floor's Codemagic changed: its app, or a build started or moved on.
+class CodemagicMsg extends ServerMsg {
+  const CodemagicMsg(this.state);
+  final CodemagicState state;
+  @override
+  String get t => 'codemagic';
   @override
   Map<String, dynamic> get fields => {'state': state.toJson()};
 }

@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import '../interop/browser.dart';
 
 import 'package:office_shared/avatar.dart';
+import 'package:office_shared/codemagic.dart';
 import 'package:office_shared/decor.dart';
 import 'package:office_shared/dog.dart';
 import 'package:office_shared/floorplan.dart';
@@ -66,6 +67,8 @@ enum Topic {
   jail,
   // The signs over the desks, and how far the back office is built out (the floor's own plan).
   floorPlan,
+  // The floor's Codemagic app and builds (the 🏗️ build tower).
+  codemagic,
 }
 
 /// Where someone is right now. peer.move updates it in place; the frame loop eases toward it.
@@ -342,6 +345,9 @@ class Store {
   /// The signs over the desks, and how far the back office is built out (not the map's plan: see plan()).
   FloorPlan floorPlan = emptyPlan;
 
+  /// The floor's app on Codemagic and the builds started from the office (the 🏗️ build tower).
+  CodemagicState codemagic = const CodemagicState();
+
   /// The games and rooms on your floor: the cabinet, the ball, the meeting room, the machine monitor.
   final Rooms rooms = Rooms();
 
@@ -415,6 +421,7 @@ class Store {
     drawing = v.whiteboard.people;
     jail = v.jail;
     floorPlan = v.plan;
+    codemagic = v.codemagic ?? const CodemagicState();
     _setDog(v.dog);
     _setJukebox(v.jukebox);
     for (final t in [
@@ -432,6 +439,7 @@ class Store {
       Topic.drawing,
       Topic.jail,
       Topic.floorPlan,
+      Topic.codemagic,
     ]) {
       emit(t);
     }
@@ -575,6 +583,9 @@ class Store {
       case DecorMsg m:
         decor = m.items;
         emit(Topic.decor);
+      case CodemagicMsg m:
+        codemagic = m.state;
+        emit(Topic.codemagic);
       case JukeboxMsg m:
         _setJukebox(m.state);
         emit(Topic.jukebox);

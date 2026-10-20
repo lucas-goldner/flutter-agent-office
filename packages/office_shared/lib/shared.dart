@@ -6,6 +6,7 @@ export 'actions.dart';
 export 'avatar.dart';
 export 'bargames.dart';
 export 'cabinet.dart';
+export 'codemagic.dart';
 export 'decor.dart';
 export 'docs.dart';
 export 'dog.dart';

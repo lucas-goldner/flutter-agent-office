@@ -496,7 +496,10 @@ const _instructions =
     "rather than looking for the agents with git, ps or HTTP calls. list_workers says where each one's pull request stands (merged: true means it merged), hire_worker "
     'puts a new agent to work, send_home sends agents home and deletes their worktrees and branches, tell_worker gives one a prompt, and link_pr says which pull request is a '
     "worker's when list_workers does not show it. Everyone in the office sees who did what. "
-    'The office-workers command on your PATH does the same from a shell.';
+    'The office-workers command on your PATH does the same from a shell. '
+    "To build the app on Codemagic, when this floor has one set up, use the agent-office codemagic command on your PATH "
+    '(workflows, build "<workflow>" [--branch <b>] [--wait], status <id>; see agent-office codemagic --help): the office holds the token. '
+    'Builds cost minutes: start one only when your task asks for it, push your branch first, and say what you started with its link.';
 
 /// Runs a tool; resolves to its text, and whether nothing it was asked came off, or throws with why it failed.
 Future<({String text, bool isError})> _runTool(String name, Object? args, WorkersIo io) async {

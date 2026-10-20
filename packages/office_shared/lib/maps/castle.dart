@@ -155,6 +155,10 @@ final MapConfig castleMap = {
     'queue': {'x': -11.3, 'z': -3, 'rotY': -math.pi / 2},
     'pulls': {'x': 11.3, 'z': -15, 'rotY': math.pi / 2},
   },
+  // The build tower in an east bay.
+  'fixtures': {
+    'build': {'x': 12.3, 'z': -9, 'rotY': math.pi / 2},
+  },
   'council': {'x': 6.6, 'z': -18.8, 'rotY': 0},
   'boards': {
     'issues': {

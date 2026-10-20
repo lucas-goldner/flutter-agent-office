@@ -89,6 +89,7 @@ void main() {
       InteractKind.cabinet,
       InteractKind.jukebox,
       InteractKind.expand,
+      InteractKind.build,
     ]) {
       expect(labelOf(k), isNotNull, reason: '$k');
     }

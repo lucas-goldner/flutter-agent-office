@@ -256,7 +256,7 @@ typedef QueueResponse = ({int status, Object? body});
 typedef QueueSend = Future<QueueResponse> Function(QueueRequest req);
 
 /// Sends the request, retrying for a few seconds while nothing's listening (the office restarting).
-Future<QueueResponse> _httpSend(QueueRequest req) async {
+Future<QueueResponse> officeSend(QueueRequest req) async {
   final until = DateTime.now().add(_retry);
   while (true) {
     final client = HttpClient()..connectionTimeout = _timeout;
@@ -321,7 +321,7 @@ Future<int> runQueueCommand(
       prompt = await (input ?? stdin).transform(const Utf8Decoder(allowMalformed: true)).join();
     }
     final req = buildQueueRequest(cmd, office, prompt);
-    final res = await (send ?? _httpSend)(req);
+    final res = await (send ?? officeSend)(req);
     if (res.status < 200 || res.status >= 300) {
       complain('agent-office queue: ${queueRefusal(res.status, res.body)}');
       return 1;

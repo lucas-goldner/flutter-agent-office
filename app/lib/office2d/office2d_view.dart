@@ -23,6 +23,7 @@ import '../ui/hud_parts.dart';
 import '../ui/modal.dart';
 import '../ui/theme.dart';
 import '../world/collider.dart';
+import '../world/office/build_tower.dart' show TowerLight, towerLight;
 import 'map_painter.dart';
 import 'pixel_map.dart';
 
@@ -382,6 +383,15 @@ class _Office2DViewState extends State<Office2DView> with SingleTickerProviderSt
         ..._labels(h),
         for (final g in _signs()) MapLabel(x: g.x, z: g.z - 0.2, text: '🪧 ${g.text}', id: -1),
       ],
+      // The build tower's light is the office's own (a map's stand has its lights painted on).
+      towerLight: !c.inOffice
+          ? null
+          : switch (towerLight(c.store.codemagic)) {
+              TowerLight.off => null,
+              TowerLight.green => Pal.green,
+              TowerLight.yellow => Pal.yellow,
+              TowerLight.red => Pal.red,
+            },
       t: _t,
     );
   }
@@ -612,6 +622,7 @@ String? labelOf(InteractKind k) => switch (k) {
   InteractKind.expand => '🚧 Room to grow',
   InteractKind.ladder => '🪜 Ladder',
   InteractKind.pole => '🚒 Fire pole',
+  InteractKind.build => '🏗️ Builds',
   _ => null,
 };
 
@@ -677,6 +688,7 @@ Rect? objectOf(Interactable it) {
     ),
     InteractKind.tv => Rect.fromLTRB(Tv.x - 0.6, Tv.z - 1.6, Tv.x, Tv.z + 1.6),
     InteractKind.bookshelf => Rect.fromLTRB(Bookshelf.x - 1, Bookshelf.z - 0.4, Bookshelf.x + 1, Floor.maxZ),
+    InteractKind.build => at(BuildTower.x, BuildTower.z, BuildTower.width, BuildTower.depth),
     _ => null,
   };
 }

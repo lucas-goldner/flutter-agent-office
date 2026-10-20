@@ -101,6 +101,8 @@ enum InteractKind {
   expand,
   // A map's herald, who sends out new workers (the castle's Hand of the King).
   herald,
+  // The build tower: the floor's Codemagic builds (world/office/build_tower.dart).
+  build,
 }
 
 /// Something you can use: walk up to it and press E, or click it.
