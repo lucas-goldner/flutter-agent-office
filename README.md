@@ -33,6 +33,12 @@ The office opens in your browser at http://localhost:4600, already signed in. Ri
 
 The server starts in the background (its log is `dist/server.log`) and the native macOS app opens in front. Sign in with the server `http://localhost:4600` and the office password, and the app remembers you. Click into the office to look around with the mouse; Esc or opening any window gives you the cursor back, and a two-finger swipe turns the camera too. Quitting the app stops the server, and the workers keep running for next time.
 
+```bash
+./run_agent_office.sh --mac --release
+```
+
+The same, with a release build of the app: much smoother than `flutter run`'s debug build. It's built when the app's code changed since the last one (or with `--rebuild`), installed as `/Applications/Agent Office.app` in place of the old one, and opened from there. You can also open it from Launchpad or the Dock, as long as the server is running.
+
 ### Handy options
 
 ```bash
