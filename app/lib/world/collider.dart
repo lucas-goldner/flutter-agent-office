@@ -34,6 +34,33 @@ class Collider {
   String toString() => 'Collider($minX..$maxX, $minZ..$maxZ, top $top${bottom == null ? '' : ', bottom $bottom'})';
 }
 
+/// Whether the segment from [a] to [b] (world space) passes through any of [colliders], leaving out those
+/// either end stands in (whoever the label is over, say). Boxes only: what label sight lines need, without
+/// testing triangles.
+bool segmentBlocked(List<Collider> colliders, double ax, double ay, double az, double bx, double by, double bz) {
+  final dx = bx - ax, dy = by - ay, dz = bz - az;
+  bool inside(Collider c, double x, double y, double z) =>
+      x >= c.minX && x <= c.maxX && z >= c.minZ && z <= c.maxZ && y <= c.top && y >= (c.bottom ?? -1e9);
+  for (final c in colliders) {
+    if (c.fence) continue;
+    if (inside(c, ax, ay, az) || inside(c, bx, by, bz)) continue;
+    var t0 = 0.0, t1 = 1.0;
+    bool slab(double o, double d, double lo, double hi) {
+      if (d.abs() < 1e-9) return o >= lo && o <= hi;
+      var u = (lo - o) / d, v = (hi - o) / d;
+      if (u > v) (u, v) = (v, u);
+      if (u > t0) t0 = u;
+      if (v < t1) t1 = v;
+      return t0 <= t1;
+    }
+
+    if (slab(ax, dx, c.minX, c.maxX) && slab(az, dz, c.minZ, c.maxZ) && slab(ay, dy, c.bottom ?? -1e9, c.top)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 enum InteractKind {
   desk,
   issues,

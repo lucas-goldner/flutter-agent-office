@@ -3539,14 +3539,19 @@ class OfficeController implements OfficeActions {
     return (it: it, near: hit.worldPoint.distanceTo(eye) <= _reach[it.kind]! + slack, hit: hit);
   }
 
-  /// Whether something solid stands between the camera and [point] (engine space): for labels.
+  /// Whether something solid stands between the camera and [point] (engine space): for labels. Against
+  /// the colliders (walls, furniture), not the scene's triangles: it runs for several labels every frame,
+  /// and flutter_scene's triangle raycast there crashed the macOS app in garbage collection (an unboxed
+  /// double taken for a pointer, looking at the herald).
   bool labelBlocked(vm.Vector3 point) {
     final eye = camera.position;
     final to = point - eye;
     final dist = to.length;
     if (dist < 0.5) return false;
-    final ray = vm.Ray.originDirection(eye, to / dist);
-    return scene.raycast(ray, maxDistance: dist - 0.35, layerMask: ~Hands.layer) != null;
+    // Stop short of the label, as the raycast did (its own head and hat aren't in the way).
+    final end = eye + to * ((dist - 0.35) / dist);
+    // Engine space is world space with z flipped (see space.dart).
+    return segmentBlocked(player.colliders, eye.x, eye.y, -eye.z, end.x, end.y, -end.z);
   }
 
   void _renderHint() {
