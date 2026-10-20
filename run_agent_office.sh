@@ -12,6 +12,8 @@
 #   ./run_agent_office.sh --rebuild           rebuild first (after a git pull)
 #   ./run_agent_office.sh ~/code/my-project   any other agent-office options are passed on
 #
+# Secrets (CODEMAGIC_TOKEN, …) come from .env next to this script: cp .env.example .env and fill it in.
+#
 # --dangerously-skip-permissions lets every Claude worker run any command your user can without
 # asking: use it on repositories you trust. Remote Control needs Claude Code signed in with your
 # claude.ai account (run `claude`, then /login).
@@ -20,6 +22,20 @@ set -euo pipefail
 cd "$(dirname "$0")"
 bin=./dist/agent-office/agent-office
 agent_args="--dangerously-skip-permissions --remote-control --remote-control-session-name-prefix office"
+
+# Secrets the office starts with (CODEMAGIC_TOKEN, …) from .env next to this script, if there is one.
+# It's in .gitignore: copy .env.example to .env and fill it in. What's already set in your shell wins.
+if [[ -f .env ]]; then
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
+    line="${line#export }"
+    key="${line%%=*}"
+    value="${line#*=}"
+    value="${value%\"}"; value="${value#\"}"; value="${value%\'}"; value="${value#\'}"
+    [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+    [[ -n "${!key:-}" ]] || export "$key=$value"
+  done < .env
+fi
 
 mac=false
 release=false

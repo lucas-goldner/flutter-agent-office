@@ -10,3 +10,6 @@ pw.txt
 # Dart tooling
 .dart_tool/
 /packages/*/pubspec.lock
+
+# Secrets for run_agent_office.sh (see .env.example)
+.env
