@@ -16,3 +16,14 @@ bool openBrowser(String url) {
   unawaited(Process.start(cmd, args, mode: ProcessStartMode.detached).then((_) {}, onError: (Object _) {}));
   return true;
 }
+
+/// Shows [path] in this computer's file manager: Finder with the file selected (a folder, opened).
+bool revealInFiles(String path, {required bool folder}) {
+  final (cmd, args) = Platform.isMacOS
+      ? ('open', folder ? [path] : ['-R', path])
+      : Platform.isWindows
+      ? ('explorer', folder ? [path] : ['/select,', path])
+      : ('xdg-open', [folder ? path : File(path).parent.path]);
+  unawaited(Process.start(cmd, args, mode: ProcessStartMode.detached).then((_) {}, onError: (Object _) {}));
+  return true;
+}

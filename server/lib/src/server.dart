@@ -12,6 +12,7 @@ import 'package:web_socket/web_socket.dart' show BinaryDataReceived, CloseReceiv
 import 'accounts.dart';
 import 'agents.dart';
 import 'auth.dart';
+import 'browser.dart' show revealInFiles;
 import 'building.dart';
 import 'cabinet.dart';
 import 'codemagic.dart';
@@ -1397,6 +1398,23 @@ Future<Office> startServer(Config cfg, {String? publicDir, void Function()? rest
       return _send(200, ForwardList(port: cfg.port, items: items).toJson());
     }
     if (path == '/api/whoami') return _send(200, {'ok': true, 'me': meOf(session.account?.id).toJson()});
+    if (path == '/api/reveal' && method == Method.get) {
+      // A file path clicked in a worker's terminal, shown in Finder on this computer (where the office and
+      // its workers' files are). The first of the `p`s that's there; admins only, as it opens a window here.
+      if (!meOf(session.account?.id).admin) {
+        return _send(403, {'error': 'Only admins can open folders on the office’s computer'});
+      }
+      final home = Platform.environment['HOME'] ?? '';
+      for (final asked in (url.queryParametersAll['p'] ?? const <String>[]).take(12)) {
+        final file = asked.startsWith('~/') ? p.join(home, asked.substring(2)) : asked;
+        if (!p.isAbsolute(file)) continue;
+        final type = FileSystemEntity.typeSync(file);
+        if (type == FileSystemEntityType.notFound) continue;
+        revealInFiles(file, folder: type == FileSystemEntityType.directory);
+        return _send(200, {'path': file});
+      }
+      return _send(404, {'error': 'That file isn’t on the office’s computer'});
+    }
     if (path == '/api/codemagic/apps' && method == Method.get) {
       // Your apps on Codemagic, to pick a floor's in ⚙️ Settings (admins).
       if (!meOf(session.account?.id).admin) return _send(403, {'error': 'Only admins can pick the Codemagic app'});

@@ -27,6 +27,7 @@ import 'dictate.dart';
 import 'term_drops.dart';
 import 'term_tabs.dart';
 import '../interop/drops.dart';
+import '../net/api.dart';
 import 'modal.dart';
 import 'provider.dart';
 import 'terminal_logic.dart';
@@ -563,6 +564,21 @@ class _TerminalWindowState extends State<_TerminalWindow> {
     return urlAt(XtermBuffer(_term.buffer), at.y, at.x);
   }
 
+  /// The file path under [local], as readings to try (see [pathsAt]); empty when there's none.
+  List<String> _pathsAt(Offset local) {
+    final view = _viewKey.currentState;
+    if (view == null) return const [];
+    final at = view.renderTerminal.getCellOffset(local);
+    return pathsAt(XtermBuffer(_term.buffer), at.y, at.x);
+  }
+
+  /// A path clicked: the office shows it in Finder on its computer (where the worker's files are).
+  Future<void> _reveal(List<String> paths) async {
+    final q = Uri(queryParameters: {'p': paths}).query;
+    final r = await Api.getJson('/api/reveal?$q').catchError((Object e) => ApiResult(0, {'error': '$e'}));
+    if (!r.ok && mounted) toast('📂 ${r.error('Couldn’t open it in Finder')}', ToastKind.warn);
+  }
+
   // Links open on a click (web-links). xterm's onTapUp never fires, and window.open needs the
   // browser's own pointerup, so this listens to the raw pointer.
   void _pointerUp(PointerUpEvent e) {
@@ -570,11 +586,13 @@ class _TerminalWindowState extends State<_TerminalWindow> {
     _downAt = null;
     if (down == null || (e.localPosition - down).distance > 4 || _ctl.selection != null) return;
     final url = _linkAt(e.localPosition);
-    if (url != null) openInNewTab(url);
+    if (url != null) return openInNewTab(url);
+    final paths = _pathsAt(e.localPosition);
+    if (paths.isNotEmpty) unawaited(_reveal(paths));
   }
 
   void _hover(PointerHoverEvent e) {
-    final over = _linkAt(e.localPosition) != null;
+    final over = _linkAt(e.localPosition) != null || _pathsAt(e.localPosition).isNotEmpty;
     if (over != _overLink) setState(() => _overLink = over);
   }
 

@@ -95,6 +95,26 @@ void main() {
       expect(findLine(buf, 'nowhere', 3), isNull);
     });
 
+    test('pathsAt: a path Claude Code broke onto an indented next line, joined; the shorter readings after', () {
+      final t = term(
+        [
+          '  > [image]/private/tmp/claude-502/-wt-cosmo-6e',
+          '           60/scratchpad/02_long.png   (1.2MB)',
+          'see ~/notes.md, done',
+        ].join('\r\n'),
+        cols: 60,
+      );
+      final buf = XtermBuffer(t.buffer);
+      const whole = '/private/tmp/claude-502/-wt-cosmo-6e60/scratchpad/02_long.png';
+      // From either half, the joined path comes first.
+      expect(pathsAt(buf, 0, 20).first, whole);
+      expect(pathsAt(buf, 1, 14).first, whole);
+      expect(pathsAt(buf, 0, 20), contains('/private/tmp/claude-502/-wt-cosmo-6e'));
+      expect(pathsAt(buf, 1, 40), isEmpty, reason: '(1.2MB) is no path');
+      expect(pathsAt(buf, 2, 6), ['~/notes.md'], reason: 'its comma left off');
+      expect(pathsAt(buf, 2, 1), isEmpty);
+    });
+
     test('urlAt finds the link under a cell, across a wrapped row', () {
       final t = term('see https://example.com/a/very/long/path?x=1, ok', cols: 20);
       final buf = XtermBuffer(t.buffer);

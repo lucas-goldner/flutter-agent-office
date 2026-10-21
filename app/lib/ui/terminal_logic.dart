@@ -137,6 +137,83 @@ String? urlAt(BufferLike buf, int row, int col) {
   return null;
 }
 
+bool _pathChar(String c) => !RegExp(r'''[\s"'<>(){}\[\]`|]''').hasMatch(c);
+
+/// The file path under column [col] of row [row] (one starting with `/` or `~/`), as candidates to try,
+/// longest first. Claude Code breaks a long path onto the next line itself, indented, so the path is
+/// followed back up and down across such breaks: the line above ending in a path, the one below
+/// starting with the rest of it. Which one is real only the office can tell (it has the files), so
+/// the shorter readings come too. Empty when there's no path there.
+List<String> pathsAt(BufferLike buf, int row, int col) {
+  String? text(int y) => buf.getLine(y)?.translateToString(false);
+  final here = text(row);
+  if (here == null || col < 0 || col >= here.length || !_pathChar(here[col])) return const [];
+  var s = col, e = col;
+  while (s > 0 && _pathChar(here[s - 1])) {
+    s--;
+  }
+  while (e < here.length && _pathChar(here[e])) {
+    e++;
+  }
+  final parts = <String>[here.substring(s, e)];
+  var at = parts.length - 1; // where the token under the pointer is in [parts]
+  // Up: this piece starts its line (only indent before it), and the line above ends in a path.
+  var y = row, start = s;
+  final upMost = row - 4;
+  while (y > upMost) {
+    final line = text(y)!;
+    final wrapped = buf.getLine(y)!.isWrapped;
+    if (!wrapped && line.substring(0, start).trim().isNotEmpty) break;
+    final up = text(y - 1)?.trimRight();
+    if (up == null || up.isEmpty) break;
+    var us = up.length;
+    while (us > 0 && _pathChar(up[us - 1])) {
+      us--;
+    }
+    final prev = up.substring(us);
+    if (prev.isEmpty || !prev.contains('/')) break;
+    parts.insert(0, prev);
+    at++;
+    y--;
+    start = us;
+  }
+  // Down: this piece ends its line, and the line below starts (after its indent) with more of it.
+  y = row;
+  var end = e;
+  final downMost = row + 4;
+  while (y < downMost) {
+    final line = text(y)!;
+    if (line.substring(end).trim().isNotEmpty) break;
+    final down = text(y + 1);
+    if (down == null) break;
+    var ds = 0;
+    while (ds < down.length && down[ds] == ' ') {
+      ds++;
+    }
+    if (ds >= down.length || !_pathChar(down[ds])) break;
+    var de = ds;
+    while (de < down.length && _pathChar(down[de])) {
+      de++;
+    }
+    parts.add(down.substring(ds, de));
+    y++;
+    end = de;
+  }
+  final out = <String>[];
+  void add(String p) {
+    final t = p.replaceFirst(RegExp(r'[.,:;!?]+$'), '');
+    if ((t.startsWith('/') || t.startsWith('~/')) && t.length > 1 && !out.contains(t)) out.add(t);
+  }
+
+  // Longest first: everything joined, then dropping pieces from the ends, the token alone last.
+  for (var len = parts.length; len >= 1; len--) {
+    for (var from = 0; from + len <= parts.length; from++) {
+      if (from <= at && at < from + len) add(parts.sublist(from, from + len).join());
+    }
+  }
+  return out;
+}
+
 // ---- Who's in the terminal ---------------------------------------------------------------------
 
 /// How long someone shows as typing after the last word from their keyboard (they send one about every second).
